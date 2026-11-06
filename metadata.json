@@ -1,0 +1,6 @@
+{
+  "name": "Random City",
+  "description": "A lightweight 2D isometric open-world life simulation and light survival game prototype with resource gathering, building, crafting, and trading.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

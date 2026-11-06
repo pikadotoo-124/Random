@@ -1,0 +1,3044 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as Phaser from 'phaser';
+
+/**
+ * Modern Stylized 2D Texture Generator
+ * Produces vibrant, organic, clean top-down/isometric nature tiles,
+ * expressive stylized characters, animals, and charming town architecture.
+ */
+export class PixelArtGenerator {
+  public static generateAll(scene: Phaser.Scene): void {
+    const textures = scene.textures;
+
+    // 1. Organic Ground Tiles (Seamless 64x32 isometric diamond, zero blocky borders, multiple natural variations)
+    this.createGrassTiles(textures);
+    this.createCobbleTiles(textures);
+    this.createWaterTiles(textures);
+    this.createSandTiles(textures);
+    this.createDirtTiles(textures);
+    this.createCliffTiles(textures);
+    this.createFarmlandTile(textures);
+    this.createBridgeTile(textures);
+    this.createWoodFloorTile(textures);
+    this.createGridHighlight(textures);
+    this.createShadowTexture(textures);
+
+    // 2. High-Fidelity Nature, Mountains & Resource Sprites
+    this.createTreeSprite(textures);
+    this.createPineTreeSprite(textures);
+    this.createBirchTreeSprite(textures);
+    this.createMountainSprites(textures);
+    this.createRockSprite(textures);
+    this.createBushSprite(textures);
+    this.createAnimalSprites(textures);
+    this.createFishNodeSprite(textures);
+    this.createWaterEnvironmentSprites(textures);
+
+    // 3. Buildings & Town Landmarks
+    this.createHouseSprite(textures);
+    this.createFenceSprite(textures);
+    this.createCampfireSprites(textures);
+    this.createStorageBoxSprite(textures);
+    this.createLanternSprite(textures);
+    this.createShopStallSprite(textures);
+    this.createCraftingBenchSprite(textures);
+    this.createFountainSprite(textures);
+    this.createTownPropsAndBuildings(textures);
+    this.createFarmEnvironmentSprites(textures);
+
+    // 4. Stylized 2D Characters & NPCs (4-directional frames)
+    this.createCharacterSpritesheet(textures, 'player_male', '#d97706', '#1c1917', '#2563eb', 'male');
+    this.createCharacterSpritesheet(textures, 'player_female', '#f59e0b', '#7c2d12', '#059669', 'female');
+    this.createCharacterSpritesheet(textures, 'npc_merchant', '#f59e0b', '#451a03', '#7c3aed', 'male');
+    this.createCharacterSpritesheet(textures, 'npc_settler', '#facc15', '#1e293b', '#d97706', 'female');
+    this.createCharacterSpritesheet(textures, 'npc_elder', '#d4a373', '#e2e8f0', '#0f766e', 'male');
+    this.createCharacterSpritesheet(textures, 'npc_blacksmith', '#d97706', '#451a03', '#991b1b', 'male');
+    this.createCharacterSpritesheet(textures, 'npc_florist', '#f59e0b', '#78350f', '#ec4899', 'female');
+    this.createCharacterSpritesheet(textures, 'npc_baker', '#facc15', '#b45309', '#f59e0b', 'female');
+    this.createCharacterSpritesheet(textures, 'npc_farmer', '#d97706', '#713f12', '#15803d', 'male');
+
+    // 5. Environmental Particles
+    this.createParticleTextures(textures);
+  }
+
+  // Draw smooth seamless isometric diamond without perimeter outline or skirt seams
+  private static drawIsoDiamond(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    fillColor: string,
+    edgeColor?: string
+  ) {
+    const hw = w / 2;
+    const hh = h / 2;
+
+    // Main diamond face with smooth antialiased fill
+    ctx.fillStyle = fillColor;
+    ctx.beginPath();
+    ctx.moveTo(hw, 0);
+    ctx.lineTo(w, hh);
+    ctx.lineTo(hw, h);
+    ctx.lineTo(0, hh);
+    ctx.closePath();
+    ctx.fill();
+
+    // Subtle edge highlight only when requested for depth (without protruding skirt lines)
+    if (edgeColor && edgeColor !== fillColor) {
+      ctx.strokeStyle = edgeColor;
+      ctx.lineWidth = 0.75;
+      ctx.stroke();
+    }
+  }
+
+  // Soft round drop shadow texture
+  private static createShadowTexture(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('shadow_round')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 48;
+    canvas.height = 24;
+    const ctx = canvas.getContext('2d')!;
+
+    const grad = ctx.createRadialGradient(24, 12, 2, 24, 12, 22);
+    grad.addColorStop(0, 'rgba(15, 23, 42, 0.42)');
+    grad.addColorStop(0.6, 'rgba(15, 23, 42, 0.22)');
+    grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(24, 12, 22, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    textures.addCanvas('shadow_round', canvas);
+  }
+
+  // 1. Lush Organic Grass Tiles with 4 distinct natural variations (meadow, clovers, wildflowers, sunny moss)
+  private static createGrassTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_grass_0')) return;
+
+    // Variant 0: Pure Lush Spring Meadow
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#5e9438');
+
+      // Soft blade tufts
+      ctx.fillStyle = '#78ae3e';
+      const blades = [[24, 12], [38, 10], [18, 16], [46, 14], [30, 22], [42, 20]];
+      for (const [bx, by] of blades) {
+        ctx.fillRect(bx, by, 2, 2);
+        ctx.fillRect(bx + 1, by - 1, 1, 2);
+      }
+      textures.addCanvas('tile_grass_0', canvas);
+      textures.addCanvas('tile_grass', canvas); // default fallback
+    }
+
+    // Variant 1: Meadow with delicate three-leaf clover tufts
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#578e34');
+
+      // Clover clusters
+      ctx.fillStyle = '#7cb342';
+      const clovers = [[26, 14], [38, 18], [22, 22]];
+      for (const [cx, cy] of clovers) {
+        ctx.beginPath();
+        ctx.arc(cx - 1.5, cy, 1.3, 0, Math.PI * 2);
+        ctx.arc(cx + 1.5, cy, 1.3, 0, Math.PI * 2);
+        ctx.arc(cx, cy - 1.5, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#497529';
+        ctx.fillRect(cx, cy, 1, 2); // stem
+        ctx.fillStyle = '#7cb342';
+      }
+      textures.addCanvas('tile_grass_1', canvas);
+    }
+
+    // Variant 2: Wildflower Meadow with tiny daisies and buttercups
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#5d9437');
+
+      // Buttercup yellow flowers
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.arc(32, 14, 1.6, 0, Math.PI * 2);
+      ctx.arc(44, 20, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Daisy white flowers with amber center
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(20, 18, 1.5, 0, Math.PI * 2);
+      ctx.arc(36, 24, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(20, 18, 1, 1);
+      ctx.fillRect(36, 24, 1, 1);
+
+      textures.addCanvas('tile_grass_2', canvas);
+    }
+
+    // Variant 3: Warm Sunny Grass with gentle soft mossy tones
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#669c3a');
+
+      // Warm sun highlights
+      ctx.fillStyle = '#80b848';
+      ctx.beginPath();
+      ctx.ellipse(32, 16, 12, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#8dc452';
+      ctx.fillRect(28, 14, 3, 2);
+      ctx.fillRect(36, 16, 3, 2);
+
+      textures.addCanvas('tile_grass_3', canvas);
+    }
+  }
+
+  // 2. Cobblestone Pavers with natural rounded stones & sandy mortar
+  private static createCobbleTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_cobble_0')) return;
+
+    // Variant 0: Smooth River Stone Pavers
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#4b4844');
+
+      const stones = [
+        { x: 32, y: 7, rx: 7, ry: 3.5, col: '#78716c' },
+        { x: 20, y: 13, rx: 6, ry: 3, col: '#857e77' },
+        { x: 44, y: 13, rx: 6, ry: 3, col: '#6c655e' },
+        { x: 32, y: 16, rx: 8, ry: 4, col: '#8a837c' },
+        { x: 16, y: 19, rx: 5, ry: 2.8, col: '#716a63' },
+        { x: 48, y: 19, rx: 5, ry: 2.8, col: '#7d766f' },
+        { x: 26, y: 23, rx: 6, ry: 3, col: '#6f6861' },
+        { x: 38, y: 23, rx: 6, ry: 3, col: '#847d75' },
+      ];
+
+      for (const s of stones) {
+        ctx.fillStyle = s.col;
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.beginPath();
+        ctx.ellipse(s.x - 1, s.y - 0.8, s.rx * 0.5, s.ry * 0.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      textures.addCanvas('tile_cobble_0', canvas);
+      textures.addCanvas('tile_cobble', canvas);
+    }
+
+    // Variant 1: Cobblestone with varied stone sizes
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#484541');
+
+      const stones = [
+        { x: 32, y: 8, rx: 6, ry: 3, col: '#736d66' },
+        { x: 18, y: 12, rx: 5.5, ry: 2.8, col: '#817b73' },
+        { x: 46, y: 12, rx: 6, ry: 3, col: '#7d776f' },
+        { x: 28, y: 16, rx: 7, ry: 3.5, col: '#8b847c' },
+        { x: 40, y: 17, rx: 6, ry: 3, col: '#777169' },
+        { x: 20, y: 21, rx: 5, ry: 2.5, col: '#6e6860' },
+        { x: 34, y: 23, rx: 7, ry: 3.5, col: '#827c74' },
+        { x: 46, y: 21, rx: 5.5, ry: 2.8, col: '#7a746c' },
+      ];
+
+      for (const s of stones) {
+        ctx.fillStyle = s.col;
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y, s.rx, s.ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      textures.addCanvas('tile_cobble_1', canvas);
+    }
+  }
+
+  // 3. Shimmering Crystal Lake Water with gentle wave caustics (zero grid seams)
+  private static createWaterTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_water_0')) return;
+
+    // Variant 0: Deep Serene Blue with curved ripple caustics
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#0284c7');
+
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(22, 10);
+      ctx.quadraticCurveTo(32, 8, 42, 10);
+      ctx.moveTo(16, 17);
+      ctx.quadraticCurveTo(32, 15, 48, 17);
+      ctx.moveTo(24, 23);
+      ctx.quadraticCurveTo(32, 21, 40, 23);
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(28, 12, 1, 0, Math.PI * 2);
+      ctx.arc(42, 16, 1.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('tile_water_0', canvas);
+      textures.addCanvas('tile_water', canvas);
+    }
+
+    // Variant 1: Shimmering Azure with Sunlight Reflection
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#0ea5e9');
+
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(20, 12);
+      ctx.quadraticCurveTo(32, 10, 44, 12);
+      ctx.moveTo(26, 20);
+      ctx.quadraticCurveTo(34, 18, 42, 20);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.beginPath();
+      ctx.arc(32, 14, 1.4, 0, Math.PI * 2);
+      ctx.arc(22, 18, 1, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('tile_water_1', canvas);
+    }
+
+    // Variant 2: Deep Emerald-Glade Pond Water with gentle reflections
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#0369a1');
+
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(18, 14);
+      ctx.quadraticCurveTo(32, 11, 46, 14);
+      ctx.moveTo(22, 22);
+      ctx.quadraticCurveTo(34, 19, 44, 22);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
+      ctx.beginPath();
+      ctx.arc(36, 12, 1.2, 0, Math.PI * 2);
+      ctx.arc(24, 20, 1, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('tile_water_2', canvas);
+    }
+  }
+
+  // 4. Soft Golden Sand Shoreline Tiles
+  private static createSandTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_sand_0')) return;
+
+    // Variant 0: Warm Golden Beach Sand
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#d97706');
+
+      ctx.fillStyle = '#fef08a';
+      const grains = [[20, 14], [34, 11], [44, 16], [28, 20], [38, 23]];
+      for (const [gx, gy] of grains) {
+        ctx.fillRect(gx, gy, 1.5, 1.5);
+      }
+
+      textures.addCanvas('tile_sand_0', canvas);
+      textures.addCanvas('tile_sand', canvas);
+    }
+
+    // Variant 1: Soft Shell & Pebble Fringe Sand
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#d47306');
+
+      ctx.fillStyle = '#fef3c7';
+      const grains = [[24, 12], [42, 13], [18, 18], [32, 22], [46, 20]];
+      for (const [gx, gy] of grains) {
+        ctx.fillRect(gx, gy, 1.5, 1.5);
+      }
+
+      // Small smooth beach pebble
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(30, 15, 2, 2);
+
+      textures.addCanvas('tile_sand_1', canvas);
+    }
+  }
+
+  // 5. Warm Organic Winding Dirt Trail Tiles
+  private static createDirtTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_dirt_0')) return;
+
+    // Variant 0: Packed Loamy Earth
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#854d0e');
+
+      ctx.fillStyle = '#a16207';
+      ctx.fillRect(24, 12, 3, 2);
+      ctx.fillRect(36, 14, 4, 2);
+      ctx.fillRect(28, 20, 3, 2);
+
+      ctx.fillStyle = '#713f12';
+      ctx.fillRect(32, 17, 2, 1);
+      ctx.fillRect(42, 13, 2, 1);
+
+      textures.addCanvas('tile_dirt_0', canvas);
+      textures.addCanvas('tile_dirt', canvas);
+    }
+
+    // Variant 1: Dirt Trail with smooth river pebbles
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#814a0e');
+
+      ctx.fillStyle = '#995d12';
+      ctx.fillRect(22, 14, 3, 2);
+      ctx.fillRect(38, 18, 3, 2);
+
+      // Smooth gray pebbles
+      ctx.fillStyle = '#a8a29e';
+      ctx.fillRect(30, 12, 2, 1.5);
+      ctx.fillRect(44, 16, 2, 1.5);
+      ctx.fillRect(26, 22, 2, 1.5);
+
+      textures.addCanvas('tile_dirt_1', canvas);
+    }
+  }
+
+  // 6. Rugged Mountain & Plateau Cliff Strata Tiles
+  private static createCliffTiles(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_cliff_0')) return;
+
+    // Variant 0: Chiseled Slate Strata with Alpine Moss
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#52525b');
+
+      // Layered horizontal slate strata fractures
+      ctx.strokeStyle = '#3f3f46';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(18, 14);
+      ctx.lineTo(46, 14);
+      ctx.moveTo(24, 20);
+      ctx.lineTo(40, 20);
+      ctx.stroke();
+
+      // Sunlit rock ledge highlight
+      ctx.fillStyle = '#71717a';
+      ctx.fillRect(20, 11, 8, 2);
+      ctx.fillRect(36, 17, 8, 2);
+
+      // Hardy mountain moss in rock crevice
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(28, 15, 4, 2);
+      ctx.fillRect(34, 19, 3, 2);
+
+      textures.addCanvas('tile_cliff_0', canvas);
+      textures.addCanvas('tile_cliff', canvas);
+    }
+
+    // Variant 1: Weathered Granite Mountain Peak Face
+    {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#4b4b53');
+
+      // Angular rock strata lines
+      ctx.strokeStyle = '#333338';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(22, 10);
+      ctx.lineTo(38, 16);
+      ctx.moveTo(28, 18);
+      ctx.lineTo(44, 24);
+      ctx.stroke();
+
+      // Top facet highlight
+      ctx.fillStyle = '#6b6b75';
+      ctx.fillRect(26, 8, 10, 2);
+      ctx.fillRect(32, 20, 6, 2);
+
+      textures.addCanvas('tile_cliff_1', canvas);
+    }
+  }
+
+  // 7. Polished Cedar Wood Floor Tile
+  private static createWoodFloorTile(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_wood_floor')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d')!;
+
+    this.drawIsoDiamond(ctx, 64, 32, '#9a3412');
+
+    // Clean wooden plank seams
+    ctx.strokeStyle = '#541c09';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(18, 9);
+    ctx.lineTo(46, 23);
+    ctx.moveTo(26, 5);
+    ctx.lineTo(54, 19);
+    ctx.stroke();
+
+    textures.addCanvas('tile_wood_floor', canvas);
+  }
+
+  // 8. Tilled Farmland Soil Tile with irrigation furrow ridges
+  private static createFarmlandTile(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_farmland')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d')!;
+
+    // Rich dark fertile soil
+    this.drawIsoDiamond(ctx, 64, 32, '#451a03');
+
+    // Tilled furrow ridges and irrigation troughs
+    ctx.strokeStyle = '#291102';
+    ctx.lineWidth = 1.2;
+    for (let i = -1; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(16 + i * 10, 8 + i * 5);
+      ctx.lineTo(44 + i * 10, 22 + i * 5);
+      ctx.stroke();
+    }
+
+    // Warm soil highlights on furrow crests
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1;
+    for (let i = -1; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(18 + i * 10, 7 + i * 5);
+      ctx.lineTo(46 + i * 10, 21 + i * 5);
+      ctx.stroke();
+    }
+
+    // Tiny green sprout specks
+    ctx.fillStyle = '#84cc16';
+    ctx.fillRect(26, 14, 2, 2);
+    ctx.fillRect(38, 20, 2, 2);
+    ctx.fillRect(32, 11, 1.5, 2);
+
+    textures.addCanvas('tile_farmland', canvas);
+  }
+
+  // 9. Sturdy Wooden Bridge Tile (walkable planking across streams)
+  private static createBridgeTile(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('tile_bridge')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d')!;
+
+    // Sturdy wooden bridge planking
+    this.drawIsoDiamond(ctx, 64, 32, '#9a3412');
+
+    // Horizontal timber bridge planks
+    ctx.strokeStyle = '#541c09';
+    ctx.lineWidth = 1.5;
+    for (let y = 6; y < 28; y += 5) {
+      ctx.beginPath();
+      ctx.moveTo(14, y);
+      ctx.lineTo(50, y);
+      ctx.stroke();
+    }
+
+    // Iron nail studs
+    ctx.fillStyle = '#1c1917';
+    for (let y = 6; y < 28; y += 5) {
+      ctx.fillRect(18, y - 0.5, 1.5, 1.5);
+      ctx.fillRect(46, y - 0.5, 1.5, 1.5);
+    }
+
+    textures.addCanvas('tile_bridge', canvas);
+  }
+
+  // Placement Grid Highlights
+  private static createGridHighlight(textures: Phaser.Textures.TextureManager) {
+    // Valid placement (soft emerald ring)
+    if (!textures.exists('grid_valid')) {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 32;
+      const ctx = c.getContext('2d')!;
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(34, 197, 94, 0.28)';
+      ctx.beginPath();
+      ctx.moveTo(32, 1);
+      ctx.lineTo(63, 16);
+      ctx.lineTo(32, 31);
+      ctx.lineTo(1, 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      textures.addCanvas('grid_valid', c);
+    }
+
+    // Invalid placement (soft red ring)
+    if (!textures.exists('grid_invalid')) {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 32;
+      const ctx = c.getContext('2d')!;
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2;
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+      ctx.beginPath();
+      ctx.moveTo(32, 1);
+      ctx.lineTo(63, 16);
+      ctx.lineTo(32, 31);
+      ctx.lineTo(1, 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      textures.addCanvas('grid_invalid', c);
+    }
+
+    // Hover tile
+    if (!textures.exists('grid_hover')) {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 32;
+      const ctx = c.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(32, 1);
+      ctx.lineTo(63, 16);
+      ctx.lineTo(32, 31);
+      ctx.lineTo(1, 16);
+      ctx.closePath();
+      ctx.stroke();
+      textures.addCanvas('grid_hover', c);
+    }
+  }
+
+  // 7. Beautiful Stylized 2D Oak Tree
+  private static createTreeSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_tree')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 72;
+    canvas.height = 88;
+    const ctx = canvas.getContext('2d')!;
+
+    // 1. Soft tree drop shadow on ground
+    const shadowGrad = ctx.createRadialGradient(36, 78, 4, 36, 78, 24);
+    shadowGrad.addColorStop(0, 'rgba(15, 23, 42, 0.45)');
+    shadowGrad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+    ctx.fillStyle = shadowGrad;
+    ctx.beginPath();
+    ctx.ellipse(36, 78, 22, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. Trunk with organic bark & root flares
+    ctx.fillStyle = '#5c3317';
+    ctx.beginPath();
+    ctx.moveTo(32, 45);
+    ctx.lineTo(40, 45);
+    ctx.lineTo(44, 76);
+    ctx.lineTo(48, 80);
+    ctx.lineTo(24, 80);
+    ctx.lineTo(28, 76);
+    ctx.closePath();
+    ctx.fill();
+
+    // Trunk highlight
+    ctx.fillStyle = '#78431f';
+    ctx.beginPath();
+    ctx.moveTo(34, 46);
+    ctx.lineTo(38, 46);
+    ctx.lineTo(41, 76);
+    ctx.lineTo(36, 76);
+    ctx.closePath();
+    ctx.fill();
+
+    // 3. Multi-tiered rounded stylized lush foliage canopy
+    // Deep back foliage layer
+    ctx.fillStyle = '#1e3a12';
+    ctx.beginPath();
+    ctx.arc(28, 38, 18, 0, Math.PI * 2);
+    ctx.arc(44, 38, 18, 0, Math.PI * 2);
+    ctx.arc(36, 24, 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Mid-tone vibrant leaf clusters
+    ctx.fillStyle = '#3f701b';
+    ctx.beginPath();
+    ctx.arc(26, 36, 16, 0, Math.PI * 2);
+    ctx.arc(46, 36, 16, 0, Math.PI * 2);
+    ctx.arc(36, 22, 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Sunlit bright top clusters
+    ctx.fillStyle = '#5c9c27';
+    ctx.beginPath();
+    ctx.arc(24, 32, 13, 0, Math.PI * 2);
+    ctx.arc(46, 30, 13, 0, Math.PI * 2);
+    ctx.arc(36, 16, 15, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Warm golden sunshine highlights
+    ctx.fillStyle = '#8bc34a';
+    ctx.beginPath();
+    ctx.arc(23, 27, 8, 0, Math.PI * 2);
+    ctx.arc(45, 25, 7, 0, Math.PI * 2);
+    ctx.arc(36, 12, 9, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Delicate leaf tuft details
+    ctx.fillStyle = '#aed581';
+    ctx.beginPath();
+    ctx.arc(34, 10, 4, 0, Math.PI * 2);
+    ctx.arc(22, 24, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    textures.addCanvas('res_tree', canvas);
+    textures.addCanvas('obj_tree', canvas); // alias for WorldScene
+  }
+
+  // 7B. Tall Mountain Evergreen Pine / Fir Tree (Alpine & Northern Ridge)
+  private static createPineTreeSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_tree_pine')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+
+    // 1. Soft round ground shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+    ctx.beginPath();
+    ctx.ellipse(32, 86, 20, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. Slender bark trunk
+    ctx.fillStyle = '#451a03';
+    ctx.beginPath();
+    ctx.moveTo(29, 54);
+    ctx.lineTo(35, 54);
+    ctx.lineTo(37, 85);
+    ctx.lineTo(27, 85);
+    ctx.closePath();
+    ctx.fill();
+
+    // Trunk highlight
+    ctx.fillStyle = '#5c2406';
+    ctx.fillRect(31, 55, 2, 30);
+
+    // 3. Multi-tiered conical evergreen needle boughs
+    // Tier 1: Bottom wide bough
+    ctx.fillStyle = '#14532d';
+    ctx.beginPath();
+    ctx.moveTo(32, 40);
+    ctx.lineTo(54, 68);
+    ctx.lineTo(32, 63);
+    ctx.lineTo(10, 68);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#166534';
+    ctx.beginPath();
+    ctx.moveTo(32, 40);
+    ctx.lineTo(50, 65);
+    ctx.lineTo(32, 60);
+    ctx.lineTo(14, 65);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tier 2: Middle bough
+    ctx.fillStyle = '#15803d';
+    ctx.beginPath();
+    ctx.moveTo(32, 24);
+    ctx.lineTo(50, 48);
+    ctx.lineTo(32, 44);
+    ctx.lineTo(14, 48);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#16a34a';
+    ctx.beginPath();
+    ctx.moveTo(32, 24);
+    ctx.lineTo(46, 45);
+    ctx.lineTo(32, 41);
+    ctx.lineTo(18, 45);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tier 3: Top bough & Spire
+    ctx.fillStyle = '#16a34a';
+    ctx.beginPath();
+    ctx.moveTo(32, 8);
+    ctx.lineTo(44, 32);
+    ctx.lineTo(32, 28);
+    ctx.lineTo(20, 32);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sunny needle highlights
+    ctx.fillStyle = '#4ade80';
+    ctx.beginPath();
+    ctx.moveTo(32, 8);
+    ctx.lineTo(38, 22);
+    ctx.lineTo(32, 20);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tiny pinecones
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(20, 50, 3, 5);
+    ctx.fillRect(42, 51, 3, 5);
+    ctx.fillRect(26, 68, 3.5, 5);
+    ctx.fillRect(38, 67, 3.5, 5);
+
+    textures.addCanvas('res_tree_pine', canvas);
+    textures.addCanvas('obj_tree_pine', canvas);
+  }
+
+  // 7C. Golden Autumn / Birch Tree with distinctive white bark and golden foliage
+  private static createBirchTreeSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_tree_birch')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 68;
+    canvas.height = 88;
+    const ctx = canvas.getContext('2d')!;
+
+    // Ground shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+    ctx.beginPath();
+    ctx.ellipse(34, 78, 20, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Slender white birch trunk
+    ctx.fillStyle = '#e7e5e4';
+    ctx.beginPath();
+    ctx.moveTo(31, 44);
+    ctx.lineTo(37, 44);
+    ctx.lineTo(39, 77);
+    ctx.lineTo(29, 77);
+    ctx.closePath();
+    ctx.fill();
+
+    // Dark charcoal horizontal bark notches
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(30, 72, 5, 1.5);
+    ctx.fillRect(33, 65, 4, 1.5);
+    ctx.fillRect(31, 58, 4.5, 1.5);
+    ctx.fillRect(32, 50, 4, 1.5);
+
+    // Multi-tiered Golden Amber & Honey Orange Autumn Canopy
+    // Deep base
+    ctx.fillStyle = '#9a3412';
+    ctx.beginPath();
+    ctx.arc(26, 38, 16, 0, Math.PI * 2);
+    ctx.arc(42, 38, 16, 0, Math.PI * 2);
+    ctx.arc(34, 24, 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Golden-amber midtone
+    ctx.fillStyle = '#d97706';
+    ctx.beginPath();
+    ctx.arc(24, 36, 15, 0, Math.PI * 2);
+    ctx.arc(44, 36, 15, 0, Math.PI * 2);
+    ctx.arc(34, 22, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Sunlit golden yellow top
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.arc(23, 30, 12, 0, Math.PI * 2);
+    ctx.arc(43, 28, 12, 0, Math.PI * 2);
+    ctx.arc(34, 16, 14, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Warm buttercup highlights
+    ctx.fillStyle = '#fef08a';
+    ctx.beginPath();
+    ctx.arc(22, 25, 7, 0, Math.PI * 2);
+    ctx.arc(42, 23, 6, 0, Math.PI * 2);
+    ctx.arc(34, 12, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    textures.addCanvas('res_tree_birch', canvas);
+    textures.addCanvas('obj_tree_birch', canvas);
+  }
+
+  // 7D. Majestic Mountain Ridges and Cliff Rock Formations
+  private static createMountainSprites(textures: Phaser.Textures.TextureManager) {
+    // 1. Towering Granite Mountain Ridge / Peak (80x80)
+    if (!textures.exists('res_mountain_ridge')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 80;
+      canvas.height = 80;
+      const ctx = canvas.getContext('2d')!;
+
+      // Deep ground shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+      ctx.beginPath();
+      ctx.ellipse(40, 70, 36, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Mountain body - base outline
+      ctx.fillStyle = '#27272a';
+      ctx.beginPath();
+      ctx.moveTo(8, 70);
+      ctx.lineTo(24, 40);
+      ctx.lineTo(40, 10);
+      ctx.lineTo(56, 35);
+      ctx.lineTo(72, 70);
+      ctx.closePath();
+      ctx.fill();
+
+      // Shaded left rock facet
+      ctx.fillStyle = '#3f3f46';
+      ctx.beginPath();
+      ctx.moveTo(8, 70);
+      ctx.lineTo(24, 40);
+      ctx.lineTo(40, 10);
+      ctx.lineTo(36, 70);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sunlit right rock facet
+      ctx.fillStyle = '#71717a';
+      ctx.beginPath();
+      ctx.moveTo(40, 10);
+      ctx.lineTo(56, 35);
+      ctx.lineTo(72, 70);
+      ctx.lineTo(36, 70);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sharp central ridge crest highlight
+      ctx.fillStyle = '#a1a1aa';
+      ctx.beginPath();
+      ctx.moveTo(40, 10);
+      ctx.lineTo(44, 12);
+      ctx.lineTo(42, 50);
+      ctx.lineTo(38, 50);
+      ctx.closePath();
+      ctx.fill();
+
+      // Alpine snow cap on peak
+      ctx.fillStyle = '#f8fafc';
+      ctx.beginPath();
+      ctx.moveTo(40, 10);
+      ctx.lineTo(46, 22);
+      ctx.lineTo(41, 19);
+      ctx.lineTo(36, 23);
+      ctx.lineTo(34, 18);
+      ctx.closePath();
+      ctx.fill();
+
+      // Hardy mountain moss along base ledges
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(18, 58, 8, 3);
+      ctx.fillRect(48, 54, 10, 3);
+
+      textures.addCanvas('res_mountain_ridge', canvas);
+      textures.addCanvas('obj_mountain_ridge', canvas);
+    }
+
+    // 2. Chiseled Cliff Boulder (64x52)
+    if (!textures.exists('res_cliff_rock')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 52;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(32, 44, 26, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Boulder body
+      ctx.fillStyle = '#3f3f46';
+      ctx.beginPath();
+      ctx.moveTo(10, 42);
+      ctx.lineTo(16, 18);
+      ctx.lineTo(34, 10);
+      ctx.lineTo(54, 16);
+      ctx.lineTo(56, 42);
+      ctx.lineTo(44, 46);
+      ctx.lineTo(20, 46);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sunlit front facet
+      ctx.fillStyle = '#71717a';
+      ctx.beginPath();
+      ctx.moveTo(14, 40);
+      ctx.lineTo(20, 20);
+      ctx.lineTo(36, 14);
+      ctx.lineTo(50, 20);
+      ctx.lineTo(52, 40);
+      ctx.lineTo(42, 44);
+      ctx.lineTo(22, 44);
+      ctx.closePath();
+      ctx.fill();
+
+      // Top sun highlight
+      ctx.fillStyle = '#a1a1aa';
+      ctx.beginPath();
+      ctx.moveTo(20, 20);
+      ctx.lineTo(36, 14);
+      ctx.lineTo(48, 18);
+      ctx.lineTo(34, 26);
+      ctx.closePath();
+      ctx.fill();
+
+      textures.addCanvas('res_cliff_rock', canvas);
+      textures.addCanvas('obj_cliff_rock', canvas);
+    }
+  }
+
+  // 8. Chiseled Mossy Granite Rock
+  private static createRockSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_rock')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 48;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d')!;
+
+    // Soft drop shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(24, 33, 18, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Boulder base outline
+    ctx.fillStyle = '#3f3f46';
+    ctx.beginPath();
+    ctx.moveTo(8, 28);
+    ctx.lineTo(14, 14);
+    ctx.lineTo(26, 8);
+    ctx.lineTo(40, 12);
+    ctx.lineTo(42, 28);
+    ctx.lineTo(34, 34);
+    ctx.lineTo(14, 34);
+    ctx.closePath();
+    ctx.fill();
+
+    // Boulder body (chiseled facet)
+    ctx.fillStyle = '#71717a';
+    ctx.beginPath();
+    ctx.moveTo(11, 27);
+    ctx.lineTo(16, 15);
+    ctx.lineTo(27, 10);
+    ctx.lineTo(39, 14);
+    ctx.lineTo(40, 27);
+    ctx.lineTo(32, 32);
+    ctx.lineTo(16, 32);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sunny top facet highlight
+    ctx.fillStyle = '#a1a1aa';
+    ctx.beginPath();
+    ctx.moveTo(16, 15);
+    ctx.lineTo(27, 10);
+    ctx.lineTo(38, 14);
+    ctx.lineTo(26, 20);
+    ctx.closePath();
+    ctx.fill();
+
+    // Specular edge
+    ctx.fillStyle = '#e4e4e7';
+    ctx.beginPath();
+    ctx.moveTo(27, 10);
+    ctx.lineTo(34, 12);
+    ctx.lineTo(28, 14);
+    ctx.closePath();
+    ctx.fill();
+
+    // Moss patch at base
+    ctx.fillStyle = '#65a30d';
+    ctx.beginPath();
+    ctx.arc(16, 28, 4, 0, Math.PI * 2);
+    ctx.arc(22, 30, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    textures.addCanvas('res_rock', canvas);
+    textures.addCanvas('obj_rock', canvas);
+  }
+
+  // 9. Lush Wild Flowering Berry Bush
+  private static createBushSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_bush')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 40;
+    canvas.height = 36;
+    const ctx = canvas.getContext('2d')!;
+
+    // Drop shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(20, 30, 14, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dark foliage base
+    ctx.fillStyle = '#1e3a12';
+    ctx.beginPath();
+    ctx.arc(14, 20, 10, 0, Math.PI * 2);
+    ctx.arc(26, 20, 10, 0, Math.PI * 2);
+    ctx.arc(20, 14, 11, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Vibrant leaf dome
+    ctx.fillStyle = '#4d7c0f';
+    ctx.beginPath();
+    ctx.arc(14, 18, 9, 0, Math.PI * 2);
+    ctx.arc(26, 18, 9, 0, Math.PI * 2);
+    ctx.arc(20, 12, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Highlight
+    ctx.fillStyle = '#84cc16';
+    ctx.beginPath();
+    ctx.arc(18, 10, 5, 0, Math.PI * 2);
+    ctx.arc(24, 14, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ripe red wild berries
+    ctx.fillStyle = '#dc2626';
+    const berries = [[14, 14], [22, 12], [28, 16], [16, 22], [24, 20]];
+    for (const [bx, by] of berries) {
+      ctx.beginPath();
+      ctx.arc(bx, by, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fca5a5';
+      ctx.fillRect(bx - 0.5, by - 0.5, 1, 1);
+      ctx.fillStyle = '#dc2626';
+    }
+
+    textures.addCanvas('res_bush', canvas);
+    textures.addCanvas('obj_bush', canvas);
+  }
+
+  // 10. Stylized Wild Animals (Rabbit & Deer)
+  private static createAnimalSprites(textures: Phaser.Textures.TextureManager) {
+    // 1. Cute Stylized Rabbit
+    if (!textures.exists('res_animal_rabbit')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 36;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.3)';
+      ctx.beginPath();
+      ctx.ellipse(18, 30, 10, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Fluffy body
+      ctx.fillStyle = '#f5f5f4';
+      ctx.beginPath();
+      ctx.ellipse(18, 22, 9, 7, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cute head
+      ctx.beginPath();
+      ctx.ellipse(24, 16, 6, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Ears with pink interior
+      ctx.fillStyle = '#f5f5f4';
+      ctx.beginPath();
+      ctx.ellipse(22, 9, 2.5, 6, -0.2, 0, Math.PI * 2);
+      ctx.ellipse(26, 8, 2.5, 6, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#fda4af';
+      ctx.beginPath();
+      ctx.ellipse(22, 9, 1.2, 4.5, -0.2, 0, Math.PI * 2);
+      ctx.ellipse(26, 8, 1.2, 4.5, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eye & nose
+      ctx.fillStyle = '#1c1917';
+      ctx.beginPath();
+      ctx.arc(26, 15, 1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fda4af';
+      ctx.fillRect(28, 17, 1.5, 1.5);
+
+      // Tail
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(9, 21, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('res_animal_rabbit', canvas);
+      textures.addCanvas('res_animal', canvas); // fallback alias
+      textures.addCanvas('obj_animal', canvas);
+    }
+
+    // 2. Graceful Forest Deer
+    if (!textures.exists('res_animal_deer')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 54;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(24, 48, 16, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Legs
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(16, 32, 2.5, 16);
+      ctx.fillRect(21, 32, 2.5, 15);
+      ctx.fillRect(29, 32, 2.5, 16);
+      ctx.fillRect(34, 32, 2.5, 15);
+
+      // Chestnut body
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.ellipse(25, 30, 13, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // White dappled spots
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(22, 27, 2, 2);
+      ctx.fillRect(26, 29, 2, 2);
+      ctx.fillRect(30, 27, 2, 2);
+
+      // Slender neck & head
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.moveTo(31, 26);
+      ctx.lineTo(37, 14);
+      ctx.lineTo(41, 14);
+      ctx.lineTo(36, 28);
+      ctx.closePath();
+      ctx.fill();
+
+      // Head
+      ctx.beginPath();
+      ctx.ellipse(40, 13, 5, 4, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Antlers
+      ctx.strokeStyle = '#573315';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(38, 10);
+      ctx.lineTo(36, 2);
+      ctx.moveTo(37, 5);
+      ctx.lineTo(40, 4);
+      ctx.stroke();
+
+      // Eye
+      ctx.fillStyle = '#1c1917';
+      ctx.beginPath();
+      ctx.arc(42, 12, 1, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('res_animal_deer', canvas);
+      textures.addCanvas('obj_animal_deer', canvas);
+    }
+  }
+
+  // 11. Crystal Lake Fishing Spot
+  private static createFishNodeSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('res_fish_node')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 44;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d')!;
+
+    // Water ripple ring
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(22, 18, 16, 8, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(125, 211, 252, 0.6)';
+    ctx.beginPath();
+    ctx.ellipse(22, 18, 10, 5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Jumping silver-blue fish
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath();
+    ctx.ellipse(22, 12, 7, 3.5, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tail fin
+    ctx.fillStyle = '#0284c7';
+    ctx.beginPath();
+    ctx.moveTo(15, 14);
+    ctx.lineTo(11, 11);
+    ctx.lineTo(12, 17);
+    ctx.closePath();
+    ctx.fill();
+
+    // Sparkle water droplet
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(25, 7, 1.2, 0, Math.PI * 2);
+    ctx.arc(18, 9, 1, 0, Math.PI * 2);
+    ctx.fill();
+
+    textures.addCanvas('res_fish_node', canvas);
+    textures.addCanvas('res_lake_fish', canvas);
+    textures.addCanvas('obj_lake_fish', canvas);
+  }
+
+  // 12. Cozy Wooden Cottage (Modern Stylized 2D Building)
+  private static createHouseSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_house_small')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 96;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+
+    // 1. Building Drop Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(48, 82, 38, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. Stone Foundation
+    ctx.fillStyle = '#57534e';
+    ctx.fillRect(20, 68, 56, 12);
+    ctx.fillStyle = '#78716c';
+    ctx.fillRect(22, 69, 52, 3);
+
+    // 3. Timber Wall Planks
+    ctx.fillStyle = '#a16207';
+    ctx.fillRect(22, 42, 52, 28);
+
+    // Horizontal timber siding
+    ctx.strokeStyle = '#713f12';
+    ctx.lineWidth = 1;
+    for (let y = 47; y < 70; y += 6) {
+      ctx.beginPath();
+      ctx.moveTo(22, y);
+      ctx.lineTo(74, y);
+      ctx.stroke();
+    }
+
+    // 4. Arched Wooden Door with Brass Knob
+    ctx.fillStyle = '#451a03';
+    ctx.beginPath();
+    ctx.roundRect(42, 54, 12, 18, [5, 5, 0, 0]);
+    ctx.fill();
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.arc(51, 64, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 5. Warm Glowing Glass Windows with Shutters
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(26, 48, 12, 12);
+    ctx.fillStyle = '#fbbf24'; // Warm amber glow
+    ctx.fillRect(27, 49, 10, 10);
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(32, 49);
+    ctx.lineTo(32, 59);
+    ctx.moveTo(27, 54);
+    ctx.lineTo(37, 54);
+    ctx.stroke();
+
+    // Window flower box with red flowers
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(25, 60, 14, 3);
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(28, 59, 1.5, 0, Math.PI * 2);
+    ctx.arc(32, 59, 1.5, 0, Math.PI * 2);
+    ctx.arc(36, 59, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 6. Brick Chimney
+    ctx.fillStyle = '#991b1b';
+    ctx.fillRect(62, 14, 8, 20);
+    ctx.fillStyle = '#b91c1c';
+    ctx.fillRect(61, 13, 10, 3);
+
+    // Smoke puff
+    ctx.fillStyle = 'rgba(245, 245, 244, 0.7)';
+    ctx.beginPath();
+    ctx.arc(66, 8, 3.5, 0, Math.PI * 2);
+    ctx.arc(69, 4, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 7. Pitched Shingled Roof
+    ctx.fillStyle = '#b45309';
+    ctx.beginPath();
+    ctx.moveTo(48, 18);
+    ctx.lineTo(82, 44);
+    ctx.lineTo(14, 44);
+    ctx.closePath();
+    ctx.fill();
+
+    // Shingle rows
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(48, 18);
+    ctx.lineTo(48, 44);
+    ctx.moveTo(30, 32);
+    ctx.lineTo(66, 32);
+    ctx.moveTo(22, 38);
+    ctx.lineTo(74, 38);
+    ctx.stroke();
+
+    // Roof ridge highlight
+    ctx.strokeStyle = '#d97706';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(14, 44);
+    ctx.lineTo(48, 18);
+    ctx.lineTo(82, 44);
+    ctx.stroke();
+
+    textures.addCanvas('bld_house_small', canvas);
+    textures.addCanvas('obj_house_small', canvas);
+  }
+
+  // 13. Clean Wooden Fence
+  private static createFenceSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_fence_wood')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 44;
+    canvas.height = 36;
+    const ctx = canvas.getContext('2d')!;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.3)';
+    ctx.fillRect(6, 28, 32, 4);
+
+    // Posts
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(8, 10, 5, 20);
+    ctx.fillRect(30, 10, 5, 20);
+
+    // Post caps
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(7, 8, 7, 3);
+    ctx.fillRect(29, 8, 7, 3);
+
+    // Cross rails
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(10, 14, 24, 4);
+    ctx.fillRect(10, 22, 24, 4);
+
+    textures.addCanvas('bld_fence_wood', canvas);
+    textures.addCanvas('obj_fence_wood', canvas);
+  }
+
+  // 14. Campfire (Lit & Unlit)
+  private static createCampfireSprites(textures: Phaser.Textures.TextureManager) {
+    // Lit Campfire
+    if (!textures.exists('bld_campfire_lit')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 44;
+      const ctx = canvas.getContext('2d')!;
+
+      // Ambient warm light glow
+      const glow = ctx.createRadialGradient(24, 28, 4, 24, 28, 22);
+      glow.addColorStop(0, 'rgba(245, 158, 11, 0.45)');
+      glow.addColorStop(1, 'rgba(245, 158, 11, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(24, 28, 22, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Stone ring
+      ctx.fillStyle = '#57534e';
+      const stones = [[12, 28], [17, 32], [24, 34], [31, 32], [36, 28], [33, 24], [24, 22], [15, 24]];
+      for (const [sx, sy] of stones) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Crossed logs
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(16, 24);
+      ctx.lineTo(32, 32);
+      ctx.moveTo(32, 24);
+      ctx.lineTo(16, 32);
+      ctx.stroke();
+
+      // Burning ember center
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(24, 28, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Stylized dancing fire tongues
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.moveTo(18, 27);
+      ctx.quadraticCurveTo(24, 12, 22, 8);
+      ctx.quadraticCurveTo(25, 16, 28, 12);
+      ctx.quadraticCurveTo(31, 18, 30, 27);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.moveTo(21, 26);
+      ctx.quadraticCurveTo(24, 16, 23, 13);
+      ctx.quadraticCurveTo(26, 20, 27, 26);
+      ctx.closePath();
+      ctx.fill();
+
+      textures.addCanvas('bld_campfire_lit', canvas);
+      textures.addCanvas('bld_campfire', canvas); // alias
+      textures.addCanvas('obj_campfire', canvas);
+      textures.addCanvas('obj_campfire_lit', canvas);
+    }
+
+    // Unlit Campfire
+    if (!textures.exists('bld_campfire_off')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 44;
+      const ctx = canvas.getContext('2d')!;
+
+      // Stone ring
+      ctx.fillStyle = '#57534e';
+      const stones = [[12, 28], [17, 32], [24, 34], [31, 32], [36, 28], [33, 24], [24, 22], [15, 24]];
+      for (const [sx, sy] of stones) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Cold ash
+      ctx.fillStyle = '#292524';
+      ctx.beginPath();
+      ctx.arc(24, 28, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Wood logs
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(16, 24);
+      ctx.lineTo(32, 32);
+      ctx.moveTo(32, 24);
+      ctx.lineTo(16, 32);
+      ctx.stroke();
+
+      textures.addCanvas('bld_campfire_off', canvas);
+    }
+  }
+
+  // 15. Sturdy Cedar Storage Chest
+  private static createStorageBoxSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_storage_box')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 44;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d')!;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(22, 34, 16, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Chest box body
+    ctx.fillStyle = '#78350f';
+    ctx.beginPath();
+    ctx.roundRect(8, 16, 28, 18, 3);
+    ctx.fill();
+
+    // Cedar wood tone
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(10, 18, 24, 14);
+
+    // Brass corner braces and trim
+    ctx.fillStyle = '#d97706';
+    ctx.fillRect(8, 16, 4, 18);
+    ctx.fillRect(32, 16, 4, 18);
+    ctx.fillRect(8, 24, 28, 3);
+
+    // Front Brass Keyhole Clasp
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.roundRect(19, 21, 6, 7, 2);
+    ctx.fill();
+    ctx.fillStyle = '#1c1917';
+    ctx.fillRect(21.5, 24, 1.5, 2.5);
+
+    textures.addCanvas('bld_storage_box', canvas);
+    textures.addCanvas('obj_storage_box', canvas);
+  }
+
+  // 16. Wrought-Iron Lantern Post with Ambient Warm Light Halo
+  private static createLanternSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_lantern')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 54;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+
+    // Warm radial light halo on ground
+    const halo = ctx.createRadialGradient(27, 48, 2, 27, 48, 24);
+    halo.addColorStop(0, 'rgba(251, 191, 36, 0.4)');
+    halo.addColorStop(1, 'rgba(251, 191, 36, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.ellipse(27, 48, 24, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Base footing
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(24, 46, 6, 4);
+
+    // Wooden / Iron Post
+    ctx.fillStyle = '#451a03';
+    ctx.fillRect(25.5, 18, 3, 30);
+
+    // Hanging cross-bracket
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(22, 16, 14, 3);
+    ctx.fillRect(32, 19, 2, 4);
+
+    // Lantern Glass & Flame
+    ctx.fillStyle = '#1c1917';
+    ctx.beginPath();
+    ctx.roundRect(29, 22, 8, 12, 2);
+    ctx.fill();
+
+    // Glowing amber glass
+    ctx.fillStyle = '#fbbf24';
+    ctx.fillRect(30.5, 24, 5, 8);
+
+    // Core bright wick
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(32, 27, 2, 2);
+
+    textures.addCanvas('bld_lantern', canvas);
+    textures.addCanvas('obj_lantern', canvas);
+  }
+
+  // 17. Vibrant Market Shop Stall
+  private static createShopStallSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('obj_shop_stall')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 84;
+    canvas.height = 76;
+    const ctx = canvas.getContext('2d')!;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(42, 66, 34, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Wooden counter table
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(18, 42, 48, 22);
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(16, 40, 52, 6);
+
+    // Crates & Goods on Counter
+    // Fruit crate (apples)
+    ctx.fillStyle = '#a16207';
+    ctx.fillRect(20, 34, 14, 8);
+    ctx.fillStyle = '#dc2626';
+    ctx.beginPath();
+    ctx.arc(24, 34, 2, 0, Math.PI * 2);
+    ctx.arc(28, 33, 2, 0, Math.PI * 2);
+    ctx.arc(31, 35, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glass potion flasks
+    ctx.fillStyle = '#06b6d4';
+    ctx.fillRect(40, 33, 4, 7);
+    ctx.fillStyle = '#10b981';
+    ctx.fillRect(47, 33, 4, 7);
+
+    // Corner Support Poles
+    ctx.fillStyle = '#451a03';
+    ctx.fillRect(16, 12, 3, 30);
+    ctx.fillRect(65, 12, 3, 30);
+
+    // Striped Canvas Awning (Burgundy & Cream)
+    const stripes = ['#881337', '#fef08a', '#881337', '#fef08a', '#881337', '#fef08a', '#881337'];
+    const sw = 56 / stripes.length;
+    for (let i = 0; i < stripes.length; i++) {
+      ctx.fillStyle = stripes[i];
+      ctx.beginPath();
+      ctx.moveTo(14 + i * sw, 14);
+      ctx.lineTo(14 + (i + 1) * sw, 14);
+      ctx.lineTo(16 + (i + 1) * sw, 28);
+      ctx.lineTo(16 + i * sw, 28);
+      ctx.closePath();
+      ctx.fill();
+
+      // Scalloped bottom fringe
+      ctx.beginPath();
+      ctx.arc(16 + i * sw + sw / 2, 28, sw / 2, 0, Math.PI);
+      ctx.fill();
+    }
+
+    textures.addCanvas('obj_shop_stall', canvas);
+  }
+
+  // 18. Town Crafting Workbench & Anvil
+  private static createCraftingBenchSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('obj_craft_bench')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 68;
+    canvas.height = 56;
+    const ctx = canvas.getContext('2d')!;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(34, 46, 26, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Wooden workbench table
+    ctx.fillStyle = '#593207';
+    ctx.fillRect(14, 30, 28, 16);
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(12, 26, 32, 6);
+
+    // Carpenter's hand saw & hammer on table
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(16, 25);
+    ctx.lineTo(24, 25);
+    ctx.stroke();
+
+    // Heavy Iron Anvil on Tree Stump
+    ctx.fillStyle = '#451a03';
+    ctx.fillRect(44, 32, 14, 14);
+
+    // Cast Iron Anvil
+    ctx.fillStyle = '#334155';
+    ctx.beginPath();
+    ctx.moveTo(42, 26);
+    ctx.lineTo(58, 26);
+    ctx.lineTo(56, 30);
+    ctx.lineTo(44, 30);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(47, 30, 6, 3);
+    ctx.fillRect(45, 33, 10, 2);
+
+    textures.addCanvas('obj_craft_bench', canvas);
+  }
+
+  // 19. Carved Limestone Town Fountain
+  private static createFountainSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('obj_town_fountain')) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 72;
+    canvas.height = 68;
+    const ctx = canvas.getContext('2d')!;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(36, 56, 30, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Octagonal Limestone Basin
+    ctx.fillStyle = '#78716c';
+    ctx.beginPath();
+    ctx.ellipse(36, 46, 28, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Basin Rim
+    ctx.fillStyle = '#a8a29e';
+    ctx.beginPath();
+    ctx.ellipse(36, 44, 26, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Turquoise Water Pool
+    ctx.fillStyle = '#06b6d4';
+    ctx.beginPath();
+    ctx.ellipse(36, 44, 22, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Center Tiered Pedestal
+    ctx.fillStyle = '#57534e';
+    ctx.fillRect(32, 26, 8, 18);
+    ctx.fillStyle = '#a8a29e';
+    ctx.beginPath();
+    ctx.ellipse(36, 26, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Water Spout Sprays
+    ctx.strokeStyle = '#e0f2fe';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(36, 26);
+    ctx.quadraticCurveTo(30, 16, 24, 38);
+    ctx.moveTo(36, 26);
+    ctx.quadraticCurveTo(42, 16, 48, 38);
+    ctx.stroke();
+
+    // Water ripple rings in pool
+    ctx.strokeStyle = '#67e8f9';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(36, 44, 12, 5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    textures.addCanvas('obj_town_fountain', canvas);
+  }
+
+  // 20. Water Environment Props (Water Lilies, Wetland Reeds, River Stones)
+  private static createWaterEnvironmentSprites(textures: Phaser.Textures.TextureManager) {
+    // 1. Water Lilypad Cluster with blooming lotus flower (36x24)
+    if (!textures.exists('obj_lilypad')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+
+      // Water ripple beneath lilypad
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(18, 14, 15, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Main emerald lilypad with characteristic wedge notch
+      ctx.fillStyle = '#15803d';
+      ctx.beginPath();
+      ctx.arc(16, 13, 9, 0.35, Math.PI * 1.85);
+      ctx.lineTo(16, 13);
+      ctx.closePath();
+      ctx.fill();
+
+      // Sunlit leaf surface
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(16, 13, 7.5, 0.4, Math.PI * 1.8);
+      ctx.lineTo(16, 13);
+      ctx.closePath();
+      ctx.fill();
+
+      // Secondary smaller lilypad
+      ctx.fillStyle = '#16a34a';
+      ctx.beginPath();
+      ctx.arc(26, 15, 5, 0.5, Math.PI * 1.9);
+      ctx.lineTo(26, 15);
+      ctx.closePath();
+      ctx.fill();
+
+      // Blooming pink water lotus flower
+      ctx.fillStyle = '#f43f5e';
+      ctx.beginPath();
+      ctx.arc(17, 10, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fbcfe8';
+      ctx.beginPath();
+      ctx.arc(17, 9.5, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fef08a'; // Golden stamen center
+      ctx.fillRect(16.5, 9, 1.5, 1.5);
+
+      textures.addCanvas('obj_lilypad', canvas);
+      textures.addCanvas('res_lilypad', canvas);
+    }
+
+    // 2. Wetland Reeds & Cattails (32x44)
+    if (!textures.exists('obj_water_reed')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 44;
+      const ctx = canvas.getContext('2d')!;
+
+      // Water ripple at stem base
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(16, 38, 11, 4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Slender green reed stalks
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      // Left reed
+      ctx.moveTo(12, 38);
+      ctx.quadraticCurveTo(8, 24, 7, 10);
+      // Center tall cattail
+      ctx.moveTo(16, 38);
+      ctx.quadraticCurveTo(16, 20, 16, 4);
+      // Right reed
+      ctx.moveTo(20, 38);
+      ctx.quadraticCurveTo(24, 22, 25, 12);
+      ctx.stroke();
+
+      // Sunlight highlights on stems
+      ctx.strokeStyle = '#4ade80';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(15.5, 36);
+      ctx.lineTo(15.5, 16);
+      ctx.moveTo(11.5, 36);
+      ctx.lineTo(8, 14);
+      ctx.stroke();
+
+      // Brown velvety cattail heads
+      ctx.fillStyle = '#78350f';
+      ctx.beginPath();
+      ctx.roundRect(14.5, 6, 3.5, 10, [2]);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.roundRect(6, 12, 3, 8, [2]);
+      ctx.fill();
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(15, 7, 1.5, 8); // highlight
+
+      textures.addCanvas('obj_water_reed', canvas);
+      textures.addCanvas('res_water_reed', canvas);
+    }
+
+    // 3. Smooth Submerged River Stones (34x22)
+    if (!textures.exists('obj_river_stone')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 34;
+      canvas.height = 22;
+      const ctx = canvas.getContext('2d')!;
+
+      // Water ripple ring around stones
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.7)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(17, 14, 14, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Main smooth granite stone
+      ctx.fillStyle = '#475569';
+      ctx.beginPath();
+      ctx.ellipse(15, 12, 9, 5, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#64748b';
+      ctx.beginPath();
+      ctx.ellipse(14, 11, 7, 3.5, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.ellipse(13, 10, 4, 1.8, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Smaller companion pebble
+      ctx.fillStyle = '#334155';
+      ctx.beginPath();
+      ctx.ellipse(24, 14, 5, 3.5, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#64748b';
+      ctx.beginPath();
+      ctx.ellipse(24, 13.5, 3.5, 2.2, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('obj_river_stone', canvas);
+      textures.addCanvas('res_river_stone', canvas);
+    }
+  }
+
+  // 21. Charming Town Props & Architecture (Cottages, Bakery Stall, Benches, Flower Planters, Crates, Barrels, Signposts)
+  private static createTownPropsAndBuildings(textures: Phaser.Textures.TextureManager) {
+    // 1. Cozy Two-Story Town Residence / Cottage (84x88)
+    if (!textures.exists('obj_town_house')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 84;
+      canvas.height = 88;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(42, 78, 36, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Ground Floor: Warm River Cobblestone & Masonry
+      ctx.fillStyle = '#57534e';
+      ctx.fillRect(16, 48, 52, 28);
+      ctx.fillStyle = '#78716c';
+      ctx.fillRect(18, 49, 48, 3);
+
+      // Upper Floor: Cream Timber-Framed Stucco
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(14, 28, 56, 22);
+
+      // Tudor timber framing beams
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(14, 28, 56, 3); // upper trim
+      ctx.fillRect(14, 47, 56, 3); // mid trim
+      ctx.fillRect(14, 28, 4, 22); // left timber
+      ctx.fillRect(66, 28, 4, 22); // right timber
+      ctx.fillRect(40, 28, 4, 22); // center timber
+      // Diagonal cross beams
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(18, 29);
+      ctx.lineTo(39, 48);
+      ctx.moveTo(44, 29);
+      ctx.lineTo(65, 48);
+      ctx.stroke();
+
+      // Pitched Terracotta Tile Roof
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.moveTo(42, 6);
+      ctx.lineTo(76, 29);
+      ctx.lineTo(8, 29);
+      ctx.closePath();
+      ctx.fill();
+
+      // Roof tile ridge lines
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(42, 6);
+      ctx.lineTo(42, 29);
+      ctx.moveTo(25, 18);
+      ctx.lineTo(59, 18);
+      ctx.stroke();
+
+      // Upper dormer window with warm glow
+      ctx.fillStyle = '#292524';
+      ctx.fillRect(36, 12, 12, 10);
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(37, 13, 10, 8);
+
+      // Ground floor arched oak door with brass ring
+      ctx.fillStyle = '#451a03';
+      ctx.beginPath();
+      ctx.roundRect(36, 56, 14, 20, [6, 6, 0, 0]);
+      ctx.fill();
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.arc(47, 67, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Lower glowing windows with flower box
+      ctx.fillStyle = '#292524';
+      ctx.fillRect(20, 56, 12, 12);
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(21, 57, 10, 10);
+      ctx.fillStyle = '#292524';
+      ctx.fillRect(54, 56, 12, 12);
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(55, 57, 10, 10);
+
+      // Window flower box overflowing with red/pink blooms
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(19, 68, 14, 3);
+      ctx.fillRect(53, 68, 14, 3);
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(21, 67, 3, 2);
+      ctx.fillRect(26, 67, 3, 2);
+      ctx.fillRect(30, 67, 2, 2);
+      ctx.fillStyle = '#ec4899';
+      ctx.fillRect(55, 67, 3, 2);
+      ctx.fillRect(60, 67, 3, 2);
+
+      // Chimney with cozy smoke
+      ctx.fillStyle = '#991b1b';
+      ctx.fillRect(58, 2, 8, 16);
+      ctx.fillStyle = '#b91c1c';
+      ctx.fillRect(57, 1, 10, 2);
+      ctx.fillStyle = 'rgba(241, 245, 249, 0.65)';
+      ctx.beginPath();
+      ctx.arc(62, -2, 3, 0, Math.PI * 2);
+      ctx.arc(65, -6, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('obj_town_house', canvas);
+      textures.addCanvas('bld_town_house', canvas);
+    }
+
+    // 2. Village Bakery Stall (64x56)
+    if (!textures.exists('obj_bakery_stall')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 56;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+      ctx.beginPath();
+      ctx.ellipse(32, 49, 28, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Wooden counter & shelves
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(10, 32, 44, 18);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(8, 30, 48, 4);
+
+      // Fresh bakery goods on counter
+      // Braided golden challah bread
+      ctx.fillStyle = '#d97706';
+      ctx.beginPath();
+      ctx.ellipse(18, 28, 6, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(16, 27, 4, 1.5);
+
+      // Crusty golden baguettes
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(28, 24, 3, 8);
+      ctx.fillRect(32, 23, 3, 9);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(28.5, 25, 2, 2);
+      ctx.fillRect(32.5, 24, 2, 2);
+
+      // Round rustic berry pies
+      ctx.fillStyle = '#9a3412';
+      ctx.beginPath();
+      ctx.ellipse(44, 28, 5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#dc2626'; // berry center
+      ctx.fillRect(43, 27, 2, 2);
+
+      // Wooden support poles
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(10, 10, 3, 22);
+      ctx.fillRect(51, 10, 3, 22);
+
+      // Scalloped striped canopy (Warm Terracotta & Buttercream)
+      const canopyStripes = ['#c2410c', '#fef9c3', '#c2410c', '#fef9c3', '#c2410c', '#fef9c3'];
+      const cw = 48 / canopyStripes.length;
+      for (let i = 0; i < canopyStripes.length; i++) {
+        ctx.fillStyle = canopyStripes[i];
+        ctx.fillRect(8 + i * cw, 10, cw, 12);
+        // Scallop bottom
+        ctx.beginPath();
+        ctx.arc(8 + i * cw + cw / 2, 22, cw / 2, 0, Math.PI);
+        ctx.fill();
+      }
+
+      textures.addCanvas('obj_bakery_stall', canvas);
+    }
+
+    // 3. Carved Cedar Park Bench with Cast-Iron Arms (42x28)
+    if (!textures.exists('obj_bench')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 42;
+      canvas.height = 28;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(21, 23, 18, 4.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cast iron legs and armrests
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(8, 14, 2, 10);
+      ctx.fillRect(32, 14, 2, 10);
+      ctx.fillRect(7, 10, 3, 5);
+      ctx.fillRect(32, 10, 3, 5);
+
+      // Wooden seat slats
+      ctx.fillStyle = '#9a3412';
+      ctx.fillRect(6, 14, 30, 3);
+      ctx.fillRect(6, 18, 30, 3);
+      // Wooden backrest slats
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(6, 7, 30, 3);
+      ctx.fillRect(6, 11, 30, 3);
+
+      textures.addCanvas('obj_bench', canvas);
+    }
+
+    // 4. Barrel Planter with Blooming Flowers (28x32)
+    if (!textures.exists('obj_flower_pot')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.38)';
+      ctx.beginPath();
+      ctx.ellipse(14, 28, 11, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Oak wooden half-barrel
+      ctx.fillStyle = '#78350f';
+      ctx.beginPath();
+      ctx.roundRect(6, 16, 16, 12, [0, 0, 3, 3]);
+      ctx.fill();
+      // Iron metal bands
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(6, 18, 16, 1.5);
+      ctx.fillRect(6, 24, 16, 1.5);
+
+      // Soil crest
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(6.5, 15, 15, 2);
+
+      // Lush green foliage
+      ctx.fillStyle = '#16a34a';
+      ctx.beginPath();
+      ctx.arc(14, 12, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Multi-colored flowers (sunflowers, roses, lavender)
+      ctx.fillStyle = '#ef4444'; // Red
+      ctx.beginPath();
+      ctx.arc(11, 10, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#facc15'; // Yellow
+      ctx.beginPath();
+      ctx.arc(17, 9, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#c084fc'; // Purple
+      ctx.beginPath();
+      ctx.arc(14, 14, 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('obj_flower_pot', canvas);
+    }
+
+    // 5. Wooden Storage Barrel (26x30)
+    if (!textures.exists('obj_barrel')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 26;
+      canvas.height = 30;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.38)';
+      ctx.beginPath();
+      ctx.ellipse(13, 26, 10, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Barrel body with curved bulge
+      ctx.fillStyle = '#92400e';
+      ctx.beginPath();
+      ctx.roundRect(5, 7, 16, 20, 4);
+      ctx.fill();
+
+      // Top wood lid
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.ellipse(13, 8, 7, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Steel hoops
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(5, 10, 16, 2);
+      ctx.fillRect(4.5, 16, 17, 2);
+      ctx.fillRect(5, 22, 16, 2);
+
+      textures.addCanvas('obj_barrel', canvas);
+    }
+
+    // 6. Orchard Produce Fruit Crate (28x24)
+    if (!textures.exists('obj_crate_fruit')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(14, 20, 12, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Slatted wooden crate
+      ctx.fillStyle = '#a16207';
+      ctx.fillRect(4, 9, 20, 12);
+      ctx.strokeStyle = '#713f12';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(4, 9, 20, 12);
+      ctx.beginPath();
+      ctx.moveTo(4, 15);
+      ctx.lineTo(24, 15);
+      ctx.stroke();
+
+      // Overflowing crisp red and green apples
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(8, 9, 2.5, 0, Math.PI * 2);
+      ctx.arc(14, 8, 2.5, 0, Math.PI * 2);
+      ctx.arc(19, 9, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#84cc16'; // Green apple
+      ctx.beginPath();
+      ctx.arc(11, 7, 2.4, 0, Math.PI * 2);
+      ctx.arc(16, 7, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      textures.addCanvas('obj_crate_fruit', canvas);
+    }
+
+    // 7. Village Directional Wooden Signpost (28x44)
+    if (!textures.exists('obj_signpost')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 44;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(14, 40, 8, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Timber post
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(12, 8, 4, 32);
+
+      // Top sign board pointing right (Town Plaza)
+      ctx.fillStyle = '#d97706';
+      ctx.beginPath();
+      ctx.moveTo(6, 12);
+      ctx.lineTo(22, 12);
+      ctx.lineTo(26, 16);
+      ctx.lineTo(22, 20);
+      ctx.lineTo(6, 20);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#451a03'; // Arrow carving
+      ctx.fillRect(8, 15, 12, 2);
+
+      // Lower sign board pointing left (Homestead / River)
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.moveTo(22, 22);
+      ctx.lineTo(6, 22);
+      ctx.lineTo(2, 26);
+      ctx.lineTo(6, 30);
+      ctx.lineTo(22, 30);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(8, 25, 10, 2);
+
+      textures.addCanvas('obj_signpost', canvas);
+    }
+
+    // 8. Tavern Picnic Bench & Table (48x36)
+    if (!textures.exists('obj_picnic_table')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 36;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+      ctx.beginPath();
+      ctx.ellipse(24, 30, 21, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Table legs & frame
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(12, 16, 3, 14);
+      ctx.fillRect(33, 16, 3, 14);
+
+      // Table top surface
+      ctx.fillStyle = '#9a3412';
+      ctx.fillRect(8, 14, 32, 6);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(6, 12, 36, 4);
+
+      // Bench seats on either side
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(6, 22, 36, 3);
+      ctx.fillRect(6, 26, 36, 3);
+
+      // Cider tankard on table
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(22, 8, 4, 4);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(22, 7, 4, 1.5);
+
+      textures.addCanvas('obj_picnic_table', canvas);
+    }
+  }
+
+  // 22. Agricultural & Farm Environment Sprites (Stone Well, Hay Bales, Scarecrow, Wheat, Cabbage, Pumpkin)
+  private static createFarmEnvironmentSprites(textures: Phaser.Textures.TextureManager) {
+    // 1. Village Stone Water Well (48x56)
+    if (!textures.exists('obj_water_well')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 56;
+      const ctx = canvas.getContext('2d')!;
+
+      // Drop shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(24, 48, 20, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cobblestone well basin
+      ctx.fillStyle = '#57534e';
+      ctx.beginPath();
+      ctx.roundRect(10, 32, 28, 16, 4);
+      ctx.fill();
+      ctx.fillStyle = '#78716c';
+      ctx.beginPath();
+      ctx.ellipse(24, 32, 13, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Deep clear water inside basin
+      ctx.fillStyle = '#0284c7';
+      ctx.beginPath();
+      ctx.ellipse(24, 32, 10, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Timber support posts
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(11, 14, 3, 20);
+      ctx.fillRect(34, 14, 3, 20);
+
+      // Pitched shingle roof
+      ctx.fillStyle = '#9a3412';
+      ctx.beginPath();
+      ctx.moveTo(24, 4);
+      ctx.lineTo(42, 16);
+      ctx.lineTo(6, 16);
+      ctx.closePath();
+      ctx.fill();
+
+      // Hanging rope & bucket
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(24, 14);
+      ctx.lineTo(24, 25);
+      ctx.stroke();
+
+      // Oak wooden water bucket
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(22, 25, 4, 4);
+
+      textures.addCanvas('obj_water_well', canvas);
+    }
+
+    // 2. Agricultural Golden Hay Bale (38x28)
+    if (!textures.exists('obj_hay_bale')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 38;
+      canvas.height = 28;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(19, 23, 16, 4.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Hay roll body
+      ctx.fillStyle = '#d97706';
+      ctx.beginPath();
+      ctx.roundRect(6, 8, 26, 15, 5);
+      ctx.fill();
+
+      // Sunlit golden hay strands
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.ellipse(11, 15.5, 5, 7.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#eab308';
+      ctx.fillRect(11, 8, 21, 15);
+
+      // Twine tie strings
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(18, 8);
+      ctx.lineTo(18, 23);
+      ctx.moveTo(26, 8);
+      ctx.lineTo(26, 23);
+      ctx.stroke();
+
+      textures.addCanvas('obj_hay_bale', canvas);
+    }
+
+    // 3. Friendly Straw Scarecrow (38x52)
+    if (!textures.exists('obj_scarecrow')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 38;
+      canvas.height = 52;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(19, 48, 12, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Vertical support post
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(18, 14, 3, 34);
+
+      // Horizontal arm crossbeam
+      ctx.fillRect(7, 24, 25, 2.5);
+
+      // Red flannel checkered shirt
+      ctx.fillStyle = '#b91c1c';
+      ctx.fillRect(13, 20, 13, 16);
+      ctx.fillStyle = '#fef08a'; // Straw cuffs
+      ctx.fillRect(6, 23, 4, 4);
+      ctx.fillRect(29, 23, 4, 4);
+
+      // Burlap head with stitched smile
+      ctx.fillStyle = '#fef3c7';
+      ctx.beginPath();
+      ctx.arc(19, 14, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#451a03'; // Button eyes
+      ctx.fillRect(17, 13, 1.5, 1.5);
+      ctx.fillRect(20, 13, 1.5, 1.5);
+
+      // Straw conical sun hat
+      ctx.fillStyle = '#d97706';
+      ctx.beginPath();
+      ctx.moveTo(19, 3);
+      ctx.lineTo(28, 11);
+      ctx.lineTo(10, 11);
+      ctx.closePath();
+      ctx.fill();
+      // Hat brim
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(7, 10, 25, 2.5);
+
+      textures.addCanvas('obj_scarecrow', canvas);
+    }
+
+    // 4. Golden Ripe Wheat Cluster (34x28)
+    if (!textures.exists('obj_crop_wheat')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 34;
+      canvas.height = 28;
+      const ctx = canvas.getContext('2d')!;
+
+      // Green & golden wheat stalks
+      ctx.strokeStyle = '#ca8a04';
+      ctx.lineWidth = 1.2;
+      for (let x = 6; x <= 28; x += 5) {
+        ctx.beginPath();
+        ctx.moveTo(x, 26);
+        ctx.quadraticCurveTo(x + (x % 2 === 0 ? 3 : -3), 16, x + (x % 2 === 0 ? 4 : -4), 6);
+        ctx.stroke();
+
+        // Plump wheat head
+        ctx.fillStyle = '#eab308';
+        ctx.beginPath();
+        ctx.ellipse(x + (x % 2 === 0 ? 4 : -4), 8, 2.5, 4.5, (x % 2 === 0 ? 0.2 : -0.2), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(x + (x % 2 === 0 ? 3.5 : -4.5), 6, 1.5, 3);
+      }
+
+      textures.addCanvas('obj_crop_wheat', canvas);
+    }
+
+    // 5. Crisp Farm Cabbage Row (36x24)
+    if (!textures.exists('obj_crop_cabbage')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+
+      // Three cabbage heads in a neat row
+      const cabbages = [9, 18, 27];
+      for (const cx of cabbages) {
+        // Shadow
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.3)';
+        ctx.beginPath();
+        ctx.ellipse(cx, 19, 5, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dark outer ruffled leaves
+        ctx.fillStyle = '#166534';
+        ctx.beginPath();
+        ctx.arc(cx - 2, 15, 4, 0, Math.PI * 2);
+        ctx.arc(cx + 2, 15, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright green cabbage center
+        ctx.fillStyle = '#22c55e';
+        ctx.beginPath();
+        ctx.arc(cx, 14, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Tender light green heart
+        ctx.fillStyle = '#86efac';
+        ctx.beginPath();
+        ctx.arc(cx, 13.5, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      textures.addCanvas('obj_crop_cabbage', canvas);
+    }
+
+    // 6. Autumn Pumpkins & Vines (38x26)
+    if (!textures.exists('obj_crop_pumpkin')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 38;
+      canvas.height = 26;
+      const ctx = canvas.getContext('2d')!;
+
+      // Shadows
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(14, 21, 9, 3, 0, 0, Math.PI * 2);
+      ctx.ellipse(28, 20, 7, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Green curling vines
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(4, 20);
+      ctx.quadraticCurveTo(14, 12, 24, 18);
+      ctx.quadraticCurveTo(32, 14, 36, 19);
+      ctx.stroke();
+
+      // Big pumpkin (tx: 14)
+      ctx.fillStyle = '#ea580c';
+      ctx.beginPath();
+      ctx.ellipse(14, 16, 7.5, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Pumpkin rib grooves
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.ellipse(14, 16, 4.5, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Green stem
+      ctx.fillStyle = '#166534';
+      ctx.fillRect(13, 9, 2, 3);
+
+      // Smaller companion pumpkin (tx: 28)
+      ctx.fillStyle = '#ea580c';
+      ctx.beginPath();
+      ctx.ellipse(28, 16, 6, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.ellipse(28, 16, 3.5, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#166534';
+      ctx.fillRect(27.5, 10.5, 1.8, 2.5);
+
+      textures.addCanvas('obj_crop_pumpkin', canvas);
+    }
+  }
+
+  // 23. Modern Stylized 2D Character Spritesheet (High Fidelity, Crisp Contours, Volumetric Shading)
+  // 12 frames (4 directions x 3 animation steps): [Down 0..2, Left 3..5, Right 6..8, Up 9..11]
+  private static createCharacterSpritesheet(
+    textures: Phaser.Textures.TextureManager,
+    key: string,
+    skinColor: string,
+    hairColor: string,
+    clothesColor: string,
+    gender: 'male' | 'female'
+  ) {
+    if (textures.exists(key)) return;
+
+    const frameW = 32;
+    const frameH = 44;
+    const totalFrames = 12;
+    const canvas = document.createElement('canvas');
+    canvas.width = frameW * totalFrames;
+    canvas.height = frameH;
+    const ctx = canvas.getContext('2d')!;
+
+    for (let f = 0; f < totalFrames; f++) {
+      const dirIndex = Math.floor(f / 3); // 0=down, 1=left, 2=right, 3=up
+      const stepIndex = f % 3; // 0=left leg step, 1=idle, 2=right leg step
+      const ox = f * frameW;
+
+      // Soft grounded drop shadow beneath character feet
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(ox + 16, 40, 10, 3.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Natural bobbing offset when walking
+      const bob = stepIndex === 1 ? 0 : -1;
+
+      // --- 1. LEGS & BOOTS ---
+      const bootSoleColor = '#0f172a';
+      const bootLeatherColor = '#334155';
+      const bootTrimColor = '#64748b';
+
+      if (dirIndex === 0 || dirIndex === 3) {
+        // Facing Down or Up
+        const leftLegY = stepIndex === 0 ? 33 : 35;
+        const rightLegY = stepIndex === 2 ? 33 : 35;
+
+        // Left Leg & Boot
+        ctx.fillStyle = bootLeatherColor;
+        ctx.fillRect(ox + 11, leftLegY + bob, 4.5, 5.5);
+        ctx.fillStyle = bootSoleColor;
+        ctx.fillRect(ox + 10.5, leftLegY + bob + 4.5, 5.5, 1.8);
+        ctx.fillStyle = bootTrimColor;
+        ctx.fillRect(ox + 11, leftLegY + bob + 1, 4.5, 1.2);
+
+        // Right Leg & Boot
+        ctx.fillStyle = bootLeatherColor;
+        ctx.fillRect(ox + 17, rightLegY + bob, 4.5, 5.5);
+        ctx.fillStyle = bootSoleColor;
+        ctx.fillRect(ox + 16.5, rightLegY + bob + 4.5, 5.5, 1.8);
+        ctx.fillStyle = bootTrimColor;
+        ctx.fillRect(ox + 17, rightLegY + bob + 1, 4.5, 1.2);
+      } else if (dirIndex === 1) {
+        // Facing Left
+        const legShift = stepIndex === 0 ? -2.5 : stepIndex === 2 ? 2.5 : 0;
+        ctx.fillStyle = bootLeatherColor;
+        ctx.fillRect(ox + 13 + legShift, 34 + bob, 5, 5.5);
+        ctx.fillStyle = bootSoleColor;
+        ctx.fillRect(ox + 12 + legShift, 38.5 + bob, 6.5, 1.8);
+      } else {
+        // Facing Right
+        const legShift = stepIndex === 0 ? 2.5 : stepIndex === 2 ? -2.5 : 0;
+        ctx.fillStyle = bootLeatherColor;
+        ctx.fillRect(ox + 14 + legShift, 34 + bob, 5, 5.5);
+        ctx.fillStyle = bootSoleColor;
+        ctx.fillRect(ox + 13.5 + legShift, 38.5 + bob, 6.5, 1.8);
+      }
+
+      // --- 2. TORSO / TUNIC CLOTHING ---
+      // Subtle dark silhouette edge
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.roundRect(ox + 9.5, 22.5 + bob, 13, 13, 3);
+      ctx.fill();
+
+      // Main fabric
+      ctx.fillStyle = clothesColor;
+      ctx.beginPath();
+      ctx.roundRect(ox + 10, 23 + bob, 12, 12, 2.5);
+      ctx.fill();
+
+      // Top fabric shoulder highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.fillRect(ox + 11, 23 + bob, 10, 2);
+
+      // Collar / Neckline
+      if (dirIndex === 0) {
+        ctx.fillStyle = '#f8fafc';
+        ctx.beginPath();
+        ctx.moveTo(ox + 14, 23 + bob);
+        ctx.lineTo(ox + 16, 26 + bob);
+        ctx.lineTo(ox + 18, 23 + bob);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Sturdy Leather Belt & Polished Brass Buckle
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(ox + 10, 31 + bob, 12, 2.8);
+      ctx.fillStyle = '#0f172a'; // Belt shadow
+      ctx.fillRect(ox + 10, 33.5 + bob, 12, 0.8);
+      // Gold Buckle
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(ox + 14.5, 30.5 + bob, 3, 3.2);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(ox + 15, 31 + bob, 2, 2);
+
+      // Arms & Hands
+      ctx.fillStyle = skinColor;
+      if (dirIndex === 0) {
+        // Sleeves
+        ctx.fillStyle = clothesColor;
+        ctx.fillRect(ox + 7.5, 23 + bob, 3, 4);
+        ctx.fillRect(ox + 21.5, 23 + bob, 3, 4);
+        // Hands
+        ctx.fillStyle = skinColor;
+        ctx.fillRect(ox + 7.5, 27 + bob, 3, 3.5);
+        ctx.fillRect(ox + 21.5, 27 + bob, 3, 3.5);
+      } else if (dirIndex === 1) {
+        // Swinging arm left
+        const armOffset = stepIndex === 0 ? 3 : stepIndex === 2 ? -3 : 0;
+        ctx.fillStyle = clothesColor;
+        ctx.fillRect(ox + 13 + armOffset, 24 + bob, 3.5, 4);
+        ctx.fillStyle = skinColor;
+        ctx.fillRect(ox + 13 + armOffset, 28 + bob, 3.5, 3.5);
+      } else if (dirIndex === 2) {
+        // Swinging arm right
+        const armOffset = stepIndex === 0 ? -3 : stepIndex === 2 ? 3 : 0;
+        ctx.fillStyle = clothesColor;
+        ctx.fillRect(ox + 15.5 + armOffset, 24 + bob, 3.5, 4);
+        ctx.fillStyle = skinColor;
+        ctx.fillRect(ox + 15.5 + armOffset, 28 + bob, 3.5, 3.5);
+      }
+
+      // --- 3. HEAD & FACE ---
+      // Head silhouette contour
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(ox + 16, 15 + bob, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Base skin
+      ctx.fillStyle = skinColor;
+      ctx.beginPath();
+      ctx.arc(ox + 16, 15 + bob, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Facial Features (Stylized, Expressive Eyes & Rosy Blush)
+      if (dirIndex === 0) {
+        // Cheerful Rosy Cheek Blush
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.35)';
+        ctx.beginPath();
+        ctx.ellipse(ox + 11.5, 17.5 + bob, 2.2, 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(ox + 20.5, 17.5 + bob, 2.2, 1.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eyes: Dark contour & lashes
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(ox + 12.5, 13.5 + bob, 2.4, 2.8);
+        ctx.fillRect(ox + 17.5, 13.5 + bob, 2.4, 2.8);
+
+        // White sparkle catchlight highlight
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ox + 12.8, 13.7 + bob, 1.2, 1.2);
+        ctx.fillRect(ox + 17.8, 13.7 + bob, 1.2, 1.2);
+
+        // Smile
+        ctx.strokeStyle = '#9a3412';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(ox + 14.5, 18.5 + bob);
+        ctx.lineTo(ox + 17.5, 18.5 + bob);
+        ctx.stroke();
+      } else if (dirIndex === 1) {
+        // Looking left
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.32)';
+        ctx.beginPath();
+        ctx.ellipse(ox + 11.5, 17.5 + bob, 2, 1.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(ox + 11, 13.5 + bob, 2.4, 2.8);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ox + 11.2, 13.7 + bob, 1.2, 1.2);
+      } else if (dirIndex === 2) {
+        // Looking right
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.32)';
+        ctx.beginPath();
+        ctx.ellipse(ox + 20.5, 17.5 + bob, 2, 1.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(ox + 18.5, 13.5 + bob, 2.4, 2.8);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(ox + 18.7, 13.7 + bob, 1.2, 1.2);
+      }
+
+      // --- 4. VOLUMETRIC STYLED HAIR & CAP ---
+      ctx.fillStyle = hairColor;
+      if (dirIndex === 0) {
+        // Front hair dome
+        ctx.beginPath();
+        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 0.95, Math.PI * 2.05);
+        ctx.fill();
+
+        // Bangs / Locks
+        ctx.fillRect(ox + 9, 11 + bob, 3.5, 6);
+        ctx.fillRect(ox + 19.5, 11 + bob, 3.5, 6);
+        ctx.fillRect(ox + 13.5, 11 + bob, 5, 2.5);
+
+        // Specular crown hair shine
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+        ctx.beginPath();
+        ctx.arc(ox + 16, 9 + bob, 4.5, Math.PI * 1.1, Math.PI * 1.9);
+        ctx.stroke();
+
+        if (gender === 'female') {
+          // Flowing side tresses / pigtails
+          ctx.fillStyle = hairColor;
+          ctx.fillRect(ox + 8, 16 + bob, 3, 8);
+          ctx.fillRect(ox + 21, 16 + bob, 3, 8);
+          // Hair tie ribbons
+          ctx.fillStyle = '#ec4899';
+          ctx.fillRect(ox + 8, 18 + bob, 3, 1.5);
+          ctx.fillRect(ox + 21, 18 + bob, 3, 1.5);
+        }
+      } else if (dirIndex === 1) {
+        // Facing Left
+        ctx.beginPath();
+        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 0.75, Math.PI * 1.95);
+        ctx.fill();
+        ctx.fillRect(ox + 10, 11 + bob, 4, 5);
+        if (gender === 'female') {
+          ctx.fillRect(ox + 16, 15 + bob, 4, 9);
+        }
+      } else if (dirIndex === 2) {
+        // Facing Right
+        ctx.beginPath();
+        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 1.05, Math.PI * 2.25);
+        ctx.fill();
+        ctx.fillRect(ox + 18, 11 + bob, 4, 5);
+        if (gender === 'female') {
+          ctx.fillRect(ox + 12, 15 + bob, 4, 9);
+        }
+      } else {
+        // Facing Up (Back of head)
+        ctx.beginPath();
+        ctx.arc(ox + 16, 13 + bob, 7.5, 0, Math.PI * 2);
+        ctx.fill();
+        // Hair shine highlight arc
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(ox + 16, 12 + bob, 5, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+
+        if (gender === 'female') {
+          ctx.fillStyle = hairColor;
+          ctx.fillRect(ox + 9, 16 + bob, 3.5, 8);
+          ctx.fillRect(ox + 19.5, 16 + bob, 3.5, 8);
+        }
+      }
+    }
+
+    // Add to Phaser texture manager as a spritesheet!
+    textures.addSpriteSheet(key, canvas as any, {
+      frameWidth: frameW,
+      frameHeight: frameH,
+    });
+  }
+
+  // 21. Particle Textures
+  private static createParticleTextures(textures: Phaser.Textures.TextureManager) {
+    // Wood chip
+    if (!textures.exists('particle_wood')) {
+      const c = document.createElement('canvas');
+      c.width = 6;
+      c.height = 6;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(1, 1, 4, 3);
+      textures.addCanvas('particle_wood', c);
+    }
+
+    // Stone dust
+    if (!textures.exists('particle_stone')) {
+      const c = document.createElement('canvas');
+      c.width = 6;
+      c.height = 6;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#a8a29e';
+      ctx.fillRect(1, 1, 3, 3);
+      textures.addCanvas('particle_stone', c);
+    }
+
+    // Water splash
+    if (!textures.exists('particle_water')) {
+      const c = document.createElement('canvas');
+      c.width = 6;
+      c.height = 6;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#7dd3fc';
+      ctx.beginPath();
+      ctx.arc(3, 3, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('particle_water', c);
+    }
+
+    // Gold sparkle
+    if (!textures.exists('particle_sparkle')) {
+      const c = document.createElement('canvas');
+      c.width = 8;
+      c.height = 8;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.moveTo(4, 0);
+      ctx.lineTo(5, 3);
+      ctx.lineTo(8, 4);
+      ctx.lineTo(5, 5);
+      ctx.lineTo(4, 8);
+      ctx.lineTo(3, 5);
+      ctx.lineTo(0, 4);
+      ctx.lineTo(3, 3);
+      ctx.closePath();
+      ctx.fill();
+      textures.addCanvas('particle_sparkle', c);
+    }
+  }
+}

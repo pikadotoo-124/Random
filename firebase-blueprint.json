@@ -1,0 +1,127 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile containing identity and character metadata",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Authentication User ID"
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 16,
+          "description": "Custom in-game display name"
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["male", "female"],
+          "description": "Character gender"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user account was created"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user last signed in"
+        },
+        "gameVersion": {
+          "type": "number",
+          "description": "Schema version number"
+        }
+      },
+      "required": ["uid", "playerName", "gender", "gameVersion"]
+    },
+    "PlayerState": {
+      "title": "PlayerState",
+      "description": "Real-time persistent state of the player character",
+      "type": "object",
+      "properties": {
+        "positionX": {
+          "type": "number",
+          "description": "Player X tile coordinate"
+        },
+        "positionY": {
+          "type": "number",
+          "description": "Player Y tile coordinate"
+        },
+        "currentZone": {
+          "type": "string",
+          "description": "Current world biome or zone name"
+        },
+        "gold": {
+          "type": "number",
+          "description": "Current coin balance"
+        },
+        "inventory": {
+          "type": "array",
+          "description": "List of backpack inventory items and quantities"
+        },
+        "equipment": {
+          "type": "object",
+          "description": "Currently active tool"
+        },
+        "playerStats": {
+          "type": "object",
+          "description": "Lifetime stats and survival meters"
+        },
+        "lastSavedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of last state save"
+        }
+      },
+      "required": ["positionX", "positionY", "gold", "inventory"]
+    },
+    "WorldState": {
+      "title": "WorldState",
+      "description": "Player homestead building structures and storage containers",
+      "type": "object",
+      "properties": {
+        "placedBuildings": {
+          "type": "array",
+          "description": "List of buildings constructed by player"
+        },
+        "storageBoxes": {
+          "type": "array",
+          "description": "Contents of placed chests"
+        },
+        "playerWorldChanges": {
+          "type": "object",
+          "description": "World modifications record"
+        },
+        "lastSavedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of last world state save"
+        }
+      },
+      "required": ["placedBuildings"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "User profile document indexed by Firebase Auth UID"
+    },
+    "/users/{userId}/gameData/playerState": {
+      "schema": {
+        "$ref": "#/entities/PlayerState"
+      },
+      "description": "Persistent player inventory, position, and status"
+    },
+    "/users/{userId}/gameData/worldState": {
+      "schema": {
+        "$ref": "#/entities/WorldState"
+      },
+      "description": "Placed structures and storage boxes"
+    }
+  }
+}
