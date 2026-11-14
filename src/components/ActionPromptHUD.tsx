@@ -4,7 +4,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Axe, Coins, Flame, Hammer, Package, MessageCircle, X } from 'lucide-react';
+import { Axe, Coins, Compass, Fish, Flame, Hammer, MessageCircle, Package, Signpost, X } from 'lucide-react';
+import type { FishingHudState } from '../game/scenes/WorldScene';
 
 interface ActionPromptHUDProps {
   prompt: {
@@ -19,6 +20,10 @@ interface ActionPromptHUDProps {
   tutorialCompleted?: boolean;
   onDismissTutorial?: () => void;
   isBuildMode?: boolean;
+  enteredZoneBanner?: { name: string; color: string } | null;
+  fishingState?: FishingHudState | null;
+  onCatchFishing?: () => void;
+  onCancelFishing?: () => void;
 }
 
 export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
@@ -28,6 +33,10 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
   tutorialCompleted = true,
   onDismissTutorial,
   isBuildMode = false,
+  enteredZoneBanner = null,
+  fishingState = null,
+  onCatchFishing,
+  onCancelFishing,
 }) => {
   const [showOnboarding, setShowOnboarding] = useState<boolean>(!tutorialCompleted);
   const [visibleTargetKey, setVisibleTargetKey] = useState<string | null>(null);
@@ -48,7 +57,7 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
 
   // Brief contextual hint (~2.8s) only when moving close to a new interactable target
   useEffect(() => {
-    if (!prompt || isBuildMode) {
+    if (!prompt || isBuildMode || fishingState?.active) {
       setVisibleTargetKey(null);
       return;
     }
@@ -61,7 +70,7 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
     }, 2800);
 
     return () => clearTimeout(timer);
-  }, [prompt, isBuildMode]);
+  }, [prompt, isBuildMode, fishingState?.active]);
 
   const getIcon = () => {
     if (!prompt) return null;
@@ -76,13 +85,24 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
         return <Package className="text-emerald-400" size={14} />;
       case 'npc':
         return <MessageCircle className="text-pink-400" size={14} />;
+      case 'signpost':
+        return <Signpost className="text-amber-300" size={14} />;
       default:
         return <Axe className="text-yellow-400" size={14} />;
     }
   };
 
   const currentKey = prompt ? prompt.targetId || `${prompt.type}:${prompt.title}` : null;
-  const shouldShowContextPill = Boolean(prompt && !isBuildMode && visibleTargetKey === currentKey);
+  const shouldShowContextPill = Boolean(
+    prompt && !isBuildMode && !fishingState?.active && visibleTargetKey === currentKey
+  );
+
+  const inSweetSpot = Boolean(
+    fishingState &&
+      fishingState.phase === 'bite' &&
+      fishingState.cursorPos >= fishingState.sweetMin &&
+      fishingState.cursorPos <= fishingState.sweetMax
+  );
 
   return (
     <>
@@ -114,7 +134,96 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
         </div>
       )}
 
-      {/* 2. Small, unobtrusive, auto-fading contextual pill when near an interactable */}
+      {/* 1B. Zone Entry Banner Toast when crossing into a new region */}
+      {enteredZoneBanner && !isBuildMode && (
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-none animate-fade-in">
+          <div
+            style={{ borderColor: `${enteredZoneBanner.color}88` }}
+            className="flex items-center gap-2 bg-stone-950/90 backdrop-blur-md border rounded-xl px-4 py-1.5 shadow-2xl"
+          >
+            <Compass size={14} style={{ color: enteredZoneBanner.color }} />
+            <span className="text-xs font-bold text-white whitespace-nowrap">{enteredZoneBanner.name}</span>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Fishing Timing Minigame HUD */}
+      {fishingState?.active && !isBuildMode && (
+        <div
+          className="fixed bottom-24 sm:bottom-10 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-[86%] max-w-xs"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          onTouchStart={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div className="bg-stone-950/92 backdrop-blur-md border border-sky-500/50 rounded-2xl p-3 shadow-2xl space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Fish size={16} className={fishingState.phase === 'bite' ? 'text-emerald-400 animate-bounce' : 'text-sky-400'} />
+                <span className="text-xs font-bold text-white">
+                  {fishingState.phase === 'waiting'
+                    ? '🌊 ငါးစာစောင့်နေသည်...'
+                    : inSweetSpot
+                    ? '✨ ယခုဆွဲတင်ပါ! (×2 ငါး)'
+                    : '🐟 ငါးကိုက်ပြီ! အချိန်ကိုက်ဆွဲတင်ပါ'}
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="Cancel fishing"
+                onClick={onCancelFishing}
+                className="text-stone-400 hover:text-white p-0.5 cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {fishingState.phase === 'bite' ? (
+              <>
+                {/* Sweeping Cursor Timing Track */}
+                <div className="relative h-5 rounded-lg bg-stone-800 border border-stone-700 overflow-hidden">
+                  {/* Sweet spot target zone */}
+                  <div
+                    style={{
+                      left: `${fishingState.sweetMin * 100}%`,
+                      width: `${(fishingState.sweetMax - fishingState.sweetMin) * 100}%`,
+                    }}
+                    className="absolute inset-y-0 bg-emerald-500/40 border-x border-emerald-400"
+                  />
+                  {/* Moving timing needle */}
+                  <div
+                    style={{ left: `${fishingState.cursorPos * 100}%` }}
+                    className={`absolute top-0 bottom-0 w-1.5 -translate-x-1/2 rounded-full shadow ${
+                      inSweetSpot ? 'bg-yellow-300 shadow-yellow-300/80' : 'bg-white'
+                    }`}
+                  />
+                </div>
+
+                {/* Remaining bite timer bar */}
+                <div className="h-1 rounded-full bg-stone-800 overflow-hidden">
+                  <div
+                    style={{ width: `${fishingState.timeLeftRatio * 100}%` }}
+                    className="h-full bg-amber-400 transition-all duration-75"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onCatchFishing}
+                  className="w-full py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow transition cursor-pointer"
+                >
+                  🎣 ဆွဲတင်မည် {isTouchMode ? '' : '[E]'}
+                </button>
+              </>
+            ) : (
+              <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
+                <div className="h-full w-1/2 bg-sky-500/70 animate-pulse rounded-full" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Small, unobtrusive, auto-fading contextual pill when near an interactable */}
       {shouldShowContextPill && prompt && (
         <div
           className="fixed bottom-20 sm:bottom-8 left-1/2 -translate-x-1/2 z-20 pointer-events-none"

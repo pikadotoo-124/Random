@@ -20,13 +20,12 @@ export class InventorySystem {
   }
 
   /**
-   * Initialize starter items: Basic Axe, Basic Pickaxe, Basic Fishing Rod
+   * Initialize starter items: Basic Axe & Basic Pickaxe (Fishing Rod must be bought or crafted)
    */
   public initStarterItems(): void {
     this.slots = [
       { item: 'axe_basic', quantity: 1 },
       { item: 'pickaxe_basic', quantity: 1 },
-      { item: 'rod_basic', quantity: 1 },
     ];
   }
 

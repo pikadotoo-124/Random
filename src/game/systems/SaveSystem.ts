@@ -434,7 +434,6 @@ export class SaveSystem {
         slots: [
           { item: 'axe_basic', quantity: 1 },
           { item: 'pickaxe_basic', quantity: 1 },
-          { item: 'rod_basic', quantity: 1 },
           { item: 'wood', quantity: 10 },
           { item: 'stone', quantity: 5 },
         ],

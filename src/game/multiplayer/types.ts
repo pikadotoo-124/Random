@@ -12,8 +12,8 @@ export interface PlayerPresenceState {
   positionX: number; // tileX
   positionY: number; // tileY
   facingDirection: 'down' | 'left' | 'right' | 'up';
-  movementState: 'idle' | 'walking';
-  animationState?: 'none' | 'gathering' | 'building';
+  movementState: 'idle' | 'walking' | 'fishing';
+  animationState?: 'none' | 'gathering' | 'building' | 'fishing';
   color: string;
   lastUpdate: number;
 }
@@ -64,6 +64,7 @@ export type ClientMessage =
         y: number;
         direction: 'down' | 'left' | 'right' | 'up';
         isMoving: boolean;
+        action?: 'idle' | 'gathering' | 'building' | 'fishing';
       };
     }
   | {
@@ -135,6 +136,7 @@ export type ServerMessage =
         y: number;
         direction: 'down' | 'left' | 'right' | 'up';
         isMoving: boolean;
+        action?: 'idle' | 'gathering' | 'building' | 'fishing';
       };
     }
   | {

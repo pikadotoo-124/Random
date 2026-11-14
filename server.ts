@@ -217,11 +217,13 @@ async function createServer() {
 
             const targetX = Math.max(0, Math.min(119, msg.payload.x));
             const targetY = Math.max(0, Math.min(119, msg.payload.y));
+            const action = msg.payload.action || 'idle';
 
             player.positionX = targetX;
             player.positionY = targetY;
             player.facingDirection = msg.payload.direction;
-            player.movementState = msg.payload.isMoving ? 'walking' : 'idle';
+            player.movementState = action === 'fishing' ? 'fishing' : msg.payload.isMoving ? 'walking' : 'idle';
+            player.animationState = action === 'fishing' ? 'fishing' : action === 'gathering' ? 'gathering' : action === 'building' ? 'building' : 'none';
             player.lastUpdate = Date.now();
 
             broadcast({
@@ -232,6 +234,7 @@ async function createServer() {
                 y: targetY,
                 direction: msg.payload.direction,
                 isMoving: msg.payload.isMoving,
+                action,
               },
             }, ws);
             break;

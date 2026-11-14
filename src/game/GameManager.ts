@@ -134,6 +134,18 @@ export class GameManager {
     }
   }
 
+  public triggerFishingCatch(): void {
+    if (this.worldScene) {
+      this.worldScene.triggerFishingCatch();
+    }
+  }
+
+  public cancelFishing(): void {
+    if (this.worldScene) {
+      this.worldScene.cancelFishing(false);
+    }
+  }
+
   public setBuildMode(type: BuildingType | null, movingBuildingId?: string): void {
     if (this.worldScene) {
       this.worldScene.setBuildMode(type, movingBuildingId);

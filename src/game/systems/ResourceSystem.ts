@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ResourceNode, ResourceType } from '../types';
+import { ZONE_SIGNPOSTS } from '../constants';
+import { ResourceNode } from '../types';
 import { InventorySystem } from './InventorySystem';
 import { MapSystem } from './MapSystem';
 
@@ -22,12 +23,20 @@ export class ResourceSystem {
     this.nodes = [];
     let idCounter = 1;
 
-    // Helper to check valid spawn location
+    // Helper to check valid spawn location (keeps roads, bridges, farmland, and zone signposts clear)
     const canSpawnAt = (tx: number, ty: number) => {
       if (!mapSystem.isTileInBounds(tx, ty)) return false;
       if (this.nodes.some((n) => n.tileX === tx && n.tileY === ty)) return false;
       // Don't spawn on top of integrated village town center
       if (tx >= 20 && tx <= 40 && ty >= 20 && ty <= 40) return false;
+      const tile = mapSystem.tiles[ty][tx];
+      if (tile === 'dirt' || tile === 'bridge' || tile === 'cobble' || tile === 'farmland' || tile === 'cliff') {
+        return false;
+      }
+      // Keep zone entrance signposts clear
+      if (ZONE_SIGNPOSTS.some((s) => Math.hypot(s.tileX - tx, s.tileY - ty) <= 1.5)) {
+        return false;
+      }
       return true;
     };
 
@@ -171,34 +180,91 @@ export class ResourceSystem {
     }
 
     // 6. Fishing Spots across Mirror Lake, Emerald Glade Lake, Highland Spring Lake & Silverbrook River
-    const fishLocations = [
-      // Mirror Lake (South-West)
-      [14, 52], [18, 54], [24, 56], [28, 62], [26, 68],
-      [20, 72], [14, 70], [10, 64], [12, 58], [16, 60],
-      // Lake 2: Emerald Glade Lake (East Whispering Forest)
-      [84, 18], [90, 20], [86, 25], [80, 22], [92, 24],
-      // Lake 3: Highland Spring Lake (Northwest Meadows)
-      [15, 12], [21, 13], [17, 16], [14, 15],
-      // Silverbrook River (Homestead District)
-      [100, 58], [88, 66], [74, 74], [58, 86], [48, 98]
+    // Automatically scan shoreline-adjacent water tiles so EVERY fishing spot is both on water and reachable from land!
+    const preferredFishSpots: [number, number][] = [
+      // Mirror Lake shoreline pockets (South-West)
+      [12, 52], [18, 52], [25, 52], [32, 58], [33, 64],
+      [29, 71], [22, 72], [14, 71], [8, 65], [8, 57],
+      // Emerald Glade Lake shoreline (East Whispering Forest)
+      [78, 22], [82, 17], [90, 17], [94, 22], [88, 27],
+      // Highland Spring Lake shoreline (Northwest Meadows)
+      [25, 14], [22, 10], [14, 10], [11, 15], [18, 19],
+      // Silverbrook River shoreline (Homestead District)
+      [104, 58], [92, 65], [76, 74], [60, 86], [46, 100],
     ];
-    for (const [tx, ty] of fishLocations) {
-      if (canSpawnAt(tx, ty)) {
-        this.nodes.push({
-          id: `res_fish_${idCounter++}`,
-          type: 'lake_fish',
-          tileX: tx,
-          tileY: ty,
-          currentHealth: 1,
-          maxHealth: 1,
-          yieldItem: 'fish',
-          yieldAmount: 2,
-          gatherDurationMs: 2200,
-          requiredTool: 'rod_basic',
-          respawnTimeSeconds: 25,
-        });
+
+    const addFishingSpotIfValid = (wx: number, wy: number) => {
+      if (!mapSystem.isTileInBounds(wx, wy)) return false;
+      if (mapSystem.tiles[wy][wx] !== 'water') return false;
+      if (!ResourceSystem.isTileReachableFromShore(mapSystem, wx, wy)) return false;
+      if (this.nodes.some((n) => n.type === 'lake_fish' && Math.hypot(n.tileX - wx, n.tileY - wy) < 2.2)) {
+        return false;
+      }
+      this.nodes.push({
+        id: `res_fish_${idCounter++}`,
+        type: 'lake_fish',
+        tileX: wx,
+        tileY: wy,
+        currentHealth: 1,
+        maxHealth: 1,
+        yieldItem: 'fish',
+        yieldAmount: 1,
+        gatherDurationMs: 2200,
+        requiredTool: 'rod_basic',
+        respawnTimeSeconds: 20,
+      });
+      return true;
+    };
+
+    for (const [fx, fy] of preferredFishSpots) {
+      if (addFishingSpotIfValid(fx, fy)) continue;
+      // Snap to nearest valid shoreline water tile within 4 tiles
+      let snapped = false;
+      for (let r = 1; r <= 4 && !snapped; r++) {
+        for (let dy = -r; dy <= r && !snapped; dy++) {
+          for (let dx = -r; dx <= r && !snapped; dx++) {
+            if (addFishingSpotIfValid(fx + dx, fy + dy)) {
+              snapped = true;
+            }
+          }
+        }
       }
     }
+  }
+
+  /**
+   * Check whether a water tile can be reached from at least one adjacent walkable shore tile
+   */
+  public static isTileReachableFromShore(mapSystem: MapSystem, wx: number, wy: number): boolean {
+    if (!mapSystem.isTileInBounds(wx, wy) || mapSystem.tiles[wy][wx] !== 'water') {
+      return false;
+    }
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const sx = wx + dx;
+        const sy = wy + dy;
+        if (mapSystem.isTileInBounds(sx, sy) && mapSystem.isWalkable(sx, sy)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Validate whether a player can gather/interact with a resource node (e.g. Fishing requires rod_basic)
+   */
+  public canGatherNode(node: ResourceNode, inventory: InventorySystem): { allowed: boolean; reason?: string } {
+    if (node.type === 'lake_fish') {
+      if (!inventory.hasItem('rod_basic', 1)) {
+        return {
+          allowed: false,
+          reason: 'ငါးမျှားတံ (Fishing Rod) လိုအပ်သည် — ဆိုင်တွင်ဝယ်ပါ (25🪙) သို့ ဖန်တီးပါ',
+        };
+      }
+    }
+    return { allowed: true };
   }
 
   /**
@@ -243,17 +309,19 @@ export class ResourceSystem {
   }
 
   /**
-   * Harvest resource node
+   * Harvest resource node (optional amountOverride used for fishing timing bonus)
    */
   public harvestNode(
     node: ResourceNode,
     inventory: InventorySystem,
-    mapSystem: MapSystem
+    mapSystem: MapSystem,
+    amountOverride?: number
   ): { item: string; amount: number } {
     node.depletedUntil = Date.now() + node.respawnTimeSeconds * 1000;
 
+    const amount = typeof amountOverride === 'number' && amountOverride > 0 ? amountOverride : node.yieldAmount;
     // Add to inventory
-    inventory.addItem(node.yieldItem, node.yieldAmount);
+    inventory.addItem(node.yieldItem, amount);
 
     // If solid, temporarily remove collision while depleted
     if (node.type === 'tree' || node.type === 'rock') {
@@ -264,7 +332,7 @@ export class ResourceSystem {
       this.onUpdate();
     }
 
-    return { item: node.yieldItem, amount: node.yieldAmount };
+    return { item: node.yieldItem, amount };
   }
 
   /**

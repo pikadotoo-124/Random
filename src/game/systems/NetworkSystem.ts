@@ -25,7 +25,7 @@ export interface RemotePlayer {
   worldY: number;
   direction: 'down' | 'left' | 'right' | 'up';
   isMoving: boolean;
-  action?: 'gathering' | 'building' | 'idle';
+  action?: 'gathering' | 'building' | 'fishing' | 'idle';
   color: string;
 }
 
@@ -221,6 +221,7 @@ export class NetworkSystem {
               worldY: 0,
               direction: p.facingDirection,
               isMoving: p.movementState === 'walking',
+              action: p.movementState === 'fishing' ? 'fishing' : p.animationState === 'fishing' ? 'fishing' : 'idle',
               color: p.color,
             });
           }
@@ -253,6 +254,7 @@ export class NetworkSystem {
             worldY: 0,
             direction: player.facingDirection,
             isMoving: player.movementState === 'walking',
+            action: player.movementState === 'fishing' ? 'fishing' : 'idle',
             color: player.color,
           });
         }
@@ -270,7 +272,7 @@ export class NetworkSystem {
       }
 
       case 's:player_moved': {
-        const { playerId, x, y, direction, isMoving } = msg.payload;
+        const { playerId, x, y, direction, isMoving, action } = msg.payload;
         if (playerId === this.localPlayerId) return;
 
         const peer = this.remotePlayers.get(playerId);
@@ -279,6 +281,11 @@ export class NetworkSystem {
           peer.targetTileY = y;
           peer.direction = direction;
           peer.isMoving = isMoving;
+          if (action !== undefined) {
+            peer.action = action;
+          } else if (isMoving) {
+            peer.action = 'idle';
+          }
         }
 
         this.emit('player_moved', msg.payload);
@@ -343,7 +350,13 @@ export class NetworkSystem {
   /**
    * Broadcast local player movement (rate-limited to 10-12 updates/sec)
    */
-  public broadcastPosition(tileX: number, tileY: number, direction: 'down' | 'left' | 'right' | 'up', isMoving: boolean): void {
+  public broadcastPosition(
+    tileX: number,
+    tileY: number,
+    direction: 'down' | 'left' | 'right' | 'up',
+    isMoving: boolean,
+    action: 'idle' | 'gathering' | 'building' | 'fishing' = 'idle'
+  ): void {
     const now = Date.now();
     if (now - this.lastMoveSendTime < 80) return; // ~12 updates per second
     this.lastMoveSendTime = now;
@@ -355,6 +368,29 @@ export class NetworkSystem {
         y: Math.round(tileY * 10) / 10,
         direction,
         isMoving,
+        action,
+      },
+    });
+  }
+
+  /**
+   * Immediately broadcast an action state change (e.g. starting/stopping fishing)
+   */
+  public broadcastActionState(
+    tileX: number,
+    tileY: number,
+    direction: 'down' | 'left' | 'right' | 'up',
+    action: 'idle' | 'gathering' | 'building' | 'fishing'
+  ): void {
+    this.lastMoveSendTime = Date.now();
+    this.send({
+      type: 'c:player_move',
+      payload: {
+        x: Math.round(tileX * 10) / 10,
+        y: Math.round(tileY * 10) / 10,
+        direction,
+        isMoving: false,
+        action,
       },
     });
   }

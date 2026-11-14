@@ -358,6 +358,16 @@ export const ZONES: ZoneDefinition[] = [
     color: '#65a30d',
   },
   {
+    id: 'farm_district',
+    name: 'စိုက်ပျိုးရေးရပ်ကွက် (Farm District)',
+    description: 'ရွာရေတွင်းနှင့် ဂျုံ၊ ဂေါ်ဖီ၊ ဖရုံသီး စိုက်ခင်းများ စိမ်းလန်းစွာ စိုက်ပျိုးထားသော စိုက်ပျိုးရေးဇုန်။',
+    minX: 43,
+    minY: 71,
+    maxX: 83,
+    maxY: 96,
+    color: '#16a34a',
+  },
+  {
     id: 'building_area',
     name: 'အခြေချရပ်ကွက် (Homestead District)',
     description: 'ကစားသမားများ ကိုယ်ပိုင်အိမ်များ၊ ခြံဝင်းများနှင့် အဆောက်အအုံများ စိတ်ကြိုက်ဆောက်လုပ်နိုင်သော မြေနေရာ။',
@@ -378,3 +388,96 @@ export const ZONES: ZoneDefinition[] = [
     color: '#78716c',
   },
 ];
+
+export interface ZoneSignpostDef {
+  id: string;
+  zoneId: string;
+  tileX: number;
+  tileY: number;
+  label: string;
+  shortLabel: string;
+  color: string;
+  facing: 'right' | 'left';
+  hint: string;
+}
+
+export const ZONE_SIGNPOSTS: ZoneSignpostDef[] = [
+  {
+    id: 'sign_town_north',
+    zoneId: 'main_city',
+    tileX: 28,
+    tileY: 21,
+    label: '🏘️ ဗဟိုမြို့တော် (Town Center)',
+    shortLabel: 'Town Center',
+    color: '#fde047',
+    facing: 'left',
+    hint: 'မြောက်ဘက်သို့: မြက်ခင်းပြင် | တောင်ဘက်သို့: ဗဟိုမြို့တော်',
+  },
+  {
+    id: 'sign_wild_meadows',
+    zoneId: 'grassland',
+    tileX: 29,
+    tileY: 18,
+    label: '🌿 မြက်ခင်းပြင် (Wild Meadows)',
+    shortLabel: 'Wild Meadows',
+    color: '#bef264',
+    facing: 'left',
+    hint: 'မြက်ခင်းပြင်နှင့် တောင်ပေါ်ရေကန် (Highland Spring Lake)',
+  },
+  {
+    id: 'sign_mirror_lake',
+    zoneId: 'lake',
+    tileX: 19,
+    tileY: 29,
+    label: '🌊 မှန်ကြည်ရေကန် (Mirror Lake)',
+    shortLabel: 'Mirror Lake',
+    color: '#7dd3fc',
+    facing: 'left',
+    hint: 'အနောက်ဘက်လမ်းအတိုင်း ဆက်လျှောက်ပါက မှန်ကြည်ရေကန် ငါးမျှားကမ်းခြေသို့ ရောက်မည်',
+  },
+  {
+    id: 'sign_whispering_forest',
+    zoneId: 'forest',
+    tileX: 41,
+    tileY: 29,
+    label: '🌲 တောအုပ်စိမ်း (Whispering Forest)',
+    shortLabel: 'Whispering Forest',
+    color: '#86efac',
+    facing: 'right',
+    hint: 'အရှေ့ဘက်သို့: တောအုပ်စိမ်း၊ Emerald Lake နှင့် သစ်တောလမ်းသွယ်များ',
+  },
+  {
+    id: 'sign_quarry',
+    zoneId: 'gathering_area',
+    tileX: 58,
+    tileY: 23,
+    label: '⛰️ ကျောက်တောင်နယ်မြေ (Quarry)',
+    shortLabel: 'Quarry',
+    color: '#d6d3d1',
+    facing: 'right',
+    hint: 'မြောက်ဘက်တောင်ကြားလမ်းအတိုင်း ကျောက်တောင်နှင့် ကျောက်တုံးကြီးများရှိရာသို့',
+  },
+  {
+    id: 'sign_homestead',
+    zoneId: 'building_area',
+    tileX: 39,
+    tileY: 41,
+    label: '🏡 အခြေချရပ်ကွက် (Homestead District)',
+    shortLabel: 'Homestead District',
+    color: '#fdba74',
+    facing: 'right',
+    hint: 'အိမ်များ၊ ခြံစည်းရိုးများနှင့် စခန်းချစရာ မြေကွက်များ',
+  },
+  {
+    id: 'sign_farm_district',
+    zoneId: 'farm_district',
+    tileX: 43,
+    tileY: 71,
+    label: '🌾 စိုက်ပျိုးရေးရပ်ကွက် (Farm District)',
+    shortLabel: 'Farm District',
+    color: '#4ade80',
+    facing: 'right',
+    hint: 'ရွာရေတွင်းနှင့် ဂျုံ၊ ဖရုံသီး စိုက်ခင်းများ',
+  },
+];
+

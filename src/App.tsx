@@ -23,6 +23,7 @@ import { WorldMapModal } from './components/WorldMapModal';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { GameManager } from './game/GameManager';
 import { ChatMessage, ConnectionStatus } from './game/multiplayer/types';
+import type { FishingHudState } from './game/scenes/WorldScene';
 import { SaveSystem } from './game/systems/SaveSystem';
 import { BuildingType, FenceRotation, PlacedBuilding, PlayerProfile } from './game/types';
 
@@ -78,6 +79,9 @@ function GamePlay() {
     actionKey: string;
     targetId?: string;
   } | null>(null);
+  const [fishingHudState, setFishingHudState] = useState<FishingHudState | null>(null);
+  const [enteredZoneBanner, setEnteredZoneBanner] = useState<{ name: string; color: string } | null>(null);
+  const zoneBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Active Modals
   const [activeModal, setActiveModal] = useState<
@@ -220,6 +224,20 @@ function GamePlay() {
         setCurrentZone(zone);
       };
 
+      gm.worldScene.onZoneEntered = (zone) => {
+        setEnteredZoneBanner({ name: zone.name, color: zone.color });
+        if (zoneBannerTimerRef.current) {
+          clearTimeout(zoneBannerTimerRef.current);
+        }
+        zoneBannerTimerRef.current = setTimeout(() => {
+          setEnteredZoneBanner(null);
+        }, 2600);
+      };
+
+      gm.worldScene.onFishingStateChange = (state) => {
+        setFishingHudState(state);
+      };
+
       gm.worldScene.onOpenUIModal = (modal, data) => {
         if (modal === 'storage') {
           setSelectedStorageBuilding(data);
@@ -282,6 +300,7 @@ function GamePlay() {
 
     return () => {
       clearInterval(autoSaveTimer);
+      if (zoneBannerTimerRef.current) clearTimeout(zoneBannerTimerRef.current);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageHide);
       window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -484,7 +503,7 @@ function GamePlay() {
         </div>
       )}
 
-      {/* 3. Context-sensitive Action Prompt HUD (Clean, brief, non-blocking) */}
+      {/* 3. Context-sensitive Action Prompt, Zone Entry Toast & Fishing Timing HUD */}
       <ActionPromptHUD
         prompt={interactionPrompt}
         onTrigger={handleTriggerAction}
@@ -492,6 +511,10 @@ function GamePlay() {
         tutorialCompleted={tutorialCompleted}
         onDismissTutorial={handleDismissTutorial}
         isBuildMode={isBuildActive}
+        enteredZoneBanner={enteredZoneBanner}
+        fishingState={fishingHudState}
+        onCatchFishing={() => gameManagerRef.current?.triggerFishingCatch()}
+        onCancelFishing={() => gameManagerRef.current?.cancelFishing()}
       />
 
       {/* 4. Mobile Virtual Joystick & Touch Controls */}
@@ -499,7 +522,7 @@ function GamePlay() {
         onJoystickMove={handleJoystickMove}
         onInteract={handleTriggerAction}
         onOpenModal={(modal) => setActiveModal(modal)}
-        hasNearbyInteraction={Boolean(interactionPrompt)}
+        hasNearbyInteraction={Boolean(interactionPrompt || fishingHudState?.active)}
         isBuildMode={isBuildActive}
         isModalOpen={Boolean(activeModal || selectedManageBuilding)}
       />
@@ -550,12 +573,15 @@ function GamePlay() {
         />
       )}
 
-      {/* 9. World Radar Map (60x60) */}
+      {/* 9. World Radar Map (120x120 Live Canvas with Zoom & Pan) */}
       {activeModal === 'map' && gameManagerRef.current && (
         <WorldMapModal
           playerCoords={playerCoords}
           currentZone={currentZone}
           mapSystem={gameManagerRef.current.mapSystem}
+          placedBuildings={gameManagerRef.current.buildingSystem.buildings}
+          resourceNodes={gameManagerRef.current.resourceSystem.nodes}
+          onlinePlayers={gameManagerRef.current.networkSystem.getOnlinePlayers()}
           onClose={() => setActiveModal(null)}
         />
       )}

@@ -11,6 +11,7 @@ export class MapSystem {
   public height: number;
   public tiles: TileType[][];
   public collisionMap: boolean[][];
+  public roadTier: ('none' | 'main' | 'trail')[][];
   public protectedPropTiles: Set<string>;
 
   constructor(width = MAP_CONFIG.WIDTH, height = MAP_CONFIG.HEIGHT) {
@@ -18,8 +19,25 @@ export class MapSystem {
     this.height = height;
     this.tiles = [];
     this.collisionMap = [];
+    this.roadTier = [];
     this.protectedPropTiles = new Set();
     this.generateWorld();
+  }
+
+  public getRoadTier(tx: number, ty: number): 'none' | 'main' | 'trail' {
+    if (!this.isTileInBounds(tx, ty)) return 'none';
+    return this.roadTier[ty]?.[tx] || 'none';
+  }
+
+  private carveRoadTile(tx: number, ty: number, tier: 'main' | 'trail'): void {
+    if (!this.isTileInBounds(tx, ty)) return;
+    if (this.tiles[ty][tx] === 'water') return;
+    this.tiles[ty][tx] = 'dirt';
+    this.collisionMap[ty][tx] = false;
+    // Main roads take precedence over trails
+    if (this.roadTier[ty][tx] !== 'main') {
+      this.roadTier[ty][tx] = tier;
+    }
   }
 
   /**
@@ -48,22 +66,26 @@ export class MapSystem {
   }
 
   /**
-   * Generates the 60x60 world map with distinct, well-placed zones
+   * Generates the 120x120 world map with distinct, well-placed zones, organic roads, and natural bridges
    */
   private generateWorld(): void {
     this.tiles = [];
     this.collisionMap = [];
+    this.roadTier = [];
 
     // Initialize all as grass
     for (let y = 0; y < this.height; y++) {
       const row: TileType[] = [];
       const colRow: boolean[] = [];
+      const tierRow: ('none' | 'main' | 'trail')[] = [];
       for (let x = 0; x < this.width; x++) {
         row.push('grass');
         colRow.push(false);
+        tierRow.push('none');
       }
       this.tiles.push(row);
       this.collisionMap.push(colRow);
+      this.roadTier.push(tierRow);
     }
 
     // 1. Natural Mirror Lake (South-West: approx tx 8..34, ty 48..78)
@@ -193,7 +215,6 @@ export class MapSystem {
     }
 
     // 6. Integrated Village Town Center (tx 21..39, ty 21..39)
-    // Natural mix of cobblestone plaza & avenues, warm village lanes, and lush pocket park grass
     for (let y = 21; y <= 39; y++) {
       for (let x = 21; x <= 39; x++) {
         const isMainAvenue = x === 30 || x === 31 || y === 30 || y === 31;
@@ -212,123 +233,163 @@ export class MapSystem {
           this.tiles[y][x] = 'grass';
         } else {
           this.tiles[y][x] = 'dirt';
+          this.roadTier[y][x] = 'trail';
         }
         this.collisionMap[y][x] = false;
       }
     }
-    // Pocket Park gravel walkway leading from SE market into the park
     this.tiles[36][34] = 'dirt';
     this.tiles[36][35] = 'dirt';
-    // Flower Shop front entrance path
     this.tiles[35][28] = 'dirt';
     this.tiles[36][28] = 'dirt';
 
-    // 7. Main City Paths connecting outward cleanly from Village Center (21..39)
-    // Path North through Mountain Pass
-    for (let y = 0; y < 21; y++) {
-      this.tiles[y][30] = 'dirt';
-      this.tiles[y][31] = 'dirt';
-      this.collisionMap[y][30] = false;
-      this.collisionMap[y][31] = false;
-    }
-    // Path South to Homesteads & Lake
-    for (let y = 40; y < 112; y++) {
-      this.tiles[y][30] = 'dirt';
-      this.tiles[y][31] = 'dirt';
-      this.collisionMap[y][30] = false;
-      this.collisionMap[y][31] = false;
-    }
-    // Path West to Lake Shore
-    for (let x = 8; x < 21; x++) {
-      this.tiles[30][x] = 'dirt';
-      this.tiles[31][x] = 'dirt';
-      this.collisionMap[30][x] = false;
-      this.collisionMap[31][x] = false;
-    }
-    // Path East to Whispering Forest & Mountain Foot
-    for (let x = 40; x < 112; x++) {
-      this.tiles[30][x] = 'dirt';
-      this.tiles[31][x] = 'dirt';
-      this.collisionMap[30][x] = false;
-      this.collisionMap[31][x] = false;
+    // 7. Main City Roads connecting Town Center cleanly to ALL surrounding Zones
+    // A. North Main Road through Wild Meadows to Mountain Pass (x = 30..31, y = 0..20)
+    for (let y = 0; y <= 20; y++) {
+      this.carveRoadTile(30, y, 'main');
+      this.carveRoadTile(31, y, 'main');
     }
 
-    // 8. Secondary scenic winding nature trails
-    // Northeast trail to alpine pass
-    for (let d = 38; d <= 92; d++) {
+    // B. West Main Road out to Mirror Lake approach (y = 30..31, x = 11..20)
+    for (let x = 11; x <= 20; x++) {
+      this.carveRoadTile(x, 30, 'main');
+      this.carveRoadTile(x, 31, 'main');
+    }
+
+    // C. East Main Road through Whispering Forest (y = 30..31, x = 40..98)
+    for (let x = 40; x <= 98; x++) {
+      this.carveRoadTile(x, 30, 'main');
+      this.carveRoadTile(x, 31, 'main');
+    }
+
+    // D. South Main Road: leads out of Town South Gate (30..31, 40..47), curves gracefully around
+    // Mirror Lake's eastern sand bank (35..36, 48..75) so Mirror Lake water remains untouched,
+    // then rejoins (30..31, 76..108) and links directly into Homestead avenues & Farm District!
+    for (let y = 40; y <= 47; y++) {
+      this.carveRoadTile(30, y, 'main');
+      this.carveRoadTile(31, y, 'main');
+    }
+    for (let x = 30; x <= 37; x++) {
+      this.carveRoadTile(x, 47, 'main');
+      this.carveRoadTile(x, 48, 'main');
+    }
+    for (let y = 48; y <= 75; y++) {
+      this.carveRoadTile(36, y, 'main');
+      this.carveRoadTile(37, y, 'main');
+    }
+    for (let x = 30; x <= 37; x++) {
+      this.carveRoadTile(x, 74, 'main');
+      this.carveRoadTile(x, 75, 'main');
+    }
+    for (let y = 75; y <= 108; y++) {
+      this.carveRoadTile(30, y, 'main');
+      this.carveRoadTile(31, y, 'main');
+    }
+
+    // Main Road connectors from South Avenue into Homestead grid avenues (y = 42, 56, 70, 84, 98)
+    for (const [startX, gy] of [[31, 42], [37, 56], [37, 70], [31, 84], [31, 98]]) {
+      for (let x = startX; x <= 42; x++) {
+        this.carveRoadTile(x, gy, 'main');
+      }
+    }
+
+    // 8. Secondary Organic Nature Trails (distinct 1-tile footpaths)
+    // A. West Road -> Mirror Lake North Fishing Shore Trail (11..12, 32..49)
+    for (let y = 32; y <= 49; y++) {
+      const tx = Math.round(12 + Math.sin(y * 0.25) * 1.2);
+      this.carveRoadTile(tx, y, 'trail');
+    }
+    // Scenic southern Mirror Lake footpath (22..30, 75..78)
+    for (let x = 18; x <= 30; x++) {
+      const ty = Math.round(77 + Math.sin(x * 0.3) * 1.0);
+      this.carveRoadTile(x, ty, 'trail');
+    }
+
+    // B. Wild Meadows -> Highland Spring Lake Trail (25..30, y=14)
+    for (let x = 25; x <= 30; x++) {
+      this.carveRoadTile(x, 14, 'trail');
+      if (x <= 26) this.carveRoadTile(x, 15, 'trail');
+    }
+
+    // C. Whispering Forest scenic trail toward Emerald Glade Lake & alpine pass
+    for (let d = 38; d <= 77; d++) {
       const tx = d;
-      const ty = Math.floor(25 + Math.sin(d * 0.12) * 3);
-      if (this.isTileInBounds(tx, ty) && this.tiles[ty][tx] === 'grass') {
-        this.tiles[ty][tx] = 'dirt';
-        this.collisionMap[ty][tx] = false;
+      const ty = Math.floor(25 + Math.sin(d * 0.14) * 2.5);
+      this.carveRoadTile(tx, ty, 'trail');
+      if (d === 44 || d === 54 || d === 70) {
+        // Gentle north/south spur links to main east road
+        const yMin = Math.min(ty, 30);
+        const yMax = Math.max(ty, 30);
+        for (let sy = yMin; sy <= yMax; sy++) {
+          this.carveRoadTile(tx, sy, 'trail');
+        }
+      }
+    }
+    // Forest inner glade loop east of Emerald Glade Lake
+    for (let d = 78; d <= 104; d++) {
+      const ty = Math.floor(33 + Math.sin(d * 0.18) * 3);
+      this.carveRoadTile(d, ty, 'trail');
+    }
+
+    // D. Quarry Mountain Pass Trail (x ~ 61, y: 0..25)
+    for (let py = 0; py <= 26; py++) {
+      const px = Math.floor(61 + Math.sin(py * 0.22) * 1.4);
+      if (this.isTileInBounds(px, py) && this.tiles[py][px] !== 'water') {
+        this.carveRoadTile(px, py, 'trail');
       }
     }
 
-    // Trail connecting to Quarry Mountain Pass at x: 60..62
-    for (let py = 0; py <= 25; py++) {
-      const px = Math.floor(61 + Math.sin(py * 0.2) * 1.5);
-      if (this.isTileInBounds(px, py) && this.tiles[py][px] !== 'water') {
-        this.tiles[py][px] = 'dirt';
-        this.collisionMap[py][px] = false;
-      }
+    // E. Farm District entrance trail connecting Homestead avenue (42, 70) -> Stone Well (49, 74)
+    for (let x = 42; x <= 48; x++) {
+      this.carveRoadTile(x, 72, 'trail');
     }
+    for (let y = 70; y <= 75; y++) {
+      this.carveRoadTile(44, y, 'trail');
+    }
+    this.carveRoadTile(49, 72, 'trail');
+    this.carveRoadTile(49, 73, 'trail');
 
     // 9. Homestead District clearing roads (Southeast: x: 42..112, y: 42..112)
+    // Primary arteries (42, 70) styled as main roads; secondary block lanes (56, 84, 98) as trails
     for (let y = 42; y <= 112; y += 14) {
+      const tier: 'main' | 'trail' = y === 42 || y === 70 ? 'main' : 'trail';
       for (let x = 40; x <= 110; x++) {
         if (this.tiles[y][x] === 'grass' || this.tiles[y][x] === 'sand') {
-          this.tiles[y][x] = 'dirt';
-          this.collisionMap[y][x] = false;
+          this.carveRoadTile(x, y, tier);
         }
       }
     }
     for (let x = 42; x <= 112; x += 14) {
+      const tier: 'main' | 'trail' = x === 42 || x === 70 ? 'main' : 'trail';
       for (let y = 40; y <= 110; y++) {
         if (this.tiles[y][x] === 'grass' || this.tiles[y][x] === 'sand') {
-          this.tiles[y][x] = 'dirt';
-          this.collisionMap[y][x] = false;
+          this.carveRoadTile(x, y, tier);
         }
       }
     }
 
-    // 10. Sturdy Wooden Bridges across Silverbrook River
-    // Places walkable bridges wherever the homestead roads intersect river water
+    // 10. Natural Narrow Isometric Wooden Bridges across Silverbrook River
+    // Replaces ONLY the single-lane road centerline over water (never blocky 3x3 patches!)
     for (let y = 42; y <= 112; y += 14) {
       for (let x = 40; x <= 110; x++) {
         if (this.tiles[y][x] === 'water') {
-          // Cross-plank bridge across road width
-          for (let by = -1; by <= 1; by++) {
-            for (let bx = -1; bx <= 1; bx++) {
-              const nx = x + bx;
-              const ny = y + by;
-              if (this.isTileInBounds(nx, ny) && (this.tiles[ny][nx] === 'water' || this.tiles[ny][nx] === 'sand')) {
-                this.tiles[ny][nx] = 'bridge';
-                this.collisionMap[ny][nx] = false; // Walkable bridge!
-              }
-            }
-          }
+          this.tiles[y][x] = 'bridge';
+          this.collisionMap[y][x] = false;
+          this.roadTier[y][x] = 'main';
         }
       }
     }
     for (let x = 42; x <= 112; x += 14) {
       for (let y = 40; y <= 110; y++) {
         if (this.tiles[y][x] === 'water') {
-          for (let by = -1; by <= 1; by++) {
-            for (let bx = -1; bx <= 1; bx++) {
-              const nx = x + bx;
-              const ny = y + by;
-              if (this.isTileInBounds(nx, ny) && (this.tiles[ny][nx] === 'water' || this.tiles[ny][nx] === 'sand')) {
-                this.tiles[ny][nx] = 'bridge';
-                this.collisionMap[ny][nx] = false;
-              }
-            }
-          }
+          this.tiles[y][x] = 'bridge';
+          this.collisionMap[y][x] = false;
+          this.roadTier[y][x] = 'main';
         }
       }
     }
 
     // 11. Agricultural Farmland Plots in Homestead District
-    // Plot 1: North Homestead Farm (tx: 45..52, ty: 73..79)
     for (let fy = 73; fy <= 79; fy++) {
       for (let fx = 45; fx <= 52; fx++) {
         if (this.tiles[fy][fx] === 'grass') {
@@ -337,7 +398,6 @@ export class MapSystem {
         }
       }
     }
-    // Plot 2: Riverbank Farm Plot (tx: 59..66, ty: 87..93)
     for (let fy = 87; fy <= 93; fy++) {
       for (let fx = 59; fx <= 66; fx++) {
         if (this.tiles[fy][fx] === 'grass') {
@@ -346,7 +406,6 @@ export class MapSystem {
         }
       }
     }
-    // Plot 3: East Orchard Farm Plot (tx: 73..80, ty: 73..79)
     for (let fy = 73; fy <= 79; fy++) {
       for (let fx = 73; fx <= 80; fx++) {
         if (this.tiles[fy][fx] === 'grass') {

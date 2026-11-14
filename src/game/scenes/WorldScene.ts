@@ -4,16 +4,25 @@
  */
 
 import * as Phaser from 'phaser';
-import { BUILDABLE_ZONE_BOUNDS, ITEMS, MAP_CONFIG } from '../constants';
+import { BUILDABLE_ZONE_BOUNDS, ITEMS, MAP_CONFIG, TOWN_PROTECTED_BOUNDS, ZONE_SIGNPOSTS, ZoneSignpostDef } from '../constants';
 import { BuildingSystem } from '../systems/BuildingSystem';
 import { CraftingSystem } from '../systems/CraftingSystem';
 import { InventorySystem } from '../systems/InventorySystem';
 import { MapSystem } from '../systems/MapSystem';
-import { NetworkSystem, RemotePlayer } from '../systems/NetworkSystem';
+import { NetworkSystem } from '../systems/NetworkSystem';
 import { ResourceSystem } from '../systems/ResourceSystem';
 import { PixelArtGenerator } from '../textures/PixelArtGenerator';
-import { BuildingType, FenceRotation, ItemId, PlacedBuilding, PlayerProfile, ResourceNode, TileType } from '../types';
+import { BuildingType, FenceRotation, ItemId, PlacedBuilding, PlayerProfile, ResourceNode, TileType, ZoneDefinition } from '../types';
 import { SoundSynth } from '../utils/SoundSynth';
+
+export interface FishingHudState {
+  active: boolean;
+  phase: 'waiting' | 'bite';
+  cursorPos: number;
+  sweetMin: number;
+  sweetMax: number;
+  timeLeftRatio: number;
+}
 
 export class WorldScene extends Phaser.Scene {
   // Systems
@@ -94,10 +103,36 @@ export class WorldScene extends Phaser.Scene {
   // Floating notifications
   private floatingTexts: Phaser.GameObjects.Text[] = [];
 
+  // Phase 2: Fishing timing state, swimming fish, and fishing graphics
+  public fishingState: {
+    node: ResourceNode;
+    phase: 'waiting' | 'bite';
+    elapsedMs: number;
+    waitDurationMs: number;
+    biteDurationMs: number;
+    cursorPos: number;
+    cursorDir: 1 | -1;
+    sweetMin: number;
+    sweetMax: number;
+  } | null = null;
+  private fishingGraphics!: Phaser.GameObjects.Graphics;
+  private remoteFishingGraphics!: Phaser.GameObjects.Graphics;
+  private fishingHudLastEmit = 0;
+  private animatedFish: Array<{
+    sprite: Phaser.GameObjects.Sprite;
+    tileX: number;
+    tileY: number;
+    vx: number;
+    vy: number;
+    phase: number;
+  }> = [];
+
   // Interaction prompt callback to React UI
   public onInteractionChange?: (prompt: { type: string; title: string; subtitle: string; actionKey: string; targetId?: string } | null) => void;
   public onTileHover?: (tileX: number, tileY: number, zoneName: string) => void;
   public onPlayerMove?: (tileX: number, tileY: number, zoneName: string) => void;
+  public onZoneEntered?: (zone: ZoneDefinition) => void;
+  public onFishingStateChange?: (state: FishingHudState | null) => void;
   public onOpenUIModal?: (modal: 'inventory' | 'crafting' | 'shop' | 'building' | 'map' | 'storage', data?: any) => void;
   public onStateChanged?: () => void;
   public onResourceGathered?: () => void;
@@ -121,6 +156,7 @@ export class WorldScene extends Phaser.Scene {
   public nearbyStorageChest: PlacedBuilding | null = null;
   public nearbyPlacedBuilding: PlacedBuilding | null = null;
   public nearbyVillageNpc: { role: string; title: string; subtitle: string; message: string } | null = null;
+  public nearbySignpost: ZoneSignpostDef | null = null;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -175,10 +211,13 @@ export class WorldScene extends Phaser.Scene {
     // 1. Generate procedural pixel textures
     PixelArtGenerator.generateAll(this);
 
-    // 2. Render 60x60 isometric ground tiles
+    // 2. Render 120x120 isometric ground tiles, narrow bridges, water shimmer & roadside nature
     this.createIsometricGround();
 
-    // 3. Render town landmarks
+    // 2B. Dynamic animated fish swimming inside lakes & rivers
+    this.createAnimatedFish();
+
+    // 3. Render town landmarks & zone entrance signposts
     this.createTownLandmarks();
 
     // 4. Render initial natural resource nodes
@@ -235,9 +274,16 @@ export class WorldScene extends Phaser.Scene {
       return 'tile_grass_0'; // Pure lush spring meadow
     }
     if (tileType === 'dirt') {
+      const roadTier = this.mapSystem.getRoadTier(tx, ty);
+      if (roadTier === 'main') {
+        return (tx * 13 + ty * 7) % 2 === 0 ? 'tile_road_main_0' : 'tile_road_main_1';
+      }
+      if (roadTier === 'trail') {
+        return (tx * 13 + ty * 7) % 2 === 0 ? 'tile_trail_0' : 'tile_trail_1';
+      }
       return (tx * 13 + ty * 7) % 3 === 0 ? 'tile_dirt_1' : 'tile_dirt_0';
     }
-    if (tileType === 'water') {
+    if (tileType === 'water' || tileType === 'bridge') {
       // East Forest emerald glade lake uses tile_water_2
       if (tx >= 74 && tx <= 98 && ty >= 14 && ty <= 30) {
         return 'tile_water_2';
@@ -256,13 +302,16 @@ export class WorldScene extends Phaser.Scene {
     if (tileType === 'farmland') {
       return 'tile_farmland';
     }
-    if (tileType === 'bridge') {
-      return 'tile_bridge';
-    }
     return `tile_${tileType}`;
   }
 
   private createIsometricGround(): void {
+    const isRoadOrBridge = (cx: number, cy: number): boolean => {
+      if (!this.mapSystem.isTileInBounds(cx, cy)) return false;
+      const t = this.mapSystem.tiles[cy][cx];
+      return t === 'dirt' || t === 'bridge';
+    };
+
     for (let ty = 0; ty < this.mapSystem.height; ty++) {
       for (let tx = 0; tx < this.mapSystem.width; tx++) {
         const tileType = this.mapSystem.tiles[ty][tx];
@@ -274,7 +323,17 @@ export class WorldScene extends Phaser.Scene {
         img.setDepth(ty + tx);
         this.tileSprites.set(`${tx}_${ty}`, img);
 
-        // 1. Towering Mountain Silhouettes along Northern and Eastern Cliff boundaries
+        // 0. Elevated Narrow Wooden Bridge Deck over flowing river water
+        if (tileType === 'bridge') {
+          const hasEW = isRoadOrBridge(tx - 1, ty) || isRoadOrBridge(tx + 1, ty);
+          const hasNS = isRoadOrBridge(tx, ty - 1) || isRoadOrBridge(tx, ty + 1);
+          const bridgeTex = hasEW && hasNS ? 'obj_bridge_cross' : hasNS ? 'obj_bridge_ns' : 'obj_bridge_ew';
+          const deck = this.add.sprite(x, y + 16, bridgeTex);
+          deck.setOrigin(0.5, 32 / 48);
+          deck.setDepth((tx + ty) * 100 + 28);
+        }
+
+        // 1. Towering Mountain Silhouettes, Cliff Boulders & Foothill Shadows
         if (tileType === 'cliff') {
           if ((tx % 4 === 0 && ty <= 4) || (tx >= 85 && ty % 4 === 0 && ty <= 10)) {
             const ridge = this.add.sprite(x, y + 10, 'obj_mountain_ridge');
@@ -285,9 +344,22 @@ export class WorldScene extends Phaser.Scene {
             boulder.setOrigin(0.5, 0.8);
             boulder.setDepth((tx + ty) * 100 + 35);
           }
+
+          if (
+            this.mapSystem.isTileInBounds(tx, ty + 1) &&
+            this.mapSystem.tiles[ty + 1][tx] !== 'cliff' &&
+            this.mapSystem.tiles[ty + 1][tx] !== 'water'
+          ) {
+            this.add
+              .image(x, y + 25, 'shadow_round')
+              .setOrigin(0.5, 0.5)
+              .setDepth((tx + ty) * 100 + 22)
+              .setAlpha(0.32)
+              .setScale(1.3, 0.62);
+          }
         }
 
-        // 2. Water Environment Flora & Fauna (Floating Lilies, Reeds & Stones)
+        // 2. Water Environment Flora, Fauna & Animated Shimmer Ripples
         if (tileType === 'water') {
           // Floating Water Lilypad clusters in calm bays and glades
           if ((tx === 84 && ty === 21) || (tx === 88 && ty === 24) || (tx === 16 && ty === 64) || (tx === 22 && ty === 66) || (tx === 16 && ty === 14)) {
@@ -323,6 +395,60 @@ export class WorldScene extends Phaser.Scene {
             stone.setOrigin(0.5, 0.7);
             stone.setDepth((tx + ty) * 100 + 24);
           }
+          // Animated sunlight shimmer across open water surface
+          else if ((tx * 31 + ty * 17) % 19 === 0) {
+            const shimmer = this.add.image(x, y + 16, 'fx_water_shimmer');
+            shimmer.setOrigin(0.5, 0.5);
+            shimmer.setDepth((tx + ty) * 100 + 21);
+            shimmer.setAlpha(0.2);
+            this.tweens.add({
+              targets: shimmer,
+              alpha: 0.78,
+              duration: 1300 + ((tx + ty) % 5) * 260,
+              delay: ((tx * 13 + ty * 7) % 7) * 180,
+              yoyo: true,
+              repeat: -1,
+              ease: 'Sine.easeInOut',
+            });
+          }
+        }
+
+        // 2B. Roadside & Woodland Natural Flora (never placed inside Town Plaza or Homestead building lots)
+        if (tileType === 'grass' && !this.mapSystem.collisionMap[ty][tx]) {
+          const inTown =
+            tx >= TOWN_PROTECTED_BOUNDS.minX &&
+            tx <= TOWN_PROTECTED_BOUNDS.maxX &&
+            ty >= TOWN_PROTECTED_BOUNDS.minY &&
+            ty <= TOWN_PROTECTED_BOUNDS.maxY;
+          const inHomesteadLots =
+            tx >= BUILDABLE_ZONE_BOUNDS.minX &&
+            tx <= BUILDABLE_ZONE_BOUNDS.maxX &&
+            ty >= BUILDABLE_ZONE_BOUNDS.minY &&
+            ty <= BUILDABLE_ZONE_BOUNDS.maxY;
+
+          if (!inTown && !inHomesteadLots) {
+            const nearSign = ZONE_SIGNPOSTS.some((s) => Math.hypot(s.tileX - tx, s.tileY - ty) <= 1.8);
+            if (!nearSign) {
+              const adjRoad =
+                this.mapSystem.getRoadTier(tx + 1, ty) !== 'none' ||
+                this.mapSystem.getRoadTier(tx - 1, ty) !== 'none' ||
+                this.mapSystem.getRoadTier(tx, ty + 1) !== 'none' ||
+                this.mapSystem.getRoadTier(tx, ty - 1) !== 'none';
+              const hash = (tx * 37 + ty * 53) % 29;
+              if ((adjRoad && hash < 3) || (!adjRoad && hash === 0)) {
+                let floraKey = 'obj_wildflower_clump';
+                if (ty <= 14 || (tx >= 54 && ty <= 24)) {
+                  floraKey = hash === 1 ? 'obj_pebble_cluster' : 'obj_fern_tuft';
+                } else if (tx >= 38 && ty <= 39) {
+                  floraKey = hash === 2 ? 'obj_wildflower_clump' : 'obj_fern_tuft';
+                }
+                const flora = this.add.image(x, y + 16, floraKey);
+                flora.setOrigin(0.5, 0.78);
+                flora.setDepth((tx + ty) * 100 + 24);
+                flora.setAlpha(0.92);
+              }
+            }
+          }
         }
 
         // 3. Agricultural Crops growing neatly on Farmland Plots
@@ -343,6 +469,70 @@ export class WorldScene extends Phaser.Scene {
           }
         }
       }
+    }
+  }
+
+  private createAnimatedFish(): void {
+    this.animatedFish = [];
+    const preferredSeeds: Array<[number, number, number, number]> = [
+      // Mirror Lake
+      [14, 58, 0.32, 0.14],
+      [18, 63, -0.26, 0.22],
+      [23, 60, 0.28, -0.18],
+      [27, 65, -0.34, -0.12],
+      [19, 68, 0.30, 0.10],
+      [13, 64, 0.22, -0.24],
+      [24, 55, -0.25, 0.20],
+      // Emerald Glade Lake (East Forest)
+      [82, 20, 0.28, 0.14],
+      [88, 22, -0.30, 0.15],
+      [85, 25, 0.24, -0.16],
+      [91, 20, -0.22, -0.18],
+      // Highland Mountain Spring Lake (Northwest)
+      [15, 13, 0.26, 0.12],
+      [19, 15, -0.28, 0.14],
+      [21, 12, 0.20, -0.18],
+      // Silverbrook River
+      [104, 58, -0.22, 0.22],
+      [90, 65, -0.24, 0.20],
+      [74, 75, -0.22, 0.24],
+      [56, 88, -0.20, 0.24],
+    ];
+
+    for (let i = 0; i < preferredSeeds.length; i++) {
+      const [sx, sy, vx, vy] = preferredSeeds[i];
+      let waterTile: { tx: number; ty: number } | null = null;
+      if (this.mapSystem.isTileInBounds(sx, sy) && this.mapSystem.tiles[sy][sx] === 'water') {
+        waterTile = { tx: sx, ty: sy };
+      } else {
+        for (let r = 1; r <= 4 && !waterTile; r++) {
+          for (let dy = -r; dy <= r && !waterTile; dy++) {
+            for (let dx = -r; dx <= r && !waterTile; dx++) {
+              const cx = sx + dx;
+              const cy = sy + dy;
+              if (this.mapSystem.isTileInBounds(cx, cy) && this.mapSystem.tiles[cy][cx] === 'water') {
+                waterTile = { tx: cx, ty: cy };
+              }
+            }
+          }
+        }
+      }
+      if (!waterTile) continue;
+
+      const { x, y } = MapSystem.tileToWorld(waterTile.tx, waterTile.ty);
+      const texKey = vx - vy >= 0 ? 'obj_swim_fish_r' : 'obj_swim_fish_l';
+      const sprite = this.add.sprite(x, y + 16, texKey);
+      sprite.setOrigin(0.5, 0.5);
+      sprite.setDepth((waterTile.tx + waterTile.ty) * 100 + 26);
+      sprite.setAlpha(0.88);
+      this.animatedFish.push({
+        sprite,
+        tileX: waterTile.tx,
+        tileY: waterTile.ty,
+        vx,
+        vy,
+        phase: i * 0.9,
+      });
     }
   }
 
@@ -554,9 +744,26 @@ export class WorldScene extends Phaser.Scene {
       placeTownProp(fx, fy, 'obj_flower_pot', 0.85, true, [0.8, 0.55]);
     }
 
-    // === 6. VILLAGE ENTRANCE DIRECTIONAL SIGNPOSTS (Clear of 30..31 avenues) ===
-    for (const [sx, sy] of [[29, 21], [32, 39], [21, 29], [39, 32]]) {
+    // === 6. VILLAGE ENTRANCE DIRECTIONAL SIGNPOSTS ===
+    for (const [sx, sy] of [[32, 39], [21, 29], [39, 32]]) {
       placeTownProp(sx, sy, 'obj_signpost', 0.9, true, [0.8, 0.5]);
+    }
+
+    // === 6B. ZONE ENTRANCE PIXEL SIGNPOSTS (All 7 World Zones, visible to all multiplayer peers) ===
+    for (const sign of ZONE_SIGNPOSTS) {
+      const p = MapSystem.tileToWorld(sign.tileX, sign.tileY);
+      const d = (sign.tileX + sign.tileY) * 100;
+      placeTownProp(sign.tileX, sign.tileY, `obj_signpost_zone_${sign.facing}`, 0.88, true, [0.9, 0.55]);
+      this.add
+        .text(p.x, p.y - 38, sign.label, {
+          fontSize: '10px',
+          color: sign.color,
+          fontStyle: 'bold',
+          backgroundColor: 'rgba(15, 23, 42, 0.88)',
+          padding: { x: 5, y: 2 },
+        })
+        .setOrigin(0.5)
+        .setDepth(d + 46);
     }
 
     // === 7. HOMESTEAD AGRICULTURAL CENTER (South-East Farmland District) ===
@@ -595,21 +802,25 @@ export class WorldScene extends Phaser.Scene {
         const { x, y } = MapSystem.tileToWorld(node.tileX, node.tileY);
         let tex = 'obj_tree';
         let originY = 0.85;
+        let treeScale = 1;
 
         if (node.type === 'tree') {
           // Dynamic tree variation based on region and organic hash:
           // Northern alpine ridge & mountain pass: Pines dominate
-          // Whispering Forest & clearings: Mix of Golden Birches, Pines, and stately Oaks
+          // Whispering Forest & clearings: Mix of Golden Birches, Blossom Trees, Pines, and stately Oaks
           if (node.tileY <= 16 || (node.tileX >= 55 && node.tileY <= 22)) {
             tex = (node.tileX + node.tileY) % 3 === 0 ? 'obj_tree' : 'obj_tree_pine';
           } else if ((node.tileX * 7 + node.tileY * 13) % 4 === 0) {
             tex = 'obj_tree_birch';
+          } else if ((node.tileX * 5 + node.tileY * 17) % 6 === 0) {
+            tex = 'obj_tree_blossom';
           } else if ((node.tileX * 11 + node.tileY * 5) % 5 === 0) {
             tex = 'obj_tree_pine';
           } else {
             tex = 'obj_tree';
           }
           originY = 0.88;
+          treeScale = 0.92 + (((node.tileX * 13 + node.tileY * 7) % 17) / 100);
         } else if (node.type === 'rock') {
           tex = (node.tileX + node.tileY) % 4 === 0 ? 'obj_cliff_rock' : 'obj_rock';
           originY = 0.75;
@@ -630,13 +841,16 @@ export class WorldScene extends Phaser.Scene {
           shadow.setOrigin(0.5, 0.5);
           shadow.setDepth((node.tileX + node.tileY) * 100 + 20);
           shadow.setAlpha(0.4);
-          if (node.type === 'tree') shadow.setScale(1.5, 1.1);
+          if (node.type === 'tree') shadow.setScale(1.5 * treeScale, 1.1 * treeScale);
           else if (node.type === 'rock') shadow.setScale(1.2, 0.9);
           else shadow.setScale(0.9, 0.7);
         }
 
         sprite = this.add.sprite(x, y + 16, tex);
         sprite.setOrigin(0.5, originY);
+        if (node.type === 'tree') {
+          sprite.setScale(treeScale);
+        }
         sprite.setDepth((node.tileX + node.tileY) * 100 + 50);
         this.resourceSprites.set(key, sprite);
 
@@ -772,9 +986,11 @@ export class WorldScene extends Phaser.Scene {
       padding: { x: 5, y: 2 },
     }).setOrigin(0.5).setDepth(9999);
 
-    // Gathering progress bar graphics
+    // Gathering progress bar graphics & fishing rod/line overlays
     this.gatherProgressBarBg = this.add.graphics().setDepth(10000).setVisible(false);
     this.gatherProgressBarFill = this.add.graphics().setDepth(10001).setVisible(false);
+    this.remoteFishingGraphics = this.add.graphics().setDepth(9994);
+    this.fishingGraphics = this.add.graphics().setDepth(9995);
   }
 
   private createRemoteSettlers(): void {
@@ -1042,9 +1258,11 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
-    // ESC: Cancel Build Mode if active
+    // ESC: Cancel Build Mode or active Fishing if active
     this.input.keyboard?.on('keydown-ESC', () => {
-      if (this.buildModeType) {
+      if (this.fishingState) {
+        this.cancelFishing(false);
+      } else if (this.buildModeType) {
         this.setBuildMode(null);
       }
     });
@@ -1435,6 +1653,18 @@ export class WorldScene extends Phaser.Scene {
   private handleClickMoveOrGather(tx: number, ty: number): void {
     if (this.isGathering) return;
 
+    if (this.fishingState) {
+      const distFishing = Math.hypot(
+        this.fishingState.node.tileX - tx,
+        this.fishingState.node.tileY - ty
+      );
+      if (distFishing <= 1.5) {
+        this.triggerFishingCatch();
+        return;
+      }
+      this.cancelFishing(false);
+    }
+
     // Check if clicked directly on an interactive node
     const nearby = this.resourceSystem.getNearbyNode(tx, ty, 1.2);
     if (nearby) {
@@ -1476,6 +1706,12 @@ export class WorldScene extends Phaser.Scene {
   public triggerInteraction(): void {
     if (this.isGathering) return;
 
+    // 0. Active Fishing Timing Trigger (Works seamlessly with [E] key and Mobile [E] Touch Button)
+    if (this.fishingState) {
+      this.triggerFishingCatch();
+      return;
+    }
+
     // 1. Shop check
     if (this.isNearShop) {
       SoundSynth.playCoin();
@@ -1503,8 +1739,8 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // 4. Resource Node check
-    const nearbyNode = this.resourceSystem.getNearbyNode(this.playerTileX, this.playerTileY, 1.6);
+    // 4. Resource Node check (includes Rod-gated Lake Fishing)
+    const nearbyNode = this.resourceSystem.getNearbyNode(this.playerTileX, this.playerTileY, 1.65);
     if (nearbyNode) {
       this.startGathering(nearbyNode);
       return;
@@ -1520,10 +1756,29 @@ export class WorldScene extends Phaser.Scene {
     if (this.nearbyVillageNpc) {
       SoundSynth.playRustle();
       this.spawnFloatingText(Math.round(this.playerTileX), Math.round(this.playerTileY) - 1, this.nearbyVillageNpc.message, '#fde68a');
+      return;
+    }
+
+    // 7. Zone Entrance Signpost directional hint
+    if (this.nearbySignpost) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(this.nearbySignpost.tileX, this.nearbySignpost.tileY, this.nearbySignpost.hint, this.nearbySignpost.color);
     }
   }
 
   private startGathering(node: ResourceNode): void {
+    const gate = this.resourceSystem.canGatherNode(node, this.inventorySystem);
+    if (!gate.allowed) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(node.tileX, node.tileY, gate.reason || 'ကိရိယာ လိုအပ်သည်', '#f87171');
+      return;
+    }
+
+    if (node.type === 'lake_fish') {
+      this.startFishing(node);
+      return;
+    }
+
     this.isGathering = true;
     this.currentGatheringNode = node;
     this.gatherProgress = 0;
@@ -1533,11 +1788,172 @@ export class WorldScene extends Phaser.Scene {
     if (node.type === 'tree') SoundSynth.playChop();
     else if (node.type === 'rock') SoundSynth.playPickaxe();
     else if (node.type === 'bush') SoundSynth.playRustle();
-    else if (node.type === 'lake_fish') SoundSynth.playWater();
     else SoundSynth.playRustle();
 
     this.gatherProgressBarBg.setVisible(true);
     this.gatherProgressBarFill.setVisible(true);
+  }
+
+  public startFishing(node: ResourceNode): void {
+    if (this.fishingState || this.isGathering) return;
+
+    // Orient character toward fishing water spot
+    const dx = node.tileX - this.playerTileX;
+    const dy = node.tileY - this.playerTileY;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      this.playerDirection = dx >= 0 ? 'right' : 'left';
+    } else {
+      this.playerDirection = dy >= 0 ? 'down' : 'up';
+    }
+
+    this.fishingState = {
+      node,
+      phase: 'waiting',
+      elapsedMs: 0,
+      waitDurationMs: 1300 + Math.floor(Math.random() * 1300),
+      biteDurationMs: 2800,
+      cursorPos: 0.12,
+      cursorDir: 1,
+      sweetMin: 0.36,
+      sweetMax: 0.64,
+    };
+
+    SoundSynth.playWater();
+    this.spawnFloatingText(node.tileX, node.tileY, '🎣 ငါးမျှားကြိုးချလိုက်ပြီ...', '#7dd3fc');
+    this.networkSystem.broadcastActionState(this.playerTileX, this.playerTileY, this.playerDirection, 'fishing');
+    this.emitFishingHudState(true);
+  }
+
+  public triggerFishingCatch(): void {
+    if (!this.fishingState) return;
+    const fs = this.fishingState;
+
+    if (fs.phase === 'waiting') {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(this.playerTileX, this.playerTileY, 'စောလွန်းသေးသည် — ငါးကိုက်ချိန်စောင့်ပါ!', '#fbbf24');
+      this.cancelFishing(true);
+      return;
+    }
+
+    const inSweetSpot = fs.cursorPos >= fs.sweetMin && fs.cursorPos <= fs.sweetMax;
+    const catchCount = inSweetSpot ? 2 : 1;
+    const harvested = this.resourceSystem.harvestNode(
+      fs.node,
+      this.inventorySystem,
+      this.mapSystem,
+      catchCount
+    );
+
+    SoundSynth.playSuccess();
+    const itemDef = ITEMS[harvested.item as ItemId];
+    const nodeName = itemDef ? itemDef.name : harvested.item;
+    this.spawnFloatingText(
+      fs.node.tileX,
+      fs.node.tileY,
+      inSweetSpot ? `✨ အထူးအမိ! +${harvested.amount} ${nodeName}` : `+${harvested.amount} ${nodeName}`,
+      inSweetSpot ? '#4ade80' : '#facc15'
+    );
+
+    this.networkSystem.broadcastHarvest(fs.node.id);
+    this.renderResourceNodes();
+    this.cancelFishing(true);
+
+    this.onResourceGathered?.();
+    this.onStateChanged?.();
+  }
+
+  public cancelFishing(silent = false): void {
+    if (!this.fishingState) return;
+    this.fishingState = null;
+    this.fishingGraphics?.clear();
+    this.networkSystem.broadcastActionState(this.playerTileX, this.playerTileY, this.playerDirection, 'idle');
+    this.onFishingStateChange?.(null);
+    if (!silent) {
+      this.spawnFloatingText(this.playerTileX, this.playerTileY, 'ငါးမျှားခြင်း ရပ်နားလိုက်သည်', '#94a3b8');
+    }
+  }
+
+  private emitFishingHudState(force = false): void {
+    if (!this.onFishingStateChange) return;
+    if (!this.fishingState) {
+      this.onFishingStateChange(null);
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - this.fishingHudLastEmit < 32) return;
+    this.fishingHudLastEmit = now;
+
+    const fs = this.fishingState;
+    this.onFishingStateChange({
+      active: true,
+      phase: fs.phase,
+      cursorPos: fs.cursorPos,
+      sweetMin: fs.sweetMin,
+      sweetMax: fs.sweetMax,
+      timeLeftRatio: fs.phase === 'bite' ? Math.max(0, 1 - fs.elapsedMs / fs.biteDurationMs) : 1,
+    });
+  }
+
+  private drawFishingRodVisual(
+    g: Phaser.GameObjects.Graphics,
+    casterX: number,
+    casterY: number,
+    direction: 'down' | 'left' | 'right' | 'up',
+    targetX: number,
+    targetY: number,
+    time: number,
+    isBiting: boolean
+  ): void {
+    const dirVec =
+      direction === 'right'
+        ? { hx: 9, hy: -18, tx: 22, ty: -29 }
+        : direction === 'left'
+        ? { hx: -9, hy: -18, tx: -22, ty: -29 }
+        : direction === 'up'
+        ? { hx: 6, hy: -21, tx: 14, ty: -33 }
+        : { hx: 7, hy: -15, tx: 16, ty: -27 };
+
+    const handX = casterX + dirVec.hx;
+    const handY = casterY + 16 + dirVec.hy;
+    const rodTipX = casterX + dirVec.tx;
+    const rodTipY = casterY + 16 + dirVec.ty + (isBiting ? Math.sin(time * 0.025) * 2.2 : Math.sin(time * 0.004) * 0.7);
+
+    // Wooden rod shaft & warm handle
+    g.lineStyle(2.4, 0x78350f, 1);
+    g.beginPath();
+    g.moveTo(handX, handY);
+    g.lineTo(rodTipX, rodTipY);
+    g.strokePath();
+
+    // Subtle rod tip flex highlight
+    g.lineStyle(1.4, 0xd97706, 1);
+    g.beginPath();
+    g.moveTo(handX + (rodTipX - handX) * 0.45, handY + (rodTipY - handY) * 0.45);
+    g.lineTo(rodTipX, rodTipY);
+    g.strokePath();
+
+    // Bobber position in water
+    const bobOffset = isBiting ? Math.sin(time * 0.028) * 3.5 : Math.sin(time * 0.005) * 1.4;
+    const bobX = targetX;
+    const bobY = targetY + 14 + bobOffset;
+
+    // Fishing line
+    g.lineStyle(1, 0xe2e8f0, 0.85);
+    g.beginPath();
+    g.moveTo(rodTipX, rodTipY);
+    g.lineTo(bobX, bobY);
+    g.strokePath();
+
+    // Water ripple rings around bobber
+    const rippleRadius = isBiting ? 9 + ((time * 0.018) % 6) : 5 + ((time * 0.006) % 4);
+    g.lineStyle(isBiting ? 1.8 : 1.1, isBiting ? 0xfacc15 : 0x7dd3fc, isBiting ? 0.85 : 0.55);
+    g.strokeEllipse(bobX, targetY + 15, rippleRadius * 2, rippleRadius);
+
+    // Red-and-white float bobber
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(bobX, bobY + 1.5, 2.5);
+    g.fillStyle(isBiting ? 0xfacc15 : 0xef4444, 1);
+    g.fillCircle(bobX, bobY - 0.8, 2.5);
   }
 
   private finishGathering(): void {
@@ -1599,7 +2015,44 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  private updateAnimatedFish(time: number, delta: number): void {
+    const dt = Math.min(0.05, delta / 1000);
+    for (const fish of this.animatedFish) {
+      const nextX = fish.tileX + fish.vx * dt;
+      const nextY = fish.tileY + fish.vy * dt;
+      const checkX = Math.round(nextX);
+      const checkY = Math.round(nextY);
+
+      if (
+        this.mapSystem.isTileInBounds(checkX, checkY) &&
+        this.mapSystem.tiles[checkY][checkX] === 'water'
+      ) {
+        fish.tileX = nextX;
+        fish.tileY = nextY;
+      } else {
+        // Turn gently inside water without ever stepping on shore
+        const turnX = -fish.vx * 0.9 + fish.vy * 0.35;
+        const turnY = -fish.vy * 0.9 - fish.vx * 0.35;
+        fish.vx = Math.abs(turnX) < 0.08 && Math.abs(turnY) < 0.08 ? -fish.vx : turnX;
+        fish.vy = Math.abs(turnX) < 0.08 && Math.abs(turnY) < 0.08 ? -fish.vy : turnY;
+      }
+
+      const { x, y } = MapSystem.tileToWorld(fish.tileX, fish.tileY);
+      const bobY = Math.sin(time * 0.004 + fish.phase) * 1.6;
+      fish.sprite.setPosition(x, y + 16 + bobY);
+      fish.sprite.setDepth((fish.tileX + fish.tileY) * 100 + 26);
+
+      const expectedTex = fish.vx - fish.vy >= 0 ? 'obj_swim_fish_r' : 'obj_swim_fish_l';
+      if (fish.sprite.texture.key !== expectedTex) {
+        fish.sprite.setTexture(expectedTex);
+      }
+    }
+  }
+
   public update(time: number, delta: number): void {
+    // 0. Animate Water Fish smoothly inside lakes & river
+    this.updateAnimatedFish(time, delta);
+
     // 1. Handle gathering progress
     if (this.isGathering && this.currentGatheringNode) {
       this.gatherProgress += delta;
@@ -1653,11 +2106,48 @@ export class WorldScene extends Phaser.Scene {
 
     this.isMoving = moveX !== 0 || moveY !== 0;
 
+    // Cancel fishing if player walks away
+    if (this.fishingState && this.isMoving) {
+      this.cancelFishing(false);
+    }
+
+    if (this.fishingState) {
+      const fs = this.fishingState;
+      fs.elapsedMs += delta;
+      if (fs.phase === 'waiting') {
+        if (fs.elapsedMs >= fs.waitDurationMs) {
+          fs.phase = 'bite';
+          fs.elapsedMs = 0;
+          SoundSynth.playCoin();
+          this.spawnFloatingText(fs.node.tileX, fs.node.tileY, '🐟 ငါးကိုက်ပြီ! [E]', '#4ade80');
+          this.emitFishingHudState(true);
+        } else {
+          this.emitFishingHudState(false);
+        }
+      } else {
+        fs.cursorPos += fs.cursorDir * (delta / 560);
+        if (fs.cursorPos >= 0.94) {
+          fs.cursorPos = 0.94;
+          fs.cursorDir = -1;
+        } else if (fs.cursorPos <= 0.06) {
+          fs.cursorPos = 0.06;
+          fs.cursorDir = 1;
+        }
+        if (fs.elapsedMs >= fs.biteDurationMs) {
+          SoundSynth.playRustle();
+          this.spawnFloatingText(fs.node.tileX, fs.node.tileY, 'ငါးလွတ်သွားပြီ!', '#f87171');
+          this.cancelFishing(true);
+        } else {
+          this.emitFishingHudState(false);
+        }
+      }
+    }
+
     if (this.isMoving) {
       // Movement speed in tiles per second (approx 4.2 tiles/sec)
       const speed = 0.07;
-      let nextX = this.playerTileX + moveX * speed;
-      let nextY = this.playerTileY + moveY * speed;
+      const nextX = this.playerTileX + moveX * speed;
+      const nextY = this.playerTileY + moveY * speed;
 
       // Update character facing direction and animation row
       if (moveX > 0) this.playerDirection = 'right';
@@ -1698,9 +2188,9 @@ export class WorldScene extends Phaser.Scene {
         this.networkSystem.broadcastPosition(this.playerTileX, this.playerTileY, this.playerDirection, true);
       }
     } else {
-      // Idle frame
+      // Idle or Fishing pose frame
       const rowOffset = this.playerDirection === 'down' ? 0 : this.playerDirection === 'left' ? 3 : this.playerDirection === 'right' ? 6 : 9;
-      this.playerSprite.setFrame(rowOffset);
+      this.playerSprite.setFrame(this.fishingState ? rowOffset + 1 : rowOffset);
     }
 
     // 3. Update Player Isometric Screen Position & Shadow
@@ -1715,7 +2205,25 @@ export class WorldScene extends Phaser.Scene {
 
     this.playerNameText.setPosition(pScreenX, pScreenY - 32);
 
-    // 3.5 Smoothly Interpolate Remote Players & Shadows
+    // 3B. Render local player fishing rod & bobber
+    this.fishingGraphics.clear();
+    if (this.fishingState) {
+      const targetPos = MapSystem.tileToWorld(this.fishingState.node.tileX, this.fishingState.node.tileY);
+      this.fishingGraphics.setDepth((this.playerTileX + this.playerTileY) * 100 + 62);
+      this.drawFishingRodVisual(
+        this.fishingGraphics,
+        pScreenX,
+        pScreenY,
+        this.playerDirection,
+        targetPos.x,
+        targetPos.y,
+        time,
+        this.fishingState.phase === 'bite'
+      );
+    }
+
+    // 3.5 Smoothly Interpolate Remote Players, Shadows & Remote Fishing Pose
+    this.remoteFishingGraphics.clear();
     for (const [id, peer] of this.networkSystem.remotePlayers) {
       const entry = this.getOrCreateRemoteSprite(id, peer);
 
@@ -1739,6 +2247,21 @@ export class WorldScene extends Phaser.Scene {
       if (peer.isMoving) {
         const rWalkFrame = (Math.floor(time / 160) % 2) + 1;
         entry.sprite.setFrame(rRow + rWalkFrame);
+      } else if (peer.action === 'fishing') {
+        entry.sprite.setFrame(rRow + 1);
+        const dirDx = peer.direction === 'right' ? 1.2 : peer.direction === 'left' ? -1.2 : 0;
+        const dirDy = peer.direction === 'down' ? 1.2 : peer.direction === 'up' ? -1.2 : 0;
+        const bobTarget = MapSystem.tileToWorld(peer.tileX + dirDx, peer.tileY + dirDy);
+        this.drawFishingRodVisual(
+          this.remoteFishingGraphics,
+          rx,
+          ry,
+          peer.direction,
+          bobTarget.x,
+          bobTarget.y,
+          time,
+          false
+        );
       } else {
         entry.sprite.setFrame(rRow);
       }
@@ -1766,7 +2289,7 @@ export class WorldScene extends Phaser.Scene {
     // 4. Update Interaction Proximity Detection
     this.checkNearbyInteractions();
 
-    // 5. Notify React of player position and trigger debounced save on tile/zone change
+    // 5. Notify React of player position, trigger zone banner & debounced save on tile/zone change
     const intX = Math.round(this.playerTileX);
     const intY = Math.round(this.playerTileY);
     const currentZone = this.mapSystem.getZoneAt(intX, intY);
@@ -1780,9 +2303,13 @@ export class WorldScene extends Phaser.Scene {
       this.lastReportedZone !== currentZone.name
     ) {
       const isInitial = this.lastReportedTileX === -999;
+      const zoneChanged = !isInitial && this.lastReportedZone !== currentZone.name;
       this.lastReportedTileX = intX;
       this.lastReportedTileY = intY;
       this.lastReportedZone = currentZone.name;
+      if (zoneChanged && this.onZoneEntered) {
+        this.onZoneEntered(currentZone);
+      }
       if (!isInitial && this.onStateChanged) {
         this.onStateChanged();
       }
@@ -1873,8 +2400,10 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // E. Nearby Resource Node (tighter proximity check so hints only trigger when close enough to gather)
-    const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.55);
+    // E. Nearby Resource Node & Zone Signposts
+    const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.65);
+    this.nearbySignpost =
+      ZONE_SIGNPOSTS.find((s) => Math.hypot(ptx - s.tileX, pty - s.tileY) <= 1.85) || null;
 
     // Emit compact HUD prompt only when targetId changes
     if (this.isNearShop) {
@@ -1927,18 +2456,25 @@ export class WorldScene extends Phaser.Scene {
       });
     } else if (nearbyNode) {
       let actionWord = 'ရိတ်သိမ်းမည်';
+      let subtitleWord = 'စတင်ရိတ်သိမ်းရန်';
+      let targetSuffix = '';
       if (nearbyNode.type === 'tree') actionWord = 'သစ်ခုတ်မည်';
       else if (nearbyNode.type === 'rock') actionWord = 'ကျောက်ခွဲမည်';
       else if (nearbyNode.type === 'bush') actionWord = 'အမျှင်ခူးမည်';
       else if (nearbyNode.type === 'animal') actionWord = 'အမဲလိုက်မည်';
-      else if (nearbyNode.type === 'lake_fish') actionWord = 'ငါးမျှားမည်';
+      else if (nearbyNode.type === 'lake_fish') {
+        const hasRod = this.inventorySystem.hasItem('rod_basic', 1);
+        targetSuffix = hasRod ? '_rod' : '_norod';
+        actionWord = hasRod ? 'ငါးမျှားမည်' : '🎣 ငါးမျှားတံ လိုအပ်သည်';
+        subtitleWord = hasRod ? 'စတင်ငါးမျှားရန်' : 'ဆိုင် (25🪙) သို့ ဖန်တီးခုံ';
+      }
 
       this.emitInteractionPrompt({
         type: 'gather',
         title: actionWord,
-        subtitle: 'စတင်ရိတ်သိမ်းရန်',
+        subtitle: subtitleWord,
         actionKey: 'E',
-        targetId: `node_${nearbyNode.id}`,
+        targetId: `node_${nearbyNode.id}${targetSuffix}`,
       });
     } else if (this.isNearCampfire) {
       this.emitInteractionPrompt({
@@ -1955,6 +2491,14 @@ export class WorldScene extends Phaser.Scene {
         subtitle: 'စကားပြောရန်',
         actionKey: 'E',
         targetId: `npc_${this.nearbyVillageNpc.role}`,
+      });
+    } else if (this.nearbySignpost) {
+      this.emitInteractionPrompt({
+        type: 'signpost',
+        title: this.nearbySignpost.label,
+        subtitle: 'လမ်းညွှန်ဖတ်ရန်',
+        actionKey: 'E',
+        targetId: `sign_${this.nearbySignpost.id}`,
       });
     } else {
       this.emitInteractionPrompt(null);

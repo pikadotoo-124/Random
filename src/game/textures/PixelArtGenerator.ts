@@ -31,6 +31,7 @@ export class PixelArtGenerator {
     this.createTreeSprite(textures);
     this.createPineTreeSprite(textures);
     this.createBirchTreeSprite(textures);
+    this.createPhase2EnvironmentSprites(textures);
     this.createMountainSprites(textures);
     this.createRockSprite(textures);
     this.createBushSprite(textures);
@@ -423,50 +424,119 @@ export class PixelArtGenerator {
     }
   }
 
-  // 5. Warm Organic Winding Dirt Trail Tiles
+  // 5. Distinct Main Roads vs Organic Winding Nature Trails
   private static createDirtTiles(textures: Phaser.Textures.TextureManager) {
-    if (textures.exists('tile_dirt_0')) return;
+    if (!textures.exists('tile_dirt_0')) {
+      // Variant 0: Packed Loamy Earth (Trail base)
+      {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d')!;
+        this.drawIsoDiamond(ctx, 64, 32, '#854d0e');
 
-    // Variant 0: Packed Loamy Earth
-    {
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 32;
-      const ctx = canvas.getContext('2d')!;
-      this.drawIsoDiamond(ctx, 64, 32, '#854d0e');
+        ctx.fillStyle = '#a16207';
+        ctx.fillRect(24, 12, 3, 2);
+        ctx.fillRect(36, 14, 4, 2);
+        ctx.fillRect(28, 20, 3, 2);
 
-      ctx.fillStyle = '#a16207';
-      ctx.fillRect(24, 12, 3, 2);
-      ctx.fillRect(36, 14, 4, 2);
-      ctx.fillRect(28, 20, 3, 2);
+        ctx.fillStyle = '#713f12';
+        ctx.fillRect(32, 17, 2, 1);
+        ctx.fillRect(42, 13, 2, 1);
 
-      ctx.fillStyle = '#713f12';
-      ctx.fillRect(32, 17, 2, 1);
-      ctx.fillRect(42, 13, 2, 1);
+        textures.addCanvas('tile_dirt_0', canvas);
+        textures.addCanvas('tile_dirt', canvas);
+      }
 
-      textures.addCanvas('tile_dirt_0', canvas);
-      textures.addCanvas('tile_dirt', canvas);
+      // Variant 1: Dirt Trail with smooth river pebbles
+      {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d')!;
+        this.drawIsoDiamond(ctx, 64, 32, '#814a0e');
+
+        ctx.fillStyle = '#995d12';
+        ctx.fillRect(22, 14, 3, 2);
+        ctx.fillRect(38, 18, 3, 2);
+
+        ctx.fillStyle = '#a8a29e';
+        ctx.fillRect(30, 12, 2, 1.5);
+        ctx.fillRect(44, 16, 2, 1.5);
+        ctx.fillRect(26, 22, 2, 1.5);
+
+        textures.addCanvas('tile_dirt_1', canvas);
+      }
     }
 
-    // Variant 1: Dirt Trail with smooth river pebbles
-    {
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 32;
-      const ctx = canvas.getContext('2d')!;
-      this.drawIsoDiamond(ctx, 64, 32, '#814a0e');
+    // Main Road Variants: Sunlit Compacted Gravel & Warm Sandstone Curb Flecks (distinct from woodland trails)
+    if (!textures.exists('tile_road_main_0')) {
+      for (let v = 0; v < 2; v++) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d')!;
+        this.drawIsoDiamond(ctx, 64, 32, v === 0 ? '#a16e3a' : '#9a6835');
 
-      ctx.fillStyle = '#995d12';
-      ctx.fillRect(22, 14, 3, 2);
-      ctx.fillRect(38, 18, 3, 2);
+        // Soft inner dressed gravel highlight
+        ctx.fillStyle = 'rgba(254, 243, 199, 0.14)';
+        ctx.beginPath();
+        ctx.ellipse(32, 16, 18, 8.5, 0, 0, Math.PI * 2);
+        ctx.fill();
 
-      // Smooth gray pebbles
-      ctx.fillStyle = '#a8a29e';
-      ctx.fillRect(30, 12, 2, 1.5);
-      ctx.fillRect(44, 16, 2, 1.5);
-      ctx.fillRect(26, 22, 2, 1.5);
+        // Compacted stone & sand grain texture
+        ctx.fillStyle = '#d6b286';
+        const specs = v === 0
+          ? [[24, 14], [38, 13], [30, 19], [44, 17], [20, 16]]
+          : [[26, 12], [40, 15], [33, 21], [22, 18], [46, 14]];
+        for (const [sx, sy] of specs) {
+          ctx.fillRect(sx, sy, 2.2, 1.4);
+        }
 
-      textures.addCanvas('tile_dirt_1', canvas);
+        // Subtle dressed curb pebbles
+        ctx.fillStyle = '#78716c';
+        ctx.fillRect(28, 10, 2, 1.5);
+        ctx.fillRect(35, 22, 2.2, 1.5);
+        if (v === 1) {
+          ctx.fillStyle = '#a8a29e';
+          ctx.fillRect(42, 11, 2, 1.4);
+        }
+
+        textures.addCanvas(`tile_road_main_${v}`, canvas);
+      }
+    }
+
+    // Secondary Woodland/Quarry Footpath Variants: Soft Forest Earth with Leaf & Grass Dapples
+    if (!textures.exists('tile_trail_0')) {
+      for (let v = 0; v < 2; v++) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 32;
+        const ctx = canvas.getContext('2d')!;
+        // Grass base so the footpath feels naturally worn through meadow/forest floor
+        this.drawIsoDiamond(ctx, 64, 32, '#5c9136');
+
+        // Narrow organic worn earth center
+        ctx.fillStyle = v === 0 ? '#7c4d19' : '#744716';
+        ctx.beginPath();
+        ctx.ellipse(32, 16, 20, 9.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#925b20';
+        ctx.beginPath();
+        ctx.ellipse(32, 16, 13, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Delicate grass blades encroaching at trail edges & fallen leaf specks
+        ctx.fillStyle = '#65a30d';
+        ctx.fillRect(14, 15, 3, 2);
+        ctx.fillRect(47, 16, 3, 2);
+        ctx.fillStyle = '#d97706';
+        ctx.fillRect(28, 14, 1.5, 1.5);
+        ctx.fillRect(37, 18, 1.5, 1.5);
+
+        textures.addCanvas(`tile_trail_${v}`, canvas);
+      }
     }
   }
 
@@ -596,35 +666,164 @@ export class PixelArtGenerator {
     textures.addCanvas('tile_farmland', canvas);
   }
 
-  // 9. Sturdy Wooden Bridge Tile (walkable planking across streams)
+  // 9. Natural Narrow Isometric Wooden Bridges (Directional EW, NS & Cross decks over flowing water)
   private static createBridgeTile(textures: Phaser.Textures.TextureManager) {
-    if (textures.exists('tile_bridge')) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 32;
-    const ctx = canvas.getContext('2d')!;
-
-    // Sturdy wooden bridge planking
-    this.drawIsoDiamond(ctx, 64, 32, '#9a3412');
-
-    // Horizontal timber bridge planks
-    ctx.strokeStyle = '#541c09';
-    ctx.lineWidth = 1.5;
-    for (let y = 6; y < 28; y += 5) {
-      ctx.beginPath();
-      ctx.moveTo(14, y);
-      ctx.lineTo(50, y);
-      ctx.stroke();
+    if (!textures.exists('tile_bridge')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 32;
+      const ctx = canvas.getContext('2d')!;
+      this.drawIsoDiamond(ctx, 64, 32, '#9a3412');
+      ctx.strokeStyle = '#541c09';
+      ctx.lineWidth = 1.5;
+      for (let y = 6; y < 28; y += 5) {
+        ctx.beginPath();
+        ctx.moveTo(14, y);
+        ctx.lineTo(50, y);
+        ctx.stroke();
+      }
+      textures.addCanvas('tile_bridge', canvas);
     }
 
-    // Iron nail studs
-    ctx.fillStyle = '#1c1917';
-    for (let y = 6; y < 28; y += 5) {
-      ctx.fillRect(18, y - 0.5, 1.5, 1.5);
-      ctx.fillRect(46, y - 0.5, 1.5, 1.5);
-    }
+    // Elevated directional bridge overlays rendered over shimmering water tile (64x48, anchor 0.5, 32/48)
+    const drawPlankedDeck = (
+      ctx: CanvasRenderingContext2D,
+      axis: 'ew' | 'ns' | 'cross'
+    ) => {
+      const oy = 16; // diamond top starts at y=16 in 64x48 canvas
 
-    textures.addCanvas('tile_bridge', canvas);
+      const drawAxisDeck = (dir: 'ew' | 'ns') => {
+        // EW spans NW -> SE: center of NW edge (16, oy+8) to center of SE edge (48, oy+24)
+        // NS spans NE -> SW: center of NE edge (48, oy+8) to center of SW edge (16, oy+24)
+        const sx = dir === 'ew' ? 16 : 48;
+        const sy = oy + 8;
+        const ex = dir === 'ew' ? 48 : 16;
+        const ey = oy + 24;
+        // Narrow half-width perpendicular offset (~62% of tile diamond)
+        const px = dir === 'ew' ? 9.5 : -9.5;
+        const py = -4.75;
+
+        // 1. Soft water drop-shadow under raised bridge span
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.34)';
+        ctx.beginPath();
+        ctx.moveTo(sx - px, sy - py + 5);
+        ctx.lineTo(ex - px, ey - py + 5);
+        ctx.lineTo(ex + px, ey + py + 5);
+        ctx.lineTo(sx + px, sy + py + 5);
+        ctx.closePath();
+        ctx.fill();
+
+        // 2. Submerged dark timber support pilings
+        ctx.fillStyle = '#451a03';
+        for (const [bx, by] of [[sx - px * 0.85, sy - py * 0.85], [sx + px * 0.85, sy + py * 0.85], [ex - px * 0.85, ey - py * 0.85], [ex + px * 0.85, ey + py * 0.85]]) {
+          ctx.fillRect(bx - 1.5, by - 1, 3, 7);
+        }
+
+        // 3. Bridge side skirt thickness
+        ctx.fillStyle = '#5c260a';
+        ctx.beginPath();
+        ctx.moveTo(sx - px, sy - py);
+        ctx.lineTo(ex - px, ey - py);
+        ctx.lineTo(ex - px, ey - py + 3.5);
+        ctx.lineTo(sx - px, sy - py + 3.5);
+        ctx.closePath();
+        ctx.fill();
+
+        // 4. Warm cedar deck base
+        ctx.fillStyle = '#9a4a1a';
+        ctx.beginPath();
+        ctx.moveTo(sx - px, sy - py);
+        ctx.lineTo(ex - px, ey - py);
+        ctx.lineTo(ex + px, ey + py);
+        ctx.lineTo(sx + px, sy + py);
+        ctx.closePath();
+        ctx.fill();
+
+        // 5. Individual cross-planks with alternating tones & nail rivets
+        const plankSteps = 6;
+        for (let i = 0; i < plankSteps; i++) {
+          const t0 = i / plankSteps;
+          const t1 = (i + 0.84) / plankSteps;
+          const ax = sx + (ex - sx) * t0;
+          const ay = sy + (ey - sy) * t0;
+          const bx = sx + (ex - sx) * t1;
+          const by = sy + (ey - sy) * t1;
+
+          ctx.fillStyle = i % 2 === 0 ? '#b45a22' : '#a14d1a';
+          ctx.beginPath();
+          ctx.moveTo(ax - px, ay - py);
+          ctx.lineTo(bx - px, by - py);
+          ctx.lineTo(bx + px, by + py);
+          ctx.lineTo(ax + px, ay + py);
+          ctx.closePath();
+          ctx.fill();
+
+          // Subtle bevel highlight
+          ctx.strokeStyle = 'rgba(254, 243, 199, 0.2)';
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.moveTo(ax - px * 0.9, ay - py * 0.9);
+          ctx.lineTo(ax + px * 0.9, ay + py * 0.9);
+          ctx.stroke();
+        }
+
+        // 6. Raised Wooden Handrails & Corner Posts (only on EW / NS single bridges so cross intersections stay open)
+        if (axis !== 'cross') {
+          const railH = 7.5;
+          for (const side of [-1, 1]) {
+            const r1x = sx + px * side * 0.92;
+            const r1y = sy + py * side * 0.92;
+            const r2x = ex + px * side * 0.92;
+            const r2y = ey + py * side * 0.92;
+
+            // End & mid vertical posts
+            ctx.fillStyle = '#451a03';
+            for (const [pxPos, pyPos] of [[r1x, r1y], [(r1x + r2x) / 2, (r1y + r2y) / 2], [r2x, r2y]]) {
+              ctx.fillRect(pxPos - 1.5, pyPos - railH - 1, 3, railH + 2);
+              ctx.fillStyle = '#d97706';
+              ctx.fillRect(pxPos - 1, pyPos - railH - 1.5, 2, 1.5); // Post cap
+              ctx.fillStyle = '#451a03';
+            }
+
+            // Top rail beam
+            ctx.strokeStyle = '#78350f';
+            ctx.lineWidth = 2.6;
+            ctx.beginPath();
+            ctx.moveTo(r1x, r1y - railH);
+            ctx.lineTo(r2x, r2y - railH);
+            ctx.stroke();
+
+            ctx.strokeStyle = '#c26d27';
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            ctx.moveTo(r1x, r1y - railH - 0.5);
+            ctx.lineTo(r2x, r2y - railH - 0.5);
+            ctx.stroke();
+          }
+        }
+      };
+
+      if (axis === 'ew') {
+        drawAxisDeck('ew');
+      } else if (axis === 'ns') {
+        drawAxisDeck('ns');
+      } else {
+        drawAxisDeck('ew');
+        drawAxisDeck('ns');
+      }
+    };
+
+    for (const axis of ['ew', 'ns', 'cross'] as const) {
+      const texKey = `obj_bridge_${axis}`;
+      if (!textures.exists(texKey)) {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 48;
+        const ctx = c.getContext('2d')!;
+        drawPlankedDeck(ctx, axis);
+        textures.addCanvas(texKey, c);
+      }
+    }
   }
 
   // Placement Grid Highlights
@@ -934,6 +1133,290 @@ export class PixelArtGenerator {
 
     textures.addCanvas('res_tree_birch', canvas);
     textures.addCanvas('obj_tree_birch', canvas);
+  }
+
+  // 7D-Extra: Blooming Spring Woodland Tree, Roadside Flora, Zone Signposts, Animated Water Shimmer & Swimming Fish
+  private static createPhase2EnvironmentSprites(textures: Phaser.Textures.TextureManager) {
+    // 1. Lush Blossom / Mossy Canopy Tree
+    if (!textures.exists('obj_tree_blossom')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 72;
+      canvas.height = 88;
+      const ctx = canvas.getContext('2d')!;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(36, 78, 22, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#5c3317';
+      ctx.beginPath();
+      ctx.moveTo(32, 46);
+      ctx.lineTo(40, 46);
+      ctx.lineTo(44, 79);
+      ctx.lineTo(28, 79);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#2d5a27';
+      ctx.beginPath();
+      ctx.arc(26, 37, 17, 0, Math.PI * 2);
+      ctx.arc(46, 37, 17, 0, Math.PI * 2);
+      ctx.arc(36, 23, 19, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#4f8f33';
+      ctx.beginPath();
+      ctx.arc(25, 34, 14, 0, Math.PI * 2);
+      ctx.arc(46, 33, 14, 0, Math.PI * 2);
+      ctx.arc(36, 19, 16, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Delicate spring wild-blossom clusters
+      const blossoms = [
+        [24, 28, '#f9a8d4'], [44, 25, '#fbcfe8'], [35, 13, '#f472b6'],
+        [29, 36, '#fbcfe8'], [47, 35, '#f9a8d4'], [38, 22, '#fdf2f8'],
+      ] as const;
+      for (const [bx, by, col] of blossoms) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(bx, by, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      textures.addCanvas('obj_tree_blossom', canvas);
+      textures.addCanvas('res_tree_blossom', canvas);
+    }
+
+    // 2. Meadow Wildflower Clump (30x22)
+    if (!textures.exists('obj_wildflower_clump')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 30;
+      canvas.height = 22;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#3f6212';
+      ctx.beginPath();
+      ctx.ellipse(15, 16, 10, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(10, 10, 2, 6);
+      ctx.fillRect(15, 8, 2, 8);
+      ctx.fillRect(20, 11, 2, 5);
+      ctx.fillStyle = '#fef08a';
+      ctx.beginPath();
+      ctx.arc(11, 9, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#c084fc';
+      ctx.beginPath();
+      ctx.arc(16, 7, 2.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(21, 10, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('obj_wildflower_clump', canvas);
+    }
+
+    // 3. Forest & Foothill Fern Tuft (32x24)
+    if (!textures.exists('obj_fern_tuft')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(16, 19, 11, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 2.2;
+      for (const [ex, ey] of [[5, 12], [10, 7], [16, 5], [22, 7], [27, 12]]) {
+        ctx.beginPath();
+        ctx.moveTo(16, 18);
+        ctx.quadraticCurveTo((16 + ex) / 2, ey + 2, ex, ey);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#4ade80';
+      for (const [fx, fy] of [[9, 10], [15, 7], [22, 10]]) {
+        ctx.beginPath();
+        ctx.arc(fx, fy, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      textures.addCanvas('obj_fern_tuft', canvas);
+    }
+
+    // 4. Foothill Pebble Cluster (28x18)
+    if (!textures.exists('obj_pebble_cluster')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 18;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#52525b';
+      ctx.beginPath();
+      ctx.ellipse(11, 11, 5, 3, -0.2, 0, Math.PI * 2);
+      ctx.ellipse(18, 12, 4, 2.5, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#a1a1aa';
+      ctx.beginPath();
+      ctx.ellipse(10.5, 10, 3, 1.5, -0.2, 0, Math.PI * 2);
+      ctx.ellipse(17.5, 11, 2.5, 1.3, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('obj_pebble_cluster', canvas);
+    }
+
+    // 5. Directional Carved Cedar Zone Entrance Signposts (36x52)
+    for (const facing of ['right', 'left'] as const) {
+      const key = `obj_signpost_zone_${facing}`;
+      if (!textures.exists(key)) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 36;
+        canvas.height = 52;
+        const ctx = canvas.getContext('2d')!;
+
+        // Soft ambient shadow
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+        ctx.beginPath();
+        ctx.ellipse(18, 46, 12, 4.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Mossy cobblestone plinth base
+        ctx.fillStyle = '#57534e';
+        ctx.beginPath();
+        ctx.roundRect(11, 39, 14, 7, 2);
+        ctx.fill();
+        ctx.fillStyle = '#78716c';
+        ctx.fillRect(12, 40, 12, 2.5);
+        ctx.fillStyle = '#65a30d';
+        ctx.fillRect(12, 44, 4, 2);
+
+        // Sturdy oak post
+        ctx.fillStyle = '#5c2d0c';
+        ctx.fillRect(15, 8, 6, 33);
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(16, 9, 2.5, 31);
+        // Post cap
+        ctx.fillStyle = '#b45309';
+        ctx.fillRect(14, 6, 8, 3);
+
+        // Main directional plaque pointing left or right
+        ctx.fillStyle = '#451a03';
+        ctx.beginPath();
+        if (facing === 'right') {
+          ctx.moveTo(6, 12);
+          ctx.lineTo(29, 12);
+          ctx.lineTo(35, 19);
+          ctx.lineTo(29, 26);
+          ctx.lineTo(6, 26);
+        } else {
+          ctx.moveTo(30, 12);
+          ctx.lineTo(7, 12);
+          ctx.lineTo(1, 19);
+          ctx.lineTo(7, 26);
+          ctx.lineTo(30, 26);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#d97706';
+        ctx.beginPath();
+        if (facing === 'right') {
+          ctx.moveTo(7, 13.5);
+          ctx.lineTo(28, 13.5);
+          ctx.lineTo(33, 19);
+          ctx.lineTo(28, 24.5);
+          ctx.lineTo(7, 24.5);
+        } else {
+          ctx.moveTo(29, 13.5);
+          ctx.lineTo(8, 13.5);
+          ctx.lineTo(3, 19);
+          ctx.lineTo(8, 24.5);
+          ctx.lineTo(29, 24.5);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // Carved golden plaque trim & brass rivets
+        ctx.fillStyle = '#fef3c7';
+        ctx.fillRect(10, 17, 16, 1.5);
+        ctx.fillRect(10, 20.5, 12, 1.5);
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(17, 14, 2, 2);
+        ctx.fillRect(17, 22, 2, 2);
+
+        textures.addCanvas(key, canvas);
+      }
+    }
+
+    // 6. Animated Water Surface Shimmer Overlay (48x24)
+    if (!textures.exists('fx_water_shimmer')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.72)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(8, 11);
+      ctx.quadraticCurveTo(18, 8.5, 28, 11);
+      ctx.moveTo(18, 16);
+      ctx.quadraticCurveTo(29, 13.5, 40, 16);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.beginPath();
+      ctx.arc(16, 9.5, 1.2, 0, Math.PI * 2);
+      ctx.arc(32, 14.5, 1.1, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('fx_water_shimmer', canvas);
+    }
+
+    // 7. Animated Swimming Fish Sprites (Left & Right) for Lakes & Rivers (28x16)
+    for (const dir of ['r', 'l'] as const) {
+      const key = `obj_swim_fish_${dir}`;
+      if (!textures.exists(key)) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 28;
+        canvas.height = 16;
+        const ctx = canvas.getContext('2d')!;
+        if (dir === 'l') {
+          ctx.translate(28, 0);
+          ctx.scale(-1, 1);
+        }
+
+        // Subtle underwater ripple wake behind fish
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.55)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(8, 8, 6, Math.PI * 0.65, Math.PI * 1.35);
+        ctx.stroke();
+
+        // Translucent submerged shadow silhouette + vibrant river-trout orange/silver sheen
+        ctx.fillStyle = 'rgba(12, 74, 110, 0.5)';
+        ctx.beginPath();
+        ctx.ellipse(15, 9, 6.5, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#fb923c';
+        ctx.beginPath();
+        ctx.ellipse(15, 8, 6, 2.7, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Tail fin
+        ctx.fillStyle = '#f97316';
+        ctx.beginPath();
+        ctx.moveTo(9, 8);
+        ctx.lineTo(5, 5);
+        ctx.lineTo(5, 11);
+        ctx.closePath();
+        ctx.fill();
+
+        // Shimmer stripe & eye
+        ctx.fillStyle = '#fef3c7';
+        ctx.fillRect(13, 6.8, 5, 1);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(19, 7.2, 1.2, 1.2);
+
+        textures.addCanvas(key, canvas);
+      }
+    }
   }
 
   // 7D. Majestic Mountain Ridges and Cliff Rock Formations
