@@ -15,6 +15,19 @@ export class BuildingSystem {
     this.buildings = [];
   }
 
+  public static getFootprint(type: BuildingType): { width: number; height: number } {
+    switch (type) {
+      case 'house_small':
+        return { width: 2, height: 2 };
+      case 'house_medium':
+        return { width: 3, height: 2 };
+      case 'house_large':
+        return { width: 3, height: 3 };
+      default:
+        return { width: 1, height: 1 };
+    }
+  }
+
   /**
    * Validate if a building can be placed at (tileX, tileY)
    */
@@ -29,8 +42,7 @@ export class BuildingSystem {
     resourceNodes?: Array<{ tileX: number; tileY: number }>,
     excludeBuildingId?: string
   ): { valid: boolean; reason?: string } {
-    const width = type === 'house_small' ? 2 : 1;
-    const height = type === 'house_small' ? 2 : 1;
+    const { width, height } = BuildingSystem.getFootprint(type);
 
     for (let dy = 0; dy < height; dy++) {
       for (let dx = 0; dx < width; dx++) {
@@ -47,9 +59,9 @@ export class BuildingSystem {
           return { valid: false, reason: 'ရေပြင်၊ တံတား (သို့) ကျောက်ဆောင်ပေါ်တွင် ဆောက်လုပ်၍မရပါ' };
         }
 
-        // 3. Protected Central Town Square & Municipal Walkways (tx 23..37, ty 23..37)
-        if (tx >= 23 && tx <= 37 && ty >= 23 && ty <= 37) {
-          return { valid: false, reason: 'မြို့လယ်ပလာဇာနှင့် အများပြည်သူနေရာတွင် ဆောက်လုပ်ခွင့်မရှိပါ' };
+        // 3. Protected Central Village Town Center & Walkways (tx 21..39, ty 21..39)
+        if (tx >= 21 && tx <= 39 && ty >= 21 && ty <= 39) {
+          return { valid: false, reason: 'မြို့လယ်ရွာနှင့် အများပြည်သူနေရာတွင် ဆောက်လုပ်ခွင့်မရှိပါ' };
         }
 
         // 4. Check if Player is currently standing on the footprint (Prevent self-trapping bug!)
@@ -138,8 +150,7 @@ export class BuildingSystem {
 
     inventory.removeItem(type, 1);
 
-    const width = type === 'house_small' ? 2 : 1;
-    const height = type === 'house_small' ? 2 : 1;
+    const { width, height } = BuildingSystem.getFootprint(type);
 
     const building: PlacedBuilding = {
       id: `b_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -265,7 +276,14 @@ export class BuildingSystem {
    * Deserialize saved buildings
    */
   public deserialize(buildings: PlacedBuilding[], mapSystem: MapSystem): void {
-    this.buildings = buildings || [];
+    this.buildings = (buildings || []).map((b) => {
+      const fp = BuildingSystem.getFootprint(b.type);
+      return {
+        ...b,
+        width: b.width || fp.width,
+        height: b.height || fp.height,
+      };
+    });
     for (const b of this.buildings) {
       if (b.type !== 'campfire') {
         for (let dy = 0; dy < b.height; dy++) {

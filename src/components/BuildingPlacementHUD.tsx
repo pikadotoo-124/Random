@@ -31,7 +31,11 @@ export const BuildingPlacementHUD: React.FC<BuildingPlacementHUDProps> = ({
   const getBuildingLabel = (type: BuildingType) => {
     switch (type) {
       case 'house_small':
-        return { name: 'သစ်သားအိမ် (Wooden Cottage)', size: '၂x၂ ကွက်', icon: '🏡' };
+        return { name: 'သစ်သားအိမ်ငယ် (Wooden Cottage)', size: '၂x၂ ကွက်', icon: '🏡' };
+      case 'house_medium':
+        return { name: 'နှစ်ထပ်သစ်သားအိမ် (Timber Manor)', size: '၃x၂ ကွက်', icon: '🏘️' };
+      case 'house_large':
+        return { name: 'စံအိမ်ကြီး (Grand Villa)', size: '၃x၃ ကွက်', icon: '🏰' };
       case 'fence_wood':
         return { name: 'သစ်သားခြံစည်းရိုး (Wooden Fence)', size: '၁x၁ ကွက်', icon: '🪵' };
       case 'campfire':

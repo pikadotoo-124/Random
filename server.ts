@@ -20,8 +20,35 @@ import { verifyFirebaseIdToken } from './server/auth/tokenVerifier';
 
 dotenv.config();
 
+function resolvePort(): number {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--port' && args[i + 1]) {
+      const parsed = parseInt(args[i + 1], 10);
+      if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+    } else if (args[i].startsWith('--port=')) {
+      const parsed = parseInt(args[i].slice('--port='.length), 10);
+      if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  const envPort = process.env.PORT;
+  const nginxPort = process.env.NGINX_PORT;
+  if (envPort && (!nginxPort || envPort !== nginxPort)) {
+    const parsed = parseInt(envPort, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+
+  if (process.env.DEFAULT_APP_PORT) {
+    const parsed = parseInt(process.env.DEFAULT_APP_PORT, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+
+  return 3000;
+}
+
 const isProduction = process.env.NODE_ENV === 'production';
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = resolvePort();
 
 async function createServer() {
   const app = express();
@@ -38,6 +65,13 @@ async function createServer() {
 
   // WebSocket Server on /ws
   const wss = new WebSocketServer({ server, path: '/ws' });
+  wss.on('error', (err) => {
+    console.error('[Random City] WebSocketServer error:', err);
+  });
+  server.on('error', (err) => {
+    console.error('[Random City] HTTP server error:', err);
+    process.exit(1);
+  });
 
   function broadcast(message: ServerMessage, excludeWs?: WebSocket) {
     const data = JSON.stringify(message);
@@ -88,15 +122,6 @@ async function createServer() {
 
         switch (msg.type) {
           case 'c:auth_join': {
-            if (players.size >= maxPlayers) {
-              ws.send(JSON.stringify({
-                type: 's:room_full',
-                payload: { message: 'Room capacity reached (10/10).', maxPlayers },
-              }));
-              ws.close(1008, 'Room full');
-              return;
-            }
-
             const { idToken, profile } = msg.payload;
 
             // Cryptographically verify Firebase ID Token using Google JWKS
@@ -122,6 +147,15 @@ async function createServer() {
             const verifiedUid = authResult.claims.uid;
             const playerName = (profile?.name || authResult.claims.name || 'Settler').slice(0, 16);
 
+            if (!players.has(verifiedUid) && players.size >= maxPlayers) {
+              ws.send(JSON.stringify({
+                type: 's:room_full',
+                payload: { message: 'Room capacity reached (10/10).', maxPlayers },
+              }));
+              ws.close(1008, 'Room full');
+              return;
+            }
+
             // Close any existing stale socket for this user
             for (const [s, pid] of sockets.entries()) {
               if (pid === verifiedUid && s !== ws) {
@@ -132,15 +166,16 @@ async function createServer() {
               }
             }
 
+            const gender = profile?.gender === 'female' ? 'female' : 'male';
             const newPlayer: PlayerPresenceState = {
               playerId: verifiedUid,
               playerName,
-              gender: profile.gender || 'male',
-              positionX: Math.max(0, Math.min(59, profile.positionX || 30)),
-              positionY: Math.max(0, Math.min(59, profile.positionY || 30)),
+              gender,
+              positionX: Math.max(0, Math.min(119, profile?.positionX ?? 30)),
+              positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
               facingDirection: 'down',
               movementState: 'idle',
-              color: profile.gender === 'female' ? '#10b981' : '#3b82f6',
+              color: gender === 'female' ? '#10b981' : '#3b82f6',
               lastUpdate: Date.now(),
             };
 
@@ -180,8 +215,8 @@ async function createServer() {
             const player = players.get(playerId);
             if (!player) return;
 
-            const targetX = Math.max(0, Math.min(59, msg.payload.x));
-            const targetY = Math.max(0, Math.min(59, msg.payload.y));
+            const targetX = Math.max(0, Math.min(119, msg.payload.x));
+            const targetY = Math.max(0, Math.min(119, msg.payload.y));
 
             player.positionX = targetX;
             player.positionY = targetY;
@@ -233,7 +268,12 @@ async function createServer() {
             if (!building) return;
 
             building.placedBy = playerId;
-            placedBuildings.push(building);
+            const existingIdx = placedBuildings.findIndex((b) => b.id === building.id);
+            if (existingIdx !== -1) {
+              placedBuildings[existingIdx] = building;
+            } else {
+              placedBuildings.push(building);
+            }
 
             broadcast({
               type: 's:building_placed',
@@ -333,15 +373,27 @@ async function createServer() {
   });
 
   if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
-      },
-      appType: 'spa',
+    const hmrDisabled = process.env.DISABLE_HMR === 'true';
+    const viteReady = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: !hmrDisabled,
+          ws: hmrDisabled ? false : undefined,
+          watch: hmrDisabled ? null : {},
+        },
+        appType: 'spa',
+      })
+    );
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await viteReady;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));

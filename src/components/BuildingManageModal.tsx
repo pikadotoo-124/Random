@@ -27,7 +27,11 @@ export const BuildingManageModal: React.FC<BuildingManageModalProps> = ({
   const getBuildingInfo = (type: string) => {
     switch (type) {
       case 'house_small':
-        return { name: 'သစ်သားအိမ် (Wooden Cottage)', size: '၂x၂ ကွက်', icon: '🏡', desc: 'နွေးထွေးသော အမိုးနှင့် ပြတင်းပေါက်ပါ သစ်သားအိမ်' };
+        return { name: 'သစ်သားအိမ်ငယ် (Wooden Cottage)', size: '၂x၂ ကွက်', icon: '🏡', desc: 'နွေးထွေးသော အမိုးနှင့် ပြတင်းပေါက်ပါ သစ်သားအိမ်ငယ်' };
+      case 'house_medium':
+        return { name: 'နှစ်ထပ်သစ်သားအိမ် (Timber Manor)', size: '၃x၂ ကွက်', icon: '🏘️', desc: 'ကျယ်ဝန်းသော နှစ်ထပ်သစ်သားနှင့် ကျောက်သားစပ် လူနေအိမ်ကောင်း' };
+      case 'house_large':
+        return { name: 'စံအိမ်ကြီး (Grand Villa)', size: '၃x၃ ကွက်', icon: '🏰', desc: 'ခိုင်ခံ့သော ကျောက်အုတ်မြစ်နှင့် နှစ်ထပ်ခေါင်မိုးပါ ဥယျာဉ်စံအိမ်ကြီး' };
       case 'fence_wood':
         return { name: 'သစ်သားခြံစည်းရိုး (Wooden Fence)', size: '၁x၁ ကွက်', icon: '🪵', desc: 'အိမ်ခြံဝင်း ကာရံထားသော သစ်သားစည်းရိုး' };
       case 'campfire':

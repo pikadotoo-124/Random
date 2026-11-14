@@ -26,8 +26,8 @@ export class ResourceSystem {
     const canSpawnAt = (tx: number, ty: number) => {
       if (!mapSystem.isTileInBounds(tx, ty)) return false;
       if (this.nodes.some((n) => n.tileX === tx && n.tileY === ty)) return false;
-      // Don't spawn on top of main city plaza
-      if (tx >= 24 && tx <= 36 && ty >= 24 && ty <= 36) return false;
+      // Don't spawn on top of integrated village town center
+      if (tx >= 20 && tx <= 40 && ty >= 20 && ty <= 40) return false;
       return true;
     };
 

@@ -26,6 +26,11 @@ export default {
       });
     }
 
+    // Serve built Vite/Phaser frontend static assets & SPA routes
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
     return new Response('Random City Cloudflare Multiplayer Worker', { status: 200 });
   },
 };

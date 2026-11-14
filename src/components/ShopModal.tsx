@@ -29,6 +29,8 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onClose }) => {
     { id: 'campfire', price: 18 },
     { id: 'storage_box', price: 35 },
     { id: 'house_small', price: 120 },
+    { id: 'house_medium', price: 220 },
+    { id: 'house_large', price: 360 },
     { id: 'cooked_meat', price: 20 },
     { id: 'grilled_fish', price: 25 },
   ];

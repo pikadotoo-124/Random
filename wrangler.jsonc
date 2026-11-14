@@ -4,6 +4,15 @@
   "main": "server/cloudflare/worker.ts",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/ws", "/ws/*", "/health"]
+  },
+  "vars": {
+    "FIREBASE_PROJECT_ID": "intrepid-cyclist-mbvhw"
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -15,7 +24,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": ["GameRoomDO"]
+      "new_sqlite_classes": ["GameRoomDO"]
     }
   ],
   "observability": {

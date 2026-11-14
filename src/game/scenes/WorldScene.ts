@@ -61,7 +61,7 @@ export class WorldScene extends Phaser.Scene {
   public selectedPlacementTile = { tx: 30, ty: 30 };
   public lastPlacementCheck: { valid: boolean; reason?: string } = { valid: false };
   public buildGhostSprite: Phaser.GameObjects.Sprite | null = null;
-  public buildGridHighlight: Phaser.GameObjects.Sprite | null = null;
+  public buildGridHighlights: Phaser.GameObjects.Sprite[] = [];
   public hoverTile = { tx: 30, ty: 30 };
 
   // Game Object Containers & Maps
@@ -69,6 +69,16 @@ export class WorldScene extends Phaser.Scene {
   private resourceSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
   private buildingSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
   private remotePlayerSprites: Map<string, { sprite: Phaser.GameObjects.Sprite; nameText: Phaser.GameObjects.Text }> = new Map();
+  private townNpcs: Array<{
+    sprite: Phaser.GameObjects.Sprite;
+    baseX: number;
+    baseY: number;
+    tileX: number;
+    tileY: number;
+    defaultDir: 'down' | 'left' | 'right' | 'up';
+    role: 'merchant' | 'blacksmith' | 'baker' | 'grocer' | 'florist' | 'elder' | 'settler' | 'farmer';
+    phase: number;
+  }> = [];
 
   // Floating notifications
   private floatingTexts: Phaser.GameObjects.Text[] = [];
@@ -96,6 +106,7 @@ export class WorldScene extends Phaser.Scene {
   public isNearCampfire = false;
   public nearbyStorageChest: PlacedBuilding | null = null;
   public nearbyPlacedBuilding: PlacedBuilding | null = null;
+  public nearbyVillageNpc: { role: string; title: string; subtitle: string; message: string } | null = null;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -321,263 +332,237 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private getFootprintWorldPos(tileX: number, tileY: number, width: number, height: number): { x: number; y: number; depth: number } {
+    const cx = tileX + (width - 1) / 2;
+    const cy = tileY + (height - 1) / 2;
+    const pos = MapSystem.tileToWorld(cx, cy);
+    return {
+      x: pos.x,
+      y: pos.y + 16,
+      depth: (cx + cy) * 100 + 65,
+    };
+  }
+
+  private getBuildingVisualConfig(type: BuildingType): { tex: string; originY: number } {
+    switch (type) {
+      case 'house_small':
+        return { tex: 'obj_house_small', originY: 100 / 140 };
+      case 'house_medium':
+        return { tex: 'obj_house_medium', originY: 124 / 172 };
+      case 'house_large':
+        return { tex: 'obj_house_large', originY: 140 / 196 };
+      case 'fence_wood':
+        return { tex: 'obj_fence_wood', originY: 0.75 };
+      case 'campfire':
+        return { tex: 'obj_campfire', originY: 0.75 };
+      case 'storage_box':
+        return { tex: 'obj_storage_box', originY: 0.8 };
+      case 'lantern':
+        return { tex: 'obj_lantern', originY: 0.9 };
+      default:
+        return { tex: 'obj_house_small', originY: 100 / 140 };
+    }
+  }
+
   private createTownLandmarks(): void {
-    // 1. Town Square Fountain at (30, 30) - Centered Landmark
-    const fountainPos = MapSystem.tileToWorld(30, 30);
-    this.add.image(fountainPos.x, fountainPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(60 * 100 + 20).setAlpha(0.45).setScale(1.6, 1.2);
+    this.townNpcs = [];
+
+    const placeTownBuilding = (
+      tileX: number,
+      tileY: number,
+      width: number,
+      height: number,
+      tex: string,
+      originY: number,
+      label?: string,
+      labelColor = '#fef08a',
+      labelOffsetY = 92
+    ) => {
+      const { x, y, depth } = this.getFootprintWorldPos(tileX, tileY, width, height);
+      const bld = this.add.sprite(x, y, tex);
+      bld.setOrigin(0.5, originY);
+      bld.setDepth(depth);
+      for (let dy = 0; dy < height; dy++) {
+        for (let dx = 0; dx < width; dx++) {
+          this.mapSystem.setCollision(tileX + dx, tileY + dy, true);
+        }
+      }
+      if (label) {
+        this.add.text(x, y - labelOffsetY, label, {
+          fontSize: '10px',
+          color: labelColor,
+          fontStyle: 'bold',
+          backgroundColor: 'rgba(20, 18, 16, 0.86)',
+          padding: { x: 5, y: 2 },
+        }).setOrigin(0.5).setDepth(depth + 6);
+      }
+    };
+
+    const placeTownProp = (tileX: number, tileY: number, tex: string, originY = 0.85, solid = true, shadowScale: [number, number] = [1.0, 0.7]) => {
+      const p = MapSystem.tileToWorld(tileX, tileY);
+      const d = (tileX + tileY) * 100;
+      this.add.image(p.x, p.y + 15, 'shadow_round').setOrigin(0.5, 0.5).setDepth(d + 20).setAlpha(0.38).setScale(shadowScale[0], shadowScale[1]);
+      const prop = this.add.sprite(p.x, p.y + 14, tex);
+      prop.setOrigin(0.5, originY);
+      prop.setDepth(d + 35);
+      if (solid) this.mapSystem.setCollision(tileX, tileY, true);
+      return prop;
+    };
+
+    const spawnTownNpc = (
+      tileX: number,
+      tileY: number,
+      tex: string,
+      label: string,
+      labelColor: string,
+      defaultDir: 'down' | 'left' | 'right' | 'up',
+      role: 'merchant' | 'blacksmith' | 'baker' | 'grocer' | 'florist' | 'elder' | 'settler' | 'farmer',
+      offsetX = 0,
+      offsetY = 0
+    ) => {
+      const pos = MapSystem.tileToWorld(tileX, tileY);
+      const sx = pos.x + offsetX;
+      const sy = pos.y + 16 + offsetY;
+      const d = (tileX + tileY) * 100;
+      const dirFrame = defaultDir === 'down' ? 0 : defaultDir === 'left' ? 3 : defaultDir === 'right' ? 6 : 9;
+
+      this.add.image(sx, sy, 'shadow_round').setOrigin(0.5, 0.5).setDepth(d + 40).setAlpha(0.48).setScale(0.92, 0.68);
+      const npc = this.add.sprite(sx, sy, tex, dirFrame);
+      npc.setOrigin(0.5, 0.88);
+      npc.setScale(0.5);
+      npc.setDepth(d + 58);
+
+      this.add.text(sx, sy - 44, label, {
+        fontSize: '10px',
+        color: labelColor,
+        fontStyle: 'bold',
+        backgroundColor: 'rgba(20, 18, 16, 0.88)',
+        padding: { x: 5, y: 2 },
+      }).setOrigin(0.5).setDepth(d + 62);
+
+      this.townNpcs.push({
+        sprite: npc,
+        baseX: sx,
+        baseY: sy,
+        tileX,
+        tileY,
+        defaultDir,
+        role,
+        phase: (tileX * 1.3 + tileY * 0.7) % (Math.PI * 2),
+      });
+    };
+
+    // === 1. CENTRAL VILLAGE PLAZA (Player spawns cleanly at 30, 30) ===
+    const fountainPos = MapSystem.tileToWorld(30, 29);
+    this.add.image(fountainPos.x, fountainPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(59 * 100 + 20).setAlpha(0.45).setScale(1.6, 1.2);
     const fountain = this.add.sprite(fountainPos.x, fountainPos.y + 10, 'obj_town_fountain');
     fountain.setOrigin(0.5, 0.8);
-    fountain.setDepth(60 * 100 + 30);
-    this.mapSystem.setCollision(30, 30, true);
-
-    this.add.text(fountainPos.x, fountainPos.y - 42, 'မြို့လယ်ရေပန်း (Town Fountain)', {
+    fountain.setDepth(59 * 100 + 35);
+    this.mapSystem.setCollision(30, 29, true);
+    this.add.text(fountainPos.x, fountainPos.y - 44, 'မြို့လယ်ရေပန်း (Town Fountain)', {
       fontSize: '10px',
       color: '#e0f2fe',
       fontStyle: 'bold',
       backgroundColor: 'rgba(15,23,42,0.85)',
       padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(60 * 100 + 35);
+    }).setOrigin(0.5).setDepth(59 * 100 + 40);
 
-    // 2. General Shop at (26, 28) - Merchant Barnaby
-    const shopPos = MapSystem.tileToWorld(26, 28);
-    this.add.image(shopPos.x, shopPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(54 * 100 + 20).setAlpha(0.45).setScale(1.5, 1.1);
-    const shop = this.add.sprite(shopPos.x, shopPos.y + 12, 'obj_shop_stall');
-    shop.setOrigin(0.5, 0.85);
-    shop.setDepth(54 * 100 + 26);
-    this.mapSystem.setCollision(26, 28, true);
+    // Street Lanterns framing the Central Plaza
+    for (const [lx, ly] of [[28, 28], [32, 28], [28, 32], [32, 32]]) {
+      placeTownProp(lx, ly, 'obj_lantern', 0.9, true, [0.8, 0.55]);
+    }
 
-    // Merchant Barnaby
-    const merchant = this.add.sprite(shopPos.x - 14, shopPos.y - 4, 'npc_merchant', 0);
-    merchant.setOrigin(0.5, 0.85);
-    merchant.setDepth(54 * 100 + 27);
-    this.add.text(shopPos.x - 14, shopPos.y - 46, 'ဘားနဘီ (ကုန်သည်)', {
-      fontSize: '10px',
-      color: '#fef08a',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(54 * 100 + 28);
+    // Plaza Bench + Elder Arthur beside fountain
+    placeTownProp(28, 29, 'obj_bench', 0.8, true, [1.2, 0.8]);
+    spawnTownNpc(29, 29, 'npc_elder', 'အာသာ (ရွာလူကြီး)', '#a7f3d0', 'down', 'elder', -4, 0);
 
-    // Shop Produce Crates & Barrels
-    const crateFruit = this.add.sprite(shopPos.x + 22, shopPos.y + 12, 'obj_crate_fruit');
-    crateFruit.setOrigin(0.5, 0.8);
-    crateFruit.setDepth(54 * 100 + 27);
+    // === 2. NORTH-WEST QUARTER: BAKERY HOUSE & GENERAL STORE ===
+    // Bakery House (3x2 at 23..25, 22..23)
+    placeTownBuilding(23, 22, 3, 2, 'obj_house_bakery', 124 / 172, 'မုန့်ဖိုအိမ် (Bakery House)', '#fed7aa', 102);
+    placeTownProp(25, 24, 'obj_shelf_bakery', 0.85, true, [1.0, 0.7]);
+    spawnTownNpc(24, 24, 'npc_baker', 'ကလာရာ (မုန့်ဖုတ်သမား)', '#fcd34d', 'down', 'baker', 0, 2);
 
-    const barrelShop = this.add.sprite(shopPos.x + 32, shopPos.y + 8, 'obj_barrel');
-    barrelShop.setOrigin(0.5, 0.85);
-    barrelShop.setDepth(54 * 100 + 27);
+    // General Store (3x2 at 22..24, 26..27)
+    placeTownBuilding(22, 26, 3, 2, 'obj_house_general', 124 / 172, 'အထွေထွေကုန်စုံဆိုင် (General Store)', '#fef08a', 112);
+    placeTownProp(25, 27, 'obj_crate_fruit', 0.8, true, [0.85, 0.6]);
+    placeTownProp(22, 28, 'obj_barrel', 0.85, true, [0.8, 0.55]);
+    spawnTownNpc(24, 28, 'npc_merchant', 'ဘားနဘီ (ကုန်သည်)', '#fef08a', 'down', 'merchant', 0, 2);
 
-    // 3. Crafting Station at (33, 28) - Anvil & Workbench with Blacksmith Donald
-    const craftPos = MapSystem.tileToWorld(33, 28);
-    this.add.image(craftPos.x, craftPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(61 * 100 + 20).setAlpha(0.45).setScale(1.4, 1.0);
-    const craftStation = this.add.sprite(craftPos.x, craftPos.y + 12, 'obj_craft_bench');
-    craftStation.setOrigin(0.5, 0.8);
-    craftStation.setDepth(61 * 100 + 33);
-    this.mapSystem.setCollision(33, 28, true);
-
-    this.add.text(craftPos.x, craftPos.y - 34, 'လက်မှုလုပ်ငန်းခုံ (Workbench)', {
+    // === 3. NORTH-EAST QUARTER: BLACKSMITH SHOP & VILLAGE COTTAGE ===
+    // Blacksmith Forge (3x2 at 33..35, 23..24)
+    placeTownBuilding(33, 23, 3, 2, 'obj_house_blacksmith', 124 / 172, 'ပန်းပဲဖို (Blacksmith Forge)', '#fca5a5', 102);
+    // Interactive Workbench & Anvil at (33, 25)
+    placeTownProp(33, 25, 'obj_craft_bench', 0.8, true, [1.35, 0.9]);
+    const wbPos = MapSystem.tileToWorld(33, 25);
+    this.add.text(wbPos.x, wbPos.y - 36, 'လက်မှုလုပ်ငန်းခုံ (Workbench)', {
       fontSize: '10px',
       color: '#93c5fd',
       fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
+      backgroundColor: 'rgba(20,18,16,0.88)',
       padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(61 * 100 + 34);
+    }).setOrigin(0.5).setDepth((33 + 25) * 100 + 42);
+    placeTownProp(35, 25, 'obj_rack_blacksmith', 0.85, true, [1.0, 0.7]);
+    spawnTownNpc(34, 25, 'npc_blacksmith', 'ဒေါ်နယ် (ပန်းပဲဆရာ)', '#f87171', 'down', 'blacksmith', 0, 2);
 
-    // Blacksmith Donald
-    const blacksmith = this.add.sprite(craftPos.x + 16, craftPos.y - 4, 'npc_blacksmith', 0);
-    blacksmith.setOrigin(0.5, 0.85);
-    blacksmith.setDepth(61 * 100 + 34);
-    this.add.text(craftPos.x + 16, craftPos.y - 46, 'ဒေါ်နယ် (ပန်းပဲဆရာ)', {
-      fontSize: '10px',
-      color: '#f87171',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(61 * 100 + 35);
+    // Village Two-Story Residence (2x2 at 36..37, 26..27)
+    placeTownBuilding(36, 26, 2, 2, 'obj_town_house', 116 / 156);
+    placeTownProp(35, 27, 'obj_flower_pot', 0.85, true, [0.8, 0.55]);
 
-    // 4. Village Bakery Stall at (26, 33) with Baker Clara
-    const bakeryPos = MapSystem.tileToWorld(26, 33);
-    this.add.image(bakeryPos.x, bakeryPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(59 * 100 + 20).setAlpha(0.45).setScale(1.4, 1.0);
-    const bakery = this.add.sprite(bakeryPos.x, bakeryPos.y + 10, 'obj_bakery_stall');
-    bakery.setOrigin(0.5, 0.85);
-    bakery.setDepth(59 * 100 + 28);
-    this.mapSystem.setCollision(26, 33, true);
+    // === 4. SOUTH-WEST QUARTER: GROCERY SHOP & FLOWER SHOP ===
+    // Fresh Grocery Shop (3x2 at 23..25, 33..34)
+    placeTownBuilding(23, 33, 3, 2, 'obj_house_grocery', 124 / 172, 'ကုန်စိမ်းနှင့်သစ်သီးဆိုင် (Grocery)', '#86efac', 102);
+    placeTownProp(23, 35, 'obj_shelf_grocery', 0.85, true, [1.0, 0.7]);
+    placeTownProp(25, 35, 'obj_crate_fruit', 0.8, true, [0.85, 0.6]);
+    spawnTownNpc(24, 35, 'npc_grocer', 'မာယာ (ကုန်စိမ်းသည်)', '#86efac', 'down', 'grocer', 0, 2);
 
-    this.add.text(bakeryPos.x, bakeryPos.y - 34, 'ကိတ်မုန့်ဖို (Village Bakery)', {
-      fontSize: '10px',
-      color: '#fed7aa',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(59 * 100 + 34);
+    // Flower Shop (2x2 at 26..27, 35..36)
+    placeTownBuilding(26, 35, 2, 2, 'obj_house_florist', 100 / 140, 'ပန်းဆိုင်လေး (Flower Shop)', '#f9a8d4', 88);
+    placeTownProp(28, 35, 'obj_flower_stand', 0.85, true, [1.0, 0.7]);
+    placeTownProp(26, 37, 'obj_flower_pot', 0.85, true, [0.8, 0.55]);
+    spawnTownNpc(28, 36, 'npc_florist', 'ဒေစီ (ပန်းသည်မလေး)', '#f472b6', 'down', 'florist', 2, 0);
 
-    // Baker Clara
-    const baker = this.add.sprite(bakeryPos.x - 14, bakeryPos.y - 4, 'npc_baker', 0);
-    baker.setOrigin(0.5, 0.85);
-    baker.setDepth(59 * 100 + 29);
-    this.add.text(bakeryPos.x - 14, bakeryPos.y - 46, 'ကလာရာ (မုန့်ဖုတ်သမား)', {
-      fontSize: '10px',
-      color: '#fcd34d',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(59 * 100 + 30);
+    // === 5. SOUTH-EAST QUARTER: OUTDOOR MARKET & POCKET PARK ===
+    // Outdoor Market Stalls & Goods
+    placeTownProp(33, 32, 'obj_bakery_stall', 0.85, true, [1.35, 0.9]);
+    placeTownProp(36, 32, 'obj_shop_stall', 0.85, true, [1.45, 0.95]);
+    placeTownProp(34, 34, 'obj_picnic_table', 0.85, true, [1.3, 0.85]);
+    placeTownProp(36, 34, 'obj_crate_fruit', 0.8, true, [0.85, 0.6]);
+    spawnTownNpc(35, 33, 'npc_settler', 'အာရီယာ (ဈေးသည်)', '#fdba74', 'down', 'settler', 0, 0);
 
-    // 5. Plaza Carved Wooden Benches
-    // North-West Bench with Elder Arthur
-    const benchNWPos = MapSystem.tileToWorld(28, 26);
-    this.add.image(benchNWPos.x, benchNWPos.y + 12, 'shadow_round').setOrigin(0.5, 0.5).setDepth(54 * 100 + 20).setAlpha(0.35).setScale(1.2, 0.8);
-    const benchNW = this.add.sprite(benchNWPos.x, benchNWPos.y + 10, 'obj_bench');
-    benchNW.setOrigin(0.5, 0.8);
-    benchNW.setDepth(54 * 100 + 28);
-    this.mapSystem.setCollision(28, 26, true);
-
-    const elder = this.add.sprite(benchNWPos.x, benchNWPos.y - 2, 'npc_elder', 0);
-    elder.setOrigin(0.5, 0.85);
-    elder.setDepth(54 * 100 + 29);
-    this.add.text(benchNWPos.x, benchNWPos.y - 44, 'အာသာ (ရွာလူကြီး)', {
-      fontSize: '10px',
-      color: '#a7f3d0',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(54 * 100 + 30);
-
-    // South-East Bench
-    const benchSEPos = MapSystem.tileToWorld(32, 34);
-    this.add.image(benchSEPos.x, benchSEPos.y + 12, 'shadow_round').setOrigin(0.5, 0.5).setDepth(66 * 100 + 20).setAlpha(0.35).setScale(1.2, 0.8);
-    const benchSE = this.add.sprite(benchSEPos.x, benchSEPos.y + 10, 'obj_bench');
-    benchSE.setOrigin(0.5, 0.8);
-    benchSE.setDepth(66 * 100 + 28);
-    this.mapSystem.setCollision(32, 34, true);
-
-    // 6. Flower Barrel Planters along Cobblestone walkways
-    const planterTiles = [
-      [28, 29], [32, 29], [28, 31], [32, 31]
-    ];
-    for (const [px, py] of planterTiles) {
-      const ppos = MapSystem.tileToWorld(px, py);
-      this.add.image(ppos.x, ppos.y + 10, 'shadow_round').setOrigin(0.5, 0.5).setDepth((px + py) * 100 + 20).setAlpha(0.35).setScale(0.8, 0.6);
-      const planter = this.add.sprite(ppos.x, ppos.y + 8, 'obj_flower_pot');
-      planter.setOrigin(0.5, 0.85);
-      planter.setDepth((px + py) * 100 + 28);
-      this.mapSystem.setCollision(px, py, true);
+    // Pocket Park (ပန်းခြံငယ်)
+    placeTownProp(33, 37, 'obj_bench', 0.8, true, [1.2, 0.8]);
+    placeTownProp(36, 37, 'obj_bench', 0.8, true, [1.2, 0.8]);
+    placeTownProp(35, 37, 'obj_picnic_table', 0.85, true, [1.3, 0.85]);
+    for (const [fx, fy] of [[32, 36], [37, 36], [34, 38]]) {
+      placeTownProp(fx, fy, 'obj_flower_pot', 0.85, true, [0.8, 0.55]);
     }
 
-    // Florist Daisy tending to the planters at (28, 32)
-    const floristPos = MapSystem.tileToWorld(29, 32);
-    const florist = this.add.sprite(floristPos.x, floristPos.y + 2, 'npc_florist', 0);
-    florist.setOrigin(0.5, 0.85);
-    florist.setDepth(61 * 100 + 29);
-    this.add.text(floristPos.x, floristPos.y - 42, 'ဒေစီ (ပန်းသည်မလေး)', {
-      fontSize: '10px',
-      color: '#f472b6',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(61 * 100 + 30);
-
-    // 7. Outdoor Tavern Picnic Bench & Table at (34, 32)
-    const tavernPos = MapSystem.tileToWorld(34, 32);
-    this.add.image(tavernPos.x, tavernPos.y + 12, 'shadow_round').setOrigin(0.5, 0.5).setDepth(66 * 100 + 20).setAlpha(0.4).setScale(1.4, 0.9);
-    const picnicTable = this.add.sprite(tavernPos.x, tavernPos.y + 10, 'obj_picnic_table');
-    picnicTable.setOrigin(0.5, 0.85);
-    picnicTable.setDepth(66 * 100 + 28);
-    this.mapSystem.setCollision(34, 32, true);
-
-    // 8. Town Directional Wooden Signposts
-    const signpostTiles: Array<[number, number]> = [
-      [30, 23], // North gate
-      [30, 37], // South homestead
-      [23, 30], // West lake
-      [37, 30], // East forest
-    ];
-    for (const [sx, sy] of signpostTiles) {
-      const spos = MapSystem.tileToWorld(sx, sy);
-      this.add.image(spos.x, spos.y + 10, 'shadow_round').setOrigin(0.5, 0.5).setDepth((sx + sy) * 100 + 20).setAlpha(0.3).setScale(0.8, 0.5);
-      const signpost = this.add.sprite(spos.x, spos.y + 8, 'obj_signpost');
-      signpost.setOrigin(0.5, 0.9);
-      signpost.setDepth((sx + sy) * 100 + 30);
-      this.mapSystem.setCollision(sx, sy, true);
+    // === 6. VILLAGE ENTRANCE DIRECTIONAL SIGNPOSTS (Clear of 30..31 avenues) ===
+    for (const [sx, sy] of [[29, 21], [32, 39], [21, 29], [39, 32]]) {
+      placeTownProp(sx, sy, 'obj_signpost', 0.9, true, [0.8, 0.5]);
     }
 
-    // 9. Street Lanterns around the square
-    const lanternTiles = [
-      [27, 26], [33, 26], [27, 34], [33, 34]
-    ];
-    for (const [lx, ly] of lanternTiles) {
-      const lpos = MapSystem.tileToWorld(lx, ly);
-      this.add.image(lpos.x, lpos.y + 12, 'shadow_round').setOrigin(0.5, 0.5).setDepth((lx + ly) * 100 + 30).setAlpha(0.35).setScale(0.8, 0.6);
-      const lantern = this.add.sprite(lpos.x, lpos.y + 10, 'obj_lantern');
-      lantern.setOrigin(0.5, 0.9);
-      lantern.setDepth((lx + ly) * 100 + 40);
-      this.mapSystem.setCollision(lx, ly, true);
-    }
-
-    // 10. Cozy Two-Story Town Cottages framing Plaza corners
-    const cottageTiles = [
-      [22, 22], [38, 22], [22, 38], [38, 38]
-    ];
-    for (const [cx, cy] of cottageTiles) {
-      const cpos = MapSystem.tileToWorld(cx, cy);
-      this.add.image(cpos.x, cpos.y + 16, 'shadow_round').setOrigin(0.5, 0.5).setDepth((cx + cy) * 100 + 20).setAlpha(0.45).setScale(1.8, 1.2);
-      const cottage = this.add.sprite(cpos.x, cpos.y + 14, 'obj_town_house');
-      cottage.setOrigin(0.5, 0.88);
-      cottage.setDepth((cx + cy) * 100 + 32);
-      this.mapSystem.setCollision(cx, cy, true);
-    }
-
-    // 11. Homestead Agricultural Center (South-East Farmland District)
-    // Stone Water Well at (49, 74)
+    // === 7. HOMESTEAD AGRICULTURAL CENTER (South-East Farmland District) ===
     const wellPos = MapSystem.tileToWorld(49, 74);
-    this.add.image(wellPos.x, wellPos.y + 14, 'shadow_round').setOrigin(0.5, 0.5).setDepth(123 * 100 + 20).setAlpha(0.42).setScale(1.3, 0.9);
-    const well = this.add.sprite(wellPos.x, wellPos.y + 12, 'obj_water_well');
-    well.setOrigin(0.5, 0.85);
-    well.setDepth(123 * 100 + 30);
-    this.mapSystem.setCollision(49, 74, true);
-
+    placeTownProp(49, 74, 'obj_water_well', 0.85, true, [1.3, 0.9]);
     this.add.text(wellPos.x, wellPos.y - 36, 'ရွာရေတွင်း (Stone Well)', {
       fontSize: '10px',
       color: '#7dd3fc',
       fontStyle: 'bold',
       backgroundColor: 'rgba(28,25,23,0.88)',
       padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(123 * 100 + 35);
+    }).setOrigin(0.5).setDepth((49 + 74) * 100 + 38);
 
-    // Farmer Thomas NPC
-    const farmer = this.add.sprite(wellPos.x + 18, wellPos.y - 2, 'npc_farmer', 0);
-    farmer.setOrigin(0.5, 0.85);
-    farmer.setDepth(123 * 100 + 32);
-    this.add.text(wellPos.x + 18, wellPos.y - 44, 'သောမတ်စ် (လယ်သမားကြီး)', {
-      fontSize: '10px',
-      color: '#86efac',
-      fontStyle: 'bold',
-      backgroundColor: 'rgba(28,25,23,0.88)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5).setDepth(123 * 100 + 36);
+    spawnTownNpc(50, 74, 'npc_farmer', 'သောမတ်စ် (လယ်သမားကြီး)', '#86efac', 'down', 'farmer', 4, 2);
 
     // Friendly Scarecrows in farmland plots
-    const scarecrowTiles = [
-      [48, 77], [62, 90]
-    ];
-    for (const [scx, scy] of scarecrowTiles) {
-      const scpos = MapSystem.tileToWorld(scx, scy);
-      this.add.image(scpos.x, scpos.y + 12, 'shadow_round').setOrigin(0.5, 0.5).setDepth((scx + scy) * 100 + 20).setAlpha(0.35).setScale(0.9, 0.6);
-      const scarecrow = this.add.sprite(scpos.x, scpos.y + 10, 'obj_scarecrow');
-      scarecrow.setOrigin(0.5, 0.9);
-      scarecrow.setDepth((scx + scy) * 100 + 34);
+    for (const [scx, scy] of [[48, 77], [62, 90]]) {
+      placeTownProp(scx, scy, 'obj_scarecrow', 0.9, false, [0.9, 0.6]);
     }
 
     // Golden Hay Bales near farm edges
-    const hayBaleTiles = [
-      [46, 74], [65, 88], [75, 74]
-    ];
-    for (const [hx, hy] of hayBaleTiles) {
-      const hpos = MapSystem.tileToWorld(hx, hy);
-      this.add.image(hpos.x, hpos.y + 10, 'shadow_round').setOrigin(0.5, 0.5).setDepth((hx + hy) * 100 + 20).setAlpha(0.35).setScale(1.1, 0.7);
-      const hayBale = this.add.sprite(hpos.x, hpos.y + 8, 'obj_hay_bale');
-      hayBale.setOrigin(0.5, 0.8);
-      hayBale.setDepth((hx + hy) * 100 + 30);
+    for (const [hx, hy] of [[46, 74], [65, 88], [75, 74]]) {
+      placeTownProp(hx, hy, 'obj_hay_bale', 0.8, false, [1.1, 0.7]);
     }
   }
 
@@ -687,36 +672,27 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // Render placed buildings
+    // Render placed buildings centered accurately on their isometric footprints
     for (const b of this.buildingSystem.buildings) {
-      const { x, y } = MapSystem.tileToWorld(b.tileX, b.tileY);
+      const fp = BuildingSystem.getFootprint(b.type);
+      const w = b.width || fp.width;
+      const h = b.height || fp.height;
+      const { x, y, depth } = this.getFootprintWorldPos(b.tileX, b.tileY, w, h);
+      const renderDepth = b.type === 'campfire' ? (b.tileX + b.tileY) * 100 + 35 : depth;
+      const { tex, originY } = this.getBuildingVisualConfig(b.type);
+
       const existing = this.buildingSprites.get(b.id);
       if (existing) {
-        existing.setPosition(x, y + 16);
-        existing.setDepth((b.tileX + b.tileY) * 100 + 55);
+        existing.setTexture(tex);
+        existing.setOrigin(0.5, originY);
+        existing.setPosition(x, y);
+        existing.setDepth(renderDepth);
         continue;
       }
 
-      let tex = 'obj_house_small';
-      let originY = 0.85;
-
-      if (b.type === 'fence_wood') {
-        tex = 'obj_fence_wood';
-        originY = 0.75;
-      } else if (b.type === 'campfire') {
-        tex = 'obj_campfire';
-        originY = 0.75;
-      } else if (b.type === 'storage_box') {
-        tex = 'obj_storage_box';
-        originY = 0.8;
-      } else if (b.type === 'lantern') {
-        tex = 'obj_lantern';
-        originY = 0.9;
-      }
-
-      const sprite = this.add.sprite(x, y + 16, tex);
+      const sprite = this.add.sprite(x, y, tex);
       sprite.setOrigin(0.5, originY);
-      sprite.setDepth((b.tileX + b.tileY) * 100 + 55);
+      sprite.setDepth(renderDepth);
       this.buildingSprites.set(b.id, sprite);
 
       // Campfire animated ember glow
@@ -735,17 +711,38 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private createPlayer(): void {
+    // Safety walkability check so saved player coordinates never spawn inside a town structure
+    const startIntX = Math.round(this.playerTileX);
+    const startIntY = Math.round(this.playerTileY);
+    if (!this.mapSystem.isWalkable(startIntX, startIntY)) {
+      let found = false;
+      for (let radius = 1; radius <= 6 && !found; radius++) {
+        for (let dy = -radius; dy <= radius && !found; dy++) {
+          for (let dx = -radius; dx <= radius && !found; dx++) {
+            const cx = startIntX + dx;
+            const cy = startIntY + dy;
+            if (this.mapSystem.isWalkable(cx, cy)) {
+              this.playerTileX = cx;
+              this.playerTileY = cy;
+              found = true;
+            }
+          }
+        }
+      }
+    }
+
     const { x, y } = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
 
-    // Player soft ground shadow
+    // Player layered ambient + contact ground shadow
     this.playerShadow = this.add.image(x, y + 16, 'shadow_round');
     this.playerShadow.setOrigin(0.5, 0.5);
     this.playerShadow.setDepth((this.playerTileX + this.playerTileY) * 100 + 40);
-    this.playerShadow.setAlpha(0.42).setScale(1.1, 0.75);
+    this.playerShadow.setAlpha(0.52).setScale(0.95, 0.72);
 
     const textureKey = this.playerProfile.gender === 'female' ? 'player_female' : 'player_male';
     this.playerSprite = this.add.sprite(x, y + 16, textureKey, 0);
     this.playerSprite.setOrigin(0.5, 0.88);
+    this.playerSprite.setScale(0.5); // 2x crisp 64x88 spritesheet rendered at exact 32x44 world size
     this.playerSprite.setDepth((this.playerTileX + this.playerTileY) * 100 + 60);
 
     // Player floating name tag
@@ -778,12 +775,13 @@ export class WorldScene extends Phaser.Scene {
       const rShadow = this.add.image(x, y + 16, 'shadow_round');
       rShadow.setOrigin(0.5, 0.5);
       rShadow.setDepth((peer.tileX + peer.tileY) * 100 + 40);
-      rShadow.setAlpha(0.42).setScale(1.1, 0.75);
+      rShadow.setAlpha(0.5).setScale(0.95, 0.72);
       this.remotePlayerShadows.set(id, rShadow);
 
       const tex = peer.gender === 'female' ? 'player_female' : 'player_male';
       const sprite = this.add.sprite(x, y + 16, tex, 0);
       sprite.setOrigin(0.5, 0.88);
+      sprite.setScale(0.5);
       sprite.setDepth((peer.tileX + peer.tileY) * 100 + 58);
 
       const nameText = this.add.text(x, y - 30, peer.name, {
@@ -857,10 +855,35 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
-    // 5. Shared Building Placed
+    // 5. Shared Building Placed or Moved
     this.networkSystem.on('building_placed', (evt) => {
-      const building = evt.payload;
-      if (!this.buildingSystem.buildings.some((b) => b.id === building.id)) {
+      const incoming = evt.payload as PlacedBuilding;
+      const fp = BuildingSystem.getFootprint(incoming.type);
+      const building: PlacedBuilding = {
+        ...incoming,
+        width: incoming.width || fp.width,
+        height: incoming.height || fp.height,
+      };
+      const existingIdx = this.buildingSystem.buildings.findIndex((b) => b.id === building.id);
+      if (existingIdx !== -1) {
+        const prev = this.buildingSystem.buildings[existingIdx];
+        if (prev.tileX !== building.tileX || prev.tileY !== building.tileY) {
+          for (let dy = 0; dy < prev.height; dy++) {
+            for (let dx = 0; dx < prev.width; dx++) {
+              this.mapSystem.setCollision(prev.tileX + dx, prev.tileY + dy, false);
+            }
+          }
+          this.buildingSystem.buildings[existingIdx] = building;
+          if (building.type !== 'campfire') {
+            for (let dy = 0; dy < building.height; dy++) {
+              for (let dx = 0; dx < building.width; dx++) {
+                this.mapSystem.setCollision(building.tileX + dx, building.tileY + dy, true);
+              }
+            }
+          }
+          this.renderPlacedBuildings();
+        }
+      } else {
         this.buildingSystem.buildings.push(building);
         if (building.type !== 'campfire') {
           for (let dy = 0; dy < building.height; dy++) {
@@ -870,7 +893,9 @@ export class WorldScene extends Phaser.Scene {
           }
         }
         this.renderPlacedBuildings();
-        this.spawnFloatingText(building.tileX, building.tileY, `အဆောက်အအုံအသစ် ဆောက်လုပ်ပြီးပါပြီ!`, '#34d399');
+        if (building.placedBy !== this.networkSystem.localPlayerId) {
+          this.spawnFloatingText(building.tileX, building.tileY, `အဆောက်အအုံအသစ် ဆောက်လုပ်ပြီးပါပြီ!`, '#34d399');
+        }
       }
     });
 
@@ -907,7 +932,13 @@ export class WorldScene extends Phaser.Scene {
       }
 
       if (state.placedBuildings) {
-        for (const b of state.placedBuildings) {
+        for (const rawB of state.placedBuildings) {
+          const fp = BuildingSystem.getFootprint(rawB.type);
+          const b: PlacedBuilding = {
+            ...rawB,
+            width: rawB.width || fp.width,
+            height: rawB.height || fp.height,
+          };
           if (!this.buildingSystem.buildings.some((existing) => existing.id === b.id)) {
             this.buildingSystem.buildings.push(b);
             if (b.type !== 'campfire') {
@@ -1039,7 +1070,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private setupBuildPreviewSprites(): void {
-    this.buildGridHighlight = this.add.sprite(0, 0, 'grid_valid').setVisible(false).setDepth(9990);
+    this.buildGridHighlights = [];
+    for (let i = 0; i < 9; i++) {
+      const h = this.add.sprite(0, 0, 'grid_valid').setVisible(false).setDepth(9990);
+      this.buildGridHighlights.push(h);
+    }
     this.buildGhostSprite = this.add.sprite(0, 0, 'obj_house_small').setVisible(false).setAlpha(0.75).setDepth(9991);
   }
 
@@ -1049,7 +1084,7 @@ export class WorldScene extends Phaser.Scene {
     this.placementCooldown = Date.now() + 300; // 300ms cooldown to block modal click-through
 
     if (!type) {
-      if (this.buildGridHighlight) this.buildGridHighlight.setVisible(false);
+      for (const h of this.buildGridHighlights) h.setVisible(false);
       if (this.buildGhostSprite) this.buildGhostSprite.setVisible(false);
       if (this.onPlacementStatusChange) {
         this.onPlacementStatusChange({
@@ -1062,29 +1097,12 @@ export class WorldScene extends Phaser.Scene {
         });
       }
     } else {
-      let tex = 'obj_house_small';
-      let originY = 0.85;
-      if (type === 'fence_wood') {
-        tex = 'obj_fence_wood';
-        originY = 0.75;
-      } else if (type === 'campfire') {
-        tex = 'obj_campfire';
-        originY = 0.75;
-      } else if (type === 'storage_box') {
-        tex = 'obj_storage_box';
-        originY = 0.8;
-      } else if (type === 'lantern') {
-        tex = 'obj_lantern';
-        originY = 0.9;
-      }
+      const { tex, originY } = this.getBuildingVisualConfig(type);
 
       if (this.buildGhostSprite) {
         this.buildGhostSprite.setTexture(tex);
         this.buildGhostSprite.setOrigin(0.5, originY);
         this.buildGhostSprite.setVisible(true);
-      }
-      if (this.buildGridHighlight) {
-        this.buildGridHighlight.setVisible(true);
       }
 
       // Default preview spot: 2 tiles away from player in current facing direction
@@ -1105,27 +1123,19 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public updateBuildPreview(tx: number, ty: number): void {
-    if (!this.buildModeType || !this.buildGhostSprite || !this.buildGridHighlight) return;
+    if (!this.buildModeType || !this.buildGhostSprite) return;
 
     this.selectedPlacementTile = { tx, ty };
-    const { x, y } = MapSystem.tileToWorld(tx, ty);
-    this.buildGridHighlight.setPosition(x, y + 16);
-    this.buildGhostSprite.setPosition(x, y + 16);
+    const fp = BuildingSystem.getFootprint(this.buildModeType);
+    const { x: ghostX, y: ghostY } = this.getFootprintWorldPos(tx, ty, fp.width, fp.height);
+    this.buildGhostSprite.setPosition(ghostX, ghostY);
 
     const remotePositions = Array.from(this.remotePlayerSprites.values()).map(rp => {
       const tile = MapSystem.worldToTile(rp.sprite.x, rp.sprite.y - 16);
       return { x: tile.tx, y: tile.ty };
     });
 
-    const npcPositions = [
-      { tileX: 26, tileY: 28 }, // merchant
-      { tileX: 33, tileY: 28 }, // blacksmith
-      { tileX: 26, tileY: 33 }, // baker
-      { tileX: 28, tileY: 26 }, // elder
-      { tileX: 29, tileY: 32 }, // florist
-      { tileX: 50, tileY: 75 }, // farmer
-    ];
-
+    const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
     const resourcePositions = this.resourceSystem.nodes.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
 
     const check = this.buildingSystem.canPlaceBuilding(
@@ -1144,12 +1154,26 @@ export class WorldScene extends Phaser.Scene {
     const hasItemOrMoving = !!this.movingBuildingId || this.inventorySystem.hasItem(this.buildModeType, 1);
     const isValid = check.valid && hasItemOrMoving;
 
+    // Highlight every tile inside the footprint (1x1, 2x2, 3x2, or 3x3)
+    let hIdx = 0;
+    for (let dy = 0; dy < fp.height; dy++) {
+      for (let dx = 0; dx < fp.width; dx++) {
+        const hl = this.buildGridHighlights[hIdx++];
+        if (!hl) continue;
+        const tp = MapSystem.tileToWorld(tx + dx, ty + dy);
+        hl.setPosition(tp.x, tp.y + 16);
+        hl.setTexture(isValid ? 'grid_valid' : 'grid_invalid');
+        hl.setVisible(true);
+      }
+    }
+    for (let i = hIdx; i < this.buildGridHighlights.length; i++) {
+      this.buildGridHighlights[i].setVisible(false);
+    }
+
     if (isValid) {
-      this.buildGridHighlight.setTexture('grid_valid');
       this.buildGhostSprite.setTint(0x4ade80); // Vibrant Emerald Green tint
       this.buildGhostSprite.setAlpha(0.8);
     } else {
-      this.buildGridHighlight.setTexture('grid_invalid');
       this.buildGhostSprite.setTint(0xf87171); // Crisp Rose Red tint
       this.buildGhostSprite.setAlpha(0.65);
     }
@@ -1182,15 +1206,7 @@ export class WorldScene extends Phaser.Scene {
       return { x: tile.tx, y: tile.ty };
     });
 
-    const npcPositions = [
-      { tileX: 26, tileY: 28 },
-      { tileX: 33, tileY: 28 },
-      { tileX: 26, tileY: 33 },
-      { tileX: 28, tileY: 26 },
-      { tileX: 29, tileY: 32 },
-      { tileX: 50, tileY: 75 },
-    ];
-
+    const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
     const resourcePositions = this.resourceSystem.nodes.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
 
     // 1. Move Mode Execution
@@ -1369,6 +1385,12 @@ export class WorldScene extends Phaser.Scene {
     if (this.isNearCampfire) {
       if (this.onOpenUIModal) this.onOpenUIModal('crafting', { filter: 'campfire' });
       return;
+    }
+
+    // 6. Friendly Village NPC conversation check (Baker, Florist, Elder, Farmer)
+    if (this.nearbyVillageNpc) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(Math.round(this.playerTileX), Math.round(this.playerTileY) - 1, this.nearbyVillageNpc.message, '#fde68a');
     }
   }
 
@@ -1590,6 +1612,25 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // 3.8 Animate Village NPCs with gentle idle breathing & shopkeeper working routines
+    for (const npc of this.townNpcs) {
+      const bobOffset = Math.sin(time * 0.0028 + npc.phase) * 0.65;
+      npc.sprite.setPosition(npc.baseX, npc.baseY + bobOffset);
+
+      const cycle = Math.floor((time + npc.phase * 500) / 1400) % 4;
+      let frame = 0; // down
+      if (npc.role === 'blacksmith') {
+        // Forging work rhythm: alternates facing down & right with subtle step frame
+        frame = cycle === 0 ? 0 : cycle === 1 ? 7 : cycle === 2 ? 6 : 1;
+      } else if (npc.role === 'florist' || npc.role === 'baker' || npc.role === 'grocer') {
+        // Attentive shopkeepers glancing between goods & plaza visitors
+        frame = cycle === 0 ? 0 : cycle === 1 ? 3 : cycle === 2 ? 0 : 6;
+      } else {
+        frame = cycle === 2 ? 1 : 0;
+      }
+      npc.sprite.setFrame(frame);
+    }
+
     // 4. Update Interaction Proximity Detection
     this.checkNearbyInteractions();
 
@@ -1604,15 +1645,49 @@ export class WorldScene extends Phaser.Scene {
     const ptx = this.playerTileX;
     const pty = this.playerTileY;
 
-    // A. Shop Stall (26, 28)
-    const distShop = Math.hypot(ptx - 26, pty - 28);
-    this.isNearShop = distShop <= 2.2;
+    // A. Shops (General Store 24,28 | Grocery 24,35 | Outdoor Market 35,33)
+    const distGeneral = Math.hypot(ptx - 24, pty - 28);
+    const distGrocery = Math.hypot(ptx - 24, pty - 35);
+    const distMarket = Math.hypot(ptx - 35, pty - 33);
+    this.isNearShop = distGeneral <= 2.5 || distGrocery <= 2.5 || distMarket <= 2.4;
 
-    // B. Crafting Station (33, 28)
-    const distCraft = Math.hypot(ptx - 33, pty - 28);
-    this.isNearCraftStation = distCraft <= 2.2;
+    // B. Crafting Station / Blacksmith Forge (33, 25 and 34, 25)
+    const distCraft = Math.min(Math.hypot(ptx - 33, pty - 25), Math.hypot(ptx - 34, pty - 25));
+    this.isNearCraftStation = distCraft <= 2.5;
 
-    // C. Nearby Placed Buildings (Cottage, Fence, Campfire, Storage Chest, Lantern)
+    // C. Friendly Village NPCs (Bakery, Florist, Elder, Farmer)
+    this.nearbyVillageNpc = null;
+    if (Math.hypot(ptx - 24, pty - 24) <= 2.3) {
+      this.nearbyVillageNpc = {
+        role: 'baker',
+        title: 'ကလာရာ၏ မုန့်ဖို (Village Bakery)',
+        subtitle: 'လတ်လတ်ဆတ်ဆတ် မုန့်နံ့လေးတွေ သင်းနေပါတယ်',
+        message: 'မင်္ဂလာပါ! ပူပူနွေးနွေး ပေါင်မုန့်လေးတွေ ဖုတ်နေပါတယ် 🥐',
+      };
+    } else if (Math.hypot(ptx - 28, pty - 36) <= 2.3) {
+      this.nearbyVillageNpc = {
+        role: 'florist',
+        title: 'ဒေစီ၏ ပန်းဆိုင်လေး (Flower Shop)',
+        subtitle: 'ရောင်စုံပန်းပွင့်လေးများဖြင့် ရွာလေးကို အလှဆင်ထားသည်',
+        message: 'ရွာပန်းခြံအတွက် ပန်းလှလှလေးတွေ ပြုစုနေပါတယ် 🌸',
+      };
+    } else if (Math.hypot(ptx - 29, pty - 29) <= 2.2) {
+      this.nearbyVillageNpc = {
+        role: 'elder',
+        title: 'ရွာလူကြီး အာသာ (Elder Arthur)',
+        subtitle: 'စကားပြောရန် [E] နှိပ်ပါ',
+        message: 'Random City ရွာလေးမှ ကြိုဆိုပါတယ် လူငယ်လေး! 🏡',
+      };
+    } else if (Math.hypot(ptx - 50, pty - 74) <= 2.4) {
+      this.nearbyVillageNpc = {
+        role: 'farmer',
+        title: 'လယ်သမားကြီး သောမတ်စ်',
+        subtitle: 'စကားပြောရန် [E] နှိပ်ပါ',
+        message: 'ဒီနှစ် ဂျုံနဲ့ ဖရုံသီးတွေ အထွက်တိုးနေပါတယ် 🌾',
+      };
+    }
+
+    // D. Nearby Placed Buildings (Cottage, Manor, Villa, Fence, Campfire, Storage Chest, Lantern)
     this.isNearCampfire = false;
     this.nearbyStorageChest = null;
     this.nearbyPlacedBuilding = null;
@@ -1620,7 +1695,7 @@ export class WorldScene extends Phaser.Scene {
       const centerX = b.tileX + b.width / 2;
       const centerY = b.tileY + b.height / 2;
       const dist = Math.hypot(ptx - centerX, pty - centerY);
-      if (dist <= 2.4) {
+      if (dist <= Math.max(2.4, Math.max(b.width, b.height) * 0.95)) {
         this.nearbyPlacedBuilding = b;
         if (b.type === 'campfire') {
           this.isNearCampfire = true;
@@ -1630,28 +1705,37 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // D. Nearby Resource Node
+    // E. Nearby Resource Node
     const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.8);
 
     // Formulate HUD prompt for user in Burmese
     if (this.onInteractionChange) {
       if (this.isNearShop) {
+        const shopTitle = distGrocery <= 2.5
+          ? 'မာယာ၏ ကုန်စိမ်းနှင့်သစ်သီးဆိုင်'
+          : distMarket <= 2.4
+          ? 'အာရီယာ၏ ဈေးဆိုင်တန်း'
+          : 'ဘားနဘီ၏ အထွေထွေကုန်စုံဆိုင်';
         this.onInteractionChange({
           type: 'shop',
-          title: 'ဘားနဘီ၏ အထွေထွေကုန်စုံဆိုင်',
-          subtitle: 'ကိရိယာ၊ အစားအစာများ ဝယ်ယူရန်နှင့် ရောင်းချရန်',
+          title: shopTitle,
+          subtitle: 'ကိရိယာ၊ အစားအစာနှင့် အိမ်ဆောက်ပစ္စည်းများ ဝယ်/ရောင်းရန်',
           actionKey: 'E',
         });
       } else if (this.isNearCraftStation) {
         this.onInteractionChange({
           type: 'crafting',
-          title: 'မြို့လယ်လက်မှုလုပ်ငန်းခုံ',
-          subtitle: 'ပုဆိန်၊ ပေါက်ပြား၊ အိမ်နှင့် ခြံစည်းရိုးများ ဖန်တီးရန်',
+          title: 'ပန်းပဲဖိုနှင့် လက်မှုလုပ်ငန်းခုံ',
+          subtitle: 'ပုဆိန်၊ ပေါက်ပြား၊ အိမ်အရွယ်အစားစုံ ဖန်တီးရန်',
           actionKey: 'E',
         });
       } else if (this.nearbyPlacedBuilding) {
         const bName = this.nearbyPlacedBuilding.type === 'house_small'
-          ? 'သစ်သားအိမ်'
+          ? 'သစ်သားအိမ်ငယ်'
+          : this.nearbyPlacedBuilding.type === 'house_medium'
+          ? 'နှစ်ထပ်သစ်သားအိမ်'
+          : this.nearbyPlacedBuilding.type === 'house_large'
+          ? 'စံအိမ်ကြီး'
           : this.nearbyPlacedBuilding.type === 'fence_wood'
           ? 'သစ်သားခြံစည်းရိုး'
           : this.nearbyPlacedBuilding.type === 'storage_box'
@@ -1698,6 +1782,13 @@ export class WorldScene extends Phaser.Scene {
           type: 'campfire',
           title: 'နွေးထွေးသော မီးဖို',
           subtitle: 'အသားနှင့် ငါးများ ကင်ရန်/ချက်ပြုတ်ရန်',
+          actionKey: 'E',
+        });
+      } else if (this.nearbyVillageNpc) {
+        this.onInteractionChange({
+          type: 'npc',
+          title: this.nearbyVillageNpc.title,
+          subtitle: this.nearbyVillageNpc.subtitle,
           actionKey: 'E',
         });
       } else {

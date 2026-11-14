@@ -60,13 +60,13 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         <div className="p-6 overflow-y-auto flex flex-col items-center">
           <div className="relative w-72 h-72 sm:w-96 sm:h-96 rounded-xl border-2 border-stone-700/80 bg-stone-950 overflow-hidden shadow-2xl">
             {/* Biome Region Overlays (120x120 Scale) */}
-            {/* 1. Main City Center (23..37, 23..37) */}
+            {/* 1. Main City Center (21..39, 21..39) */}
             <div
               style={{
-                left: `${(23 / mapSize) * 100}%`,
-                top: `${(23 / mapSize) * 100}%`,
-                width: `${(15 / mapSize) * 100}%`,
-                height: `${(15 / mapSize) * 100}%`,
+                left: `${(21 / mapSize) * 100}%`,
+                top: `${(21 / mapSize) * 100}%`,
+                width: `${(19 / mapSize) * 100}%`,
+                height: `${(19 / mapSize) * 100}%`,
               }}
               className="absolute bg-amber-500/25 border border-amber-500/50 rounded flex items-center justify-center z-10"
             >
@@ -151,31 +151,58 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
             </div>
 
             {/* Landmark pins */}
-            {/* Town Fountain (30, 30) */}
+            {/* Town Fountain (30, 29) */}
             <div
-              style={{ left: `${(30 / mapSize) * 100}%`, top: `${(30 / mapSize) * 100}%` }}
+              style={{ left: `${(30 / mapSize) * 100}%`, top: `${(29 / mapSize) * 100}%` }}
               className="absolute -translate-x-1/2 -translate-y-1/2 text-xs z-15"
               title="မြို့လယ်ရေပန်း"
             >
               ⛲
             </div>
 
-            {/* General Shop (26, 28) */}
+            {/* Bakery House (24, 23) */}
             <div
-              style={{ left: `${(26 / mapSize) * 100}%`, top: `${(28 / mapSize) * 100}%` }}
+              style={{ left: `${(24 / mapSize) * 100}%`, top: `${(23 / mapSize) * 100}%` }}
+              className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] z-15"
+              title="မုန့်ဖိုအိမ် (Bakery House)"
+            >
+              🥖
+            </div>
+
+            {/* General Shop (23, 27) */}
+            <div
+              style={{ left: `${(23 / mapSize) * 100}%`, top: `${(27 / mapSize) * 100}%` }}
               className="absolute -translate-x-1/2 -translate-y-1/2 text-xs z-15"
-              title="ဘားနဘီ ကုန်ဆိုင်"
+              title="ဘားနဘီ ကုန်စုံဆိုင်"
             >
               🏪
             </div>
 
-            {/* Crafting Workbench (33, 28) */}
+            {/* Blacksmith & Crafting Workbench (34, 24) */}
             <div
-              style={{ left: `${(33 / mapSize) * 100}%`, top: `${(28 / mapSize) * 100}%` }}
+              style={{ left: `${(34 / mapSize) * 100}%`, top: `${(24 / mapSize) * 100}%` }}
               className="absolute -translate-x-1/2 -translate-y-1/2 text-xs z-15"
-              title="လက်မှုလုပ်ငန်းခုံ"
+              title="ပန်းပဲဖိုနှင့် လက်မှုလုပ်ငန်းခုံ"
             >
               🔨
+            </div>
+
+            {/* Grocery Shop (24, 34) */}
+            <div
+              style={{ left: `${(24 / mapSize) * 100}%`, top: `${(34 / mapSize) * 100}%` }}
+              className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] z-15"
+              title="ကုန်စိမ်းနှင့်သစ်သီးဆိုင် (Grocery)"
+            >
+              🥬
+            </div>
+
+            {/* Flower Shop (27, 36) */}
+            <div
+              style={{ left: `${(27 / mapSize) * 100}%`, top: `${(36 / mapSize) * 100}%` }}
+              className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] z-15"
+              title="ပန်းဆိုင်လေး (Flower Shop)"
+            >
+              🌸
             </div>
 
             {/* Player Marker (Blinking Radar Pin) */}

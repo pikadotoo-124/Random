@@ -40,6 +40,8 @@ export class PixelArtGenerator {
 
     // 3. Buildings & Town Landmarks
     this.createHouseSprite(textures);
+    this.createMediumHouseSprite(textures);
+    this.createLargeHouseSprite(textures);
     this.createFenceSprite(textures);
     this.createCampfireSprites(textures);
     this.createStorageBoxSprite(textures);
@@ -48,9 +50,10 @@ export class PixelArtGenerator {
     this.createCraftingBenchSprite(textures);
     this.createFountainSprite(textures);
     this.createTownPropsAndBuildings(textures);
+    this.createVillageShopBuildings(textures);
     this.createFarmEnvironmentSprites(textures);
 
-    // 4. Stylized 2D Characters & NPCs (4-directional frames)
+    // 4. Stylized 2D Characters & NPCs (2x Resolution 64x88 frames, 4 directions x 3 steps)
     this.createCharacterSpritesheet(textures, 'player_male', '#d97706', '#1c1917', '#2563eb', 'male');
     this.createCharacterSpritesheet(textures, 'player_female', '#f59e0b', '#7c2d12', '#059669', 'female');
     this.createCharacterSpritesheet(textures, 'npc_merchant', '#f59e0b', '#451a03', '#7c3aed', 'male');
@@ -59,6 +62,7 @@ export class PixelArtGenerator {
     this.createCharacterSpritesheet(textures, 'npc_blacksmith', '#d97706', '#451a03', '#991b1b', 'male');
     this.createCharacterSpritesheet(textures, 'npc_florist', '#f59e0b', '#78350f', '#ec4899', 'female');
     this.createCharacterSpritesheet(textures, 'npc_baker', '#facc15', '#b45309', '#f59e0b', 'female');
+    this.createCharacterSpritesheet(textures, 'npc_grocer', '#f59e0b', '#78350f', '#16a34a', 'female');
     this.createCharacterSpritesheet(textures, 'npc_farmer', '#d97706', '#713f12', '#15803d', 'male');
 
     // 5. Environmental Particles
@@ -94,7 +98,7 @@ export class PixelArtGenerator {
     }
   }
 
-  // Soft round drop shadow texture
+  // Soft layered ambient + contact drop shadow texture
   private static createShadowTexture(textures: Phaser.Textures.TextureManager) {
     if (textures.exists('shadow_round')) return;
     const canvas = document.createElement('canvas');
@@ -102,14 +106,22 @@ export class PixelArtGenerator {
     canvas.height = 24;
     const ctx = canvas.getContext('2d')!;
 
-    const grad = ctx.createRadialGradient(24, 12, 2, 24, 12, 22);
-    grad.addColorStop(0, 'rgba(15, 23, 42, 0.42)');
-    grad.addColorStop(0.6, 'rgba(15, 23, 42, 0.22)');
+    // Outer soft ambient occlusion shadow
+    const grad = ctx.createRadialGradient(24, 12, 1, 24, 12, 22);
+    grad.addColorStop(0, 'rgba(15, 23, 42, 0.56)');
+    grad.addColorStop(0.42, 'rgba(15, 23, 42, 0.36)');
+    grad.addColorStop(0.75, 'rgba(15, 23, 42, 0.14)');
     grad.addColorStop(1, 'rgba(15, 23, 42, 0)');
 
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.ellipse(24, 12, 22, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tight inner contact shadow core
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.25)';
+    ctx.beginPath();
+    ctx.ellipse(24, 12.2, 10, 4.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
     textures.addCanvas('shadow_round', canvas);
@@ -1350,119 +1362,666 @@ export class PixelArtGenerator {
     textures.addCanvas('obj_lake_fish', canvas);
   }
 
-  // 12. Cozy Wooden Cottage (Modern Stylized 2D Building)
-  private static createHouseSprite(textures: Phaser.Textures.TextureManager) {
-    if (textures.exists('bld_house_small')) return;
+  // 12. High-Detail True Isometric Houses & Shop Buildings Helper
+  private static drawIsoBuildingCanvas(opts: {
+    canvasW: number;
+    canvasH: number;
+    baseCenterY: number;
+    tileW: number;
+    tileH: number;
+    wallH: number;
+    upperH?: number;
+    roofH: number;
+    wallLeftColor: string;
+    wallRightColor: string;
+    upperLeftColor?: string;
+    upperRightColor?: string;
+    roofLightColor: string;
+    roofDarkColor: string;
+    roofGableColor?: string;
+    trimColor?: string;
+    doorSide?: 'left' | 'right';
+    hasAwning?: { colors: [string, string] };
+    hasFlowerBoxes?: boolean;
+    hasForgeHearth?: boolean;
+    hasDormer?: boolean;
+    hasTimberBeams?: boolean;
+    chimneySide?: 'back' | 'right' | 'none';
+    signType?: 'bakery' | 'general' | 'grocery' | 'blacksmith' | 'florist' | 'none';
+  }): HTMLCanvasElement {
+    const {
+      canvasW,
+      canvasH,
+      baseCenterY,
+      tileW,
+      tileH,
+      wallH,
+      upperH = 0,
+      roofH,
+      wallLeftColor,
+      wallRightColor,
+      upperLeftColor = '#fef3c7',
+      upperRightColor = '#fde68a',
+      roofLightColor,
+      roofDarkColor,
+      roofGableColor = wallRightColor,
+      trimColor = '#451a03',
+      doorSide = 'left',
+      hasAwning,
+      hasFlowerBoxes = true,
+      hasForgeHearth = false,
+      hasDormer = false,
+      hasTimberBeams = true,
+      chimneySide = 'back',
+      signType = 'none',
+    } = opts;
+
     const canvas = document.createElement('canvas');
-    canvas.width = 96;
-    canvas.height = 96;
+    canvas.width = canvasW;
+    canvas.height = canvasH;
     const ctx = canvas.getContext('2d')!;
 
-    // 1. Building Drop Shadow
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    const cx = canvasW / 2;
+    const cy = baseCenterY;
+    const s = 0.88; // Slight perimeter breathing room inside tile footprint
+
+    const top = { x: cx + (tileH - tileW) * 16 * s, y: cy - (tileW + tileH) * 8 * s };
+    const right = { x: cx + (tileW + tileH) * 16 * s, y: cy + (tileW - tileH) * 8 * s };
+    const bottom = { x: cx + (tileW - tileH) * 16 * s, y: cy + (tileW + tileH) * 8 * s };
+    const left = { x: cx - (tileW + tileH) * 16 * s, y: cy + (tileH - tileW) * 8 * s };
+
+    const lerpPt = (a: { x: number; y: number }, b: { x: number; y: number }, t: number, yOff = 0) => ({
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t + yOff,
+    });
+
+    // 1. Directional Cast Ground Shadow (bottom-right offset matching morning top-left sunlight)
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.32)';
     ctx.beginPath();
-    ctx.ellipse(48, 82, 38, 12, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 2. Stone Foundation
-    ctx.fillStyle = '#57534e';
-    ctx.fillRect(20, 68, 56, 12);
-    ctx.fillStyle = '#78716c';
-    ctx.fillRect(22, 69, 52, 3);
-
-    // 3. Timber Wall Planks
-    ctx.fillStyle = '#a16207';
-    ctx.fillRect(22, 42, 52, 28);
-
-    // Horizontal timber siding
-    ctx.strokeStyle = '#713f12';
-    ctx.lineWidth = 1;
-    for (let y = 47; y < 70; y += 6) {
-      ctx.beginPath();
-      ctx.moveTo(22, y);
-      ctx.lineTo(74, y);
-      ctx.stroke();
-    }
-
-    // 4. Arched Wooden Door with Brass Knob
-    ctx.fillStyle = '#451a03';
-    ctx.beginPath();
-    ctx.roundRect(42, 54, 12, 18, [5, 5, 0, 0]);
-    ctx.fill();
-    ctx.fillStyle = '#fbbf24';
-    ctx.beginPath();
-    ctx.arc(51, 64, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 5. Warm Glowing Glass Windows with Shutters
-    ctx.fillStyle = '#292524';
-    ctx.fillRect(26, 48, 12, 12);
-    ctx.fillStyle = '#fbbf24'; // Warm amber glow
-    ctx.fillRect(27, 49, 10, 10);
-    ctx.strokeStyle = '#78350f';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(32, 49);
-    ctx.lineTo(32, 59);
-    ctx.moveTo(27, 54);
-    ctx.lineTo(37, 54);
-    ctx.stroke();
-
-    // Window flower box with red flowers
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(25, 60, 14, 3);
-    ctx.fillStyle = '#ef4444';
-    ctx.beginPath();
-    ctx.arc(28, 59, 1.5, 0, Math.PI * 2);
-    ctx.arc(32, 59, 1.5, 0, Math.PI * 2);
-    ctx.arc(36, 59, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 6. Brick Chimney
-    ctx.fillStyle = '#991b1b';
-    ctx.fillRect(62, 14, 8, 20);
-    ctx.fillStyle = '#b91c1c';
-    ctx.fillRect(61, 13, 10, 3);
-
-    // Smoke puff
-    ctx.fillStyle = 'rgba(245, 245, 244, 0.7)';
-    ctx.beginPath();
-    ctx.arc(66, 8, 3.5, 0, Math.PI * 2);
-    ctx.arc(69, 4, 4.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 7. Pitched Shingled Roof
-    ctx.fillStyle = '#b45309';
-    ctx.beginPath();
-    ctx.moveTo(48, 18);
-    ctx.lineTo(82, 44);
-    ctx.lineTo(14, 44);
+    ctx.moveTo(left.x + 4, left.y + 4);
+    ctx.lineTo(top.x + 14, top.y + 7);
+    ctx.lineTo(right.x + 16, right.y + 8);
+    ctx.lineTo(bottom.x + 12, bottom.y + 9);
     ctx.closePath();
     ctx.fill();
 
-    // Shingle rows
-    ctx.strokeStyle = '#78350f';
+    // Tighter contact ambient shadow around building base
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.28)';
+    ctx.beginPath();
+    ctx.moveTo(left.x - 2, left.y + 1);
+    ctx.lineTo(bottom.x, bottom.y + 4);
+    ctx.lineTo(right.x + 3, right.y + 2);
+    ctx.lineTo(top.x, top.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 2. Stone Masonry Foundation Plinth (height 9px)
+    const plinthH = 9;
+    // Left plinth face
+    ctx.fillStyle = '#57534e';
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y);
+    ctx.lineTo(bottom.x, bottom.y);
+    ctx.lineTo(bottom.x, bottom.y - plinthH);
+    ctx.lineTo(left.x, left.y - plinthH);
+    ctx.closePath();
+    ctx.fill();
+    // Right plinth face (darker)
+    ctx.fillStyle = '#44403c';
+    ctx.beginPath();
+    ctx.moveTo(bottom.x, bottom.y);
+    ctx.lineTo(right.x, right.y);
+    ctx.lineTo(right.x, right.y - plinthH);
+    ctx.lineTo(bottom.x, bottom.y - plinthH);
+    ctx.closePath();
+    ctx.fill();
+    // Stone cap bevel
+    ctx.strokeStyle = '#a8a29e';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y - plinthH);
+    ctx.lineTo(bottom.x, bottom.y - plinthH);
+    ctx.lineTo(right.x, right.y - plinthH);
+    ctx.stroke();
+
+    // 3. Main Ground-Floor Walls
+    const totalWallTopOffset = wallH;
+    // Left Wall Face (Sunlit side)
+    const lGrad = ctx.createLinearGradient(left.x, left.y - wallH, bottom.x, bottom.y);
+    lGrad.addColorStop(0, wallLeftColor);
+    lGrad.addColorStop(1, wallLeftColor);
+    ctx.fillStyle = lGrad;
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y - plinthH);
+    ctx.lineTo(bottom.x, bottom.y - plinthH);
+    ctx.lineTo(bottom.x, bottom.y - totalWallTopOffset);
+    ctx.lineTo(left.x, left.y - totalWallTopOffset);
+    ctx.closePath();
+    ctx.fill();
+
+    // Horizontal siding plank lines on Left wall
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
+    ctx.lineWidth = 1;
+    for (let h = plinthH + 6; h < totalWallTopOffset - 2; h += 6) {
+      ctx.beginPath();
+      ctx.moveTo(left.x, left.y - h);
+      ctx.lineTo(bottom.x, bottom.y - h);
+      ctx.stroke();
+    }
+
+    // Right Wall Face (Shaded side)
+    ctx.fillStyle = wallRightColor;
+    ctx.beginPath();
+    ctx.moveTo(bottom.x, bottom.y - plinthH);
+    ctx.lineTo(right.x, right.y - plinthH);
+    ctx.lineTo(right.x, right.y - totalWallTopOffset);
+    ctx.lineTo(bottom.x, bottom.y - totalWallTopOffset);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let h = plinthH + 6; h < totalWallTopOffset - 2; h += 6) {
+      ctx.beginPath();
+      ctx.moveTo(bottom.x, bottom.y - h);
+      ctx.lineTo(right.x, right.y - h);
+      ctx.stroke();
+    }
+
+    // Structural Corner Timber Posts
+    ctx.strokeStyle = trimColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(left.x + 1, left.y - plinthH);
+    ctx.lineTo(left.x + 1, left.y - totalWallTopOffset);
+    ctx.moveTo(bottom.x, bottom.y - plinthH);
+    ctx.lineTo(bottom.x, bottom.y - totalWallTopOffset);
+    ctx.moveTo(right.x - 1, right.y - plinthH);
+    ctx.lineTo(right.x - 1, right.y - totalWallTopOffset);
+    ctx.stroke();
+
+    // Isometric Window Helper
+    const drawIsoWindow = (
+      pA: { x: number; y: number },
+      pB: { x: number; y: number },
+      t0: number,
+      t1: number,
+      yBot: number,
+      winH: number,
+      withFlowerBox: boolean
+    ) => {
+      const a0 = lerpPt(pA, pB, t0, -yBot);
+      const a1 = lerpPt(pA, pB, t1, -yBot);
+      const b1 = lerpPt(pA, pB, t1, -(yBot + winH));
+      const b0 = lerpPt(pA, pB, t0, -(yBot + winH));
+
+      // Dark wood frame
+      ctx.fillStyle = '#292524';
+      ctx.beginPath();
+      ctx.moveTo(a0.x, a0.y);
+      ctx.lineTo(a1.x, a1.y);
+      ctx.lineTo(b1.x, b1.y);
+      ctx.lineTo(b0.x, b0.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Warm glowing interior glass
+      const m0 = lerpPt(pA, pB, t0 + 0.015, -(yBot + 1.5));
+      const m1 = lerpPt(pA, pB, t1 - 0.015, -(yBot + 1.5));
+      const n1 = lerpPt(pA, pB, t1 - 0.015, -(yBot + winH - 1.5));
+      const n0 = lerpPt(pA, pB, t0 + 0.015, -(yBot + winH - 1.5));
+      const wGrad = ctx.createLinearGradient(n0.x, n0.y, m1.x, m1.y);
+      wGrad.addColorStop(0, '#fef08a');
+      wGrad.addColorStop(1, '#f59e0b');
+      ctx.fillStyle = wGrad;
+      ctx.beginPath();
+      ctx.moveTo(m0.x, m0.y);
+      ctx.lineTo(m1.x, m1.y);
+      ctx.lineTo(n1.x, n1.y);
+      ctx.lineTo(n0.x, n0.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Window mullions
+      const midTop = lerpPt(b0, b1, 0.5);
+      const midBot = lerpPt(a0, a1, 0.5);
+      const midL = lerpPt(a0, b0, 0.5);
+      const midR = lerpPt(a1, b1, 0.5);
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(midTop.x, midTop.y);
+      ctx.lineTo(midBot.x, midBot.y);
+      ctx.moveTo(midL.x, midL.y);
+      ctx.lineTo(midR.x, midR.y);
+      ctx.stroke();
+
+      // Flower box under window
+      if (withFlowerBox) {
+        const fb0 = lerpPt(pA, pB, t0 - 0.02, -(yBot - 2));
+        const fb1 = lerpPt(pA, pB, t1 + 0.02, -(yBot - 2));
+        ctx.strokeStyle = '#78350f';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(fb0.x, fb0.y);
+        ctx.lineTo(fb1.x, fb1.y);
+        ctx.stroke();
+
+        // Tiny flowers
+        for (let k = 0; k < 3; k++) {
+          const fp = lerpPt(fb0, fb1, 0.2 + k * 0.3, -2);
+          ctx.fillStyle = k === 1 ? '#facc15' : '#ef4444';
+          ctx.beginPath();
+          ctx.arc(fp.x, fp.y, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    };
+
+    // Isometric Front Door Helper
+    const drawIsoDoor = (pA: { x: number; y: number }, pB: { x: number; y: number }, t0: number, t1: number) => {
+      const doorH = Math.min(20, wallH - 9);
+      const d0 = lerpPt(pA, pB, t0, -plinthH);
+      const d1 = lerpPt(pA, pB, t1, -plinthH);
+      const u1 = lerpPt(pA, pB, t1, -(plinthH + doorH));
+      const u0 = lerpPt(pA, pB, t0, -(plinthH + doorH));
+
+      // Frame
+      ctx.fillStyle = '#292524';
+      ctx.beginPath();
+      ctx.moveTo(d0.x, d0.y);
+      ctx.lineTo(d1.x, d1.y);
+      ctx.lineTo(u1.x, u1.y);
+      ctx.lineTo(u0.x, u0.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Oak door panel
+      const i0 = lerpPt(pA, pB, t0 + 0.015, -(plinthH + 0.5));
+      const i1 = lerpPt(pA, pB, t1 - 0.015, -(plinthH + 0.5));
+      const v1 = lerpPt(pA, pB, t1 - 0.015, -(plinthH + doorH - 1.5));
+      const v0 = lerpPt(pA, pB, t0 + 0.015, -(plinthH + doorH - 1.5));
+      ctx.fillStyle = '#78350f';
+      ctx.beginPath();
+      ctx.moveTo(i0.x, i0.y);
+      ctx.lineTo(i1.x, i1.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v0.x, v0.y);
+      ctx.closePath();
+      ctx.fill();
+
+      // Brass knob
+      const knob = lerpPt(i0, i1, 0.78, -doorH * 0.45);
+      ctx.fillStyle = '#fbbf24';
+      ctx.beginPath();
+      ctx.arc(knob.x, knob.y, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Stone doorstep slab extending out
+      const stepExt = 4;
+      ctx.fillStyle = '#a8a29e';
+      ctx.beginPath();
+      ctx.moveTo(d0.x, d0.y + 8);
+      ctx.lineTo(d1.x, d1.y + 8);
+      ctx.lineTo(d1.x - stepExt, d1.y + 11);
+      ctx.lineTo(d0.x - stepExt, d0.y + 11);
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    // Door & Windows on Ground Floor
+    if (doorSide === 'left') {
+      drawIsoDoor(left, bottom, 0.56, 0.78);
+      drawIsoWindow(left, bottom, 0.16, 0.42, plinthH + 5, 11, hasFlowerBoxes);
+      drawIsoWindow(bottom, right, 0.25, 0.56, plinthH + 5, 11, hasFlowerBoxes);
+    } else {
+      drawIsoDoor(bottom, right, 0.24, 0.52);
+      drawIsoWindow(left, bottom, 0.16, 0.42, plinthH + 5, 11, hasFlowerBoxes);
+      drawIsoWindow(left, bottom, 0.56, 0.82, plinthH + 5, 11, hasFlowerBoxes);
+    }
+
+    // Blacksmith Glowing Forge Hearth on Right Wall
+    if (hasForgeHearth) {
+      const f0 = lerpPt(bottom, right, 0.62, -plinthH);
+      const f1 = lerpPt(bottom, right, 0.88, -plinthH);
+      const fu1 = lerpPt(bottom, right, 0.88, -(plinthH + 15));
+      const fu0 = lerpPt(bottom, right, 0.62, -(plinthH + 15));
+      ctx.fillStyle = '#1c1917';
+      ctx.beginPath();
+      ctx.moveTo(f0.x, f0.y);
+      ctx.lineTo(f1.x, f1.y);
+      ctx.lineTo(fu1.x, fu1.y);
+      ctx.lineTo(fu0.x, fu0.y);
+      ctx.closePath();
+      ctx.fill();
+      // Glowing embers inside
+      const fg = ctx.createRadialGradient((f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 4, 1, (f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 4, 8);
+      fg.addColorStop(0, '#fef08a');
+      fg.addColorStop(0.5, '#f97316');
+      fg.addColorStop(1, 'rgba(220, 38, 38, 0.2)');
+      ctx.fillStyle = fg;
+      ctx.beginPath();
+      ctx.arc((f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 4, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Optional Striped Shop Awning along Left-Front Wall
+    if (hasAwning) {
+      const aL = lerpPt(left, bottom, 0.08, -(wallH - 4));
+      const aR = lerpPt(left, bottom, 0.50, -(wallH - 4));
+      const awSteps = 6;
+      for (let i = 0; i < awSteps; i++) {
+        const s0 = lerpPt(aL, aR, i / awSteps);
+        const s1 = lerpPt(aL, aR, (i + 1) / awSteps);
+        ctx.fillStyle = hasAwning.colors[i % 2];
+        ctx.beginPath();
+        ctx.moveTo(s0.x, s0.y);
+        ctx.lineTo(s1.x, s1.y);
+        ctx.lineTo(s1.x - 5, s1.y + 8);
+        ctx.lineTo(s0.x - 5, s0.y + 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // 4. Optional Second Story (Tudor Timber-Framed Upper Level)
+    let eaveBase = wallH;
+    if (upperH > 0) {
+      const uBot = wallH;
+      const uTop = wallH + upperH;
+      eaveBase = uTop;
+
+      // Left upper face
+      ctx.fillStyle = upperLeftColor;
+      ctx.beginPath();
+      ctx.moveTo(left.x - 2, left.y - uBot);
+      ctx.lineTo(bottom.x, bottom.y - uBot + 1);
+      ctx.lineTo(bottom.x, bottom.y - uTop + 1);
+      ctx.lineTo(left.x - 2, left.y - uTop);
+      ctx.closePath();
+      ctx.fill();
+
+      // Right upper face (slightly shaded)
+      ctx.fillStyle = upperRightColor;
+      ctx.beginPath();
+      ctx.moveTo(bottom.x, bottom.y - uBot + 1);
+      ctx.lineTo(right.x + 2, right.y - uBot);
+      ctx.lineTo(right.x + 2, right.y - uTop);
+      ctx.lineTo(bottom.x, bottom.y - uTop + 1);
+      ctx.closePath();
+      ctx.fill();
+
+      if (hasTimberBeams) {
+        ctx.strokeStyle = trimColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(left.x - 2, left.y - uBot);
+        ctx.lineTo(bottom.x, bottom.y - uBot + 1);
+        ctx.lineTo(right.x + 2, right.y - uBot);
+        ctx.moveTo(left.x - 2, left.y - uTop);
+        ctx.lineTo(bottom.x, bottom.y - uTop + 1);
+        ctx.lineTo(right.x + 2, right.y - uTop);
+        // Vertical & diagonal beams
+        const mL = lerpPt(left, bottom, 0.5);
+        ctx.moveTo(mL.x, mL.y - uBot);
+        ctx.lineTo(mL.x, mL.y - uTop);
+        ctx.moveTo(bottom.x, bottom.y - uBot + 1);
+        ctx.lineTo(bottom.x, bottom.y - uTop + 1);
+        ctx.stroke();
+      }
+
+      // Upper story windows
+      drawIsoWindow(left, bottom, 0.2, 0.42, uBot + 4, upperH - 7, false);
+      drawIsoWindow(left, bottom, 0.58, 0.80, uBot + 4, upperH - 7, false);
+      drawIsoWindow(bottom, right, 0.34, 0.66, uBot + 4, upperH - 7, false);
+    }
+
+    // 5. Brick / Stone Chimney (drawn behind roof ridge)
+    if (chimneySide !== 'none') {
+      const chBase = chimneySide === 'back'
+        ? lerpPt(top, right, 0.35, -(eaveBase + roofH * 0.55))
+        : lerpPt(bottom, right, 0.55, -(eaveBase + roofH * 0.65));
+      ctx.fillStyle = chimneySide === 'back' ? '#991b1b' : '#57534e';
+      ctx.fillRect(chBase.x - 5, chBase.y - 18, 10, 22);
+      ctx.fillStyle = chimneySide === 'back' ? '#7f1d1d' : '#44403c';
+      ctx.fillRect(chBase.x, chBase.y - 18, 5, 22);
+      ctx.fillStyle = '#b91c1c';
+      ctx.fillRect(chBase.x - 6, chBase.y - 20, 12, 3);
+      // Soft rising smoke puffs
+      ctx.fillStyle = 'rgba(241, 245, 249, 0.65)';
+      ctx.beginPath();
+      ctx.arc(chBase.x + 1, chBase.y - 25, 3.2, 0, Math.PI * 2);
+      ctx.arc(chBase.x + 4, chBase.y - 31, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 6. Pitched Isometric Gable Roof (ridge runs along left->bottom axis for crisp silhouette)
+    const eaveOver = 5;
+    const eaveLeft = { x: left.x - eaveOver, y: left.y - eaveBase + 3 };
+    const eaveBot = { x: bottom.x, y: bottom.y - eaveBase + 5 };
+    const eaveRight = { x: right.x + eaveOver, y: right.y - eaveBase + 3 };
+    const eaveTop = { x: top.x, y: top.y - eaveBase - 1 };
+
+    // Roof ridge endpoints (midpoints between left<->top and bottom<->right, elevated by roofH)
+    const ridgeBack = {
+      x: (eaveLeft.x + eaveTop.x) / 2,
+      y: (eaveLeft.y + eaveTop.y) / 2 - roofH,
+    };
+    const ridgeFront = {
+      x: (eaveBot.x + eaveRight.x) / 2,
+      y: (eaveBot.y + eaveRight.y) / 2 - roofH,
+    };
+
+    // Back-top roof slope (visible slightly at top)
+    ctx.fillStyle = roofDarkColor;
+    ctx.beginPath();
+    ctx.moveTo(eaveTop.x, eaveTop.y);
+    ctx.lineTo(eaveRight.x, eaveRight.y);
+    ctx.lineTo(ridgeFront.x, ridgeFront.y);
+    ctx.lineTo(ridgeBack.x, ridgeBack.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Right Gable Triangle Wall (eaveBot -> eaveRight -> ridgeFront)
+    ctx.fillStyle = roofGableColor;
+    ctx.beginPath();
+    ctx.moveTo(bottom.x, bottom.y - eaveBase + 1);
+    ctx.lineTo(right.x, right.y - eaveBase);
+    ctx.lineTo(ridgeFront.x, ridgeFront.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = trimColor;
     ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(48, 18);
-    ctx.lineTo(48, 44);
-    ctx.moveTo(30, 32);
-    ctx.lineTo(66, 32);
-    ctx.moveTo(22, 38);
-    ctx.lineTo(74, 38);
     ctx.stroke();
 
-    // Roof ridge highlight
-    ctx.strokeStyle = '#d97706';
-    ctx.lineWidth = 2;
+    // Front-Left Sunlit Roof Slope (eaveLeft -> eaveBot -> ridgeFront -> ridgeBack)
+    const roofGrad = ctx.createLinearGradient(ridgeBack.x, ridgeBack.y, eaveBot.x, eaveBot.y);
+    roofGrad.addColorStop(0, roofLightColor);
+    roofGrad.addColorStop(1, roofDarkColor);
+    ctx.fillStyle = roofGrad;
     ctx.beginPath();
-    ctx.moveTo(14, 44);
-    ctx.lineTo(48, 18);
-    ctx.lineTo(82, 44);
+    ctx.moveTo(eaveLeft.x, eaveLeft.y);
+    ctx.lineTo(eaveBot.x, eaveBot.y);
+    ctx.lineTo(ridgeFront.x, ridgeFront.y);
+    ctx.lineTo(ridgeBack.x, ridgeBack.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Crisp Roof Shingle Courses
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.lineWidth = 1.1;
+    for (let r = 0.25; r <= 0.78; r += 0.25) {
+      const p0 = lerpPt(ridgeBack, eaveLeft, r);
+      const p1 = lerpPt(ridgeFront, eaveBot, r);
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+    }
+
+    // Overhang Eaves Trim & Ridge Cap Highlight
+    ctx.strokeStyle = trimColor;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(eaveLeft.x, eaveLeft.y);
+    ctx.lineTo(eaveBot.x, eaveBot.y);
+    ctx.lineTo(ridgeFront.x, ridgeFront.y);
+    ctx.lineTo(eaveRight.x, eaveRight.y);
     ctx.stroke();
 
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(ridgeBack.x, ridgeBack.y);
+    ctx.lineTo(ridgeFront.x, ridgeFront.y);
+    ctx.stroke();
+
+    // Optional Dormer Window on Roof (for Grand Villa / Manor)
+    if (hasDormer) {
+      const dm = lerpPt(lerpPt(ridgeBack, ridgeFront, 0.5), lerpPt(eaveLeft, eaveBot, 0.5), 0.45);
+      ctx.fillStyle = upperLeftColor;
+      ctx.fillRect(dm.x - 7, dm.y - 8, 14, 10);
+      ctx.fillStyle = roofDarkColor;
+      ctx.beginPath();
+      ctx.moveTo(dm.x - 9, dm.y - 8);
+      ctx.lineTo(dm.x, dm.y - 15);
+      ctx.lineTo(dm.x + 9, dm.y - 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(dm.x - 4, dm.y - 6, 8, 6);
+    }
+
+    // 7. Hanging Shop Signboard near front corner
+    if (signType !== 'none') {
+      const sp = lerpPt(left, bottom, 0.88, -(wallH - 8));
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(sp.x - 7, sp.y - 2, 14, 2);
+      ctx.fillStyle = '#fef3c7';
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(sp.x - 6, sp.y, 12, 10, 2);
+      ctx.fill();
+      ctx.stroke();
+
+      if (signType === 'bakery') {
+        ctx.fillStyle = '#d97706';
+        ctx.beginPath();
+        ctx.ellipse(sp.x, sp.y + 5, 4, 2.2, -0.3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (signType === 'general') {
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y + 5, 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (signType === 'grocery') {
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.arc(sp.x - 1.5, sp.y + 5.5, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#16a34a';
+        ctx.beginPath();
+        ctx.arc(sp.x + 2, sp.y + 5, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (signType === 'blacksmith') {
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 3, sp.y + 7);
+        ctx.lineTo(sp.x + 3, sp.y + 3);
+        ctx.stroke();
+      } else if (signType === 'florist') {
+        ctx.fillStyle = '#ec4899';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y + 5, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(sp.x - 0.8, sp.y + 4.2, 1.6, 1.6);
+      }
+    }
+
+    return canvas;
+  }
+
+  // 12A. Cozy Wooden Cottage (2x2 Isometric Building - Upgraded Visual Quality & True Footprint)
+  private static createHouseSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_house_small')) return;
+    const canvas = this.drawIsoBuildingCanvas({
+      canvasW: 148,
+      canvasH: 140,
+      baseCenterY: 100,
+      tileW: 2,
+      tileH: 2,
+      wallH: 34,
+      roofH: 26,
+      wallLeftColor: '#b4742a',
+      wallRightColor: '#8c5319',
+      roofLightColor: '#c2571a',
+      roofDarkColor: '#923a0f',
+      roofGableColor: '#9c6121',
+      doorSide: 'left',
+      hasFlowerBoxes: true,
+      chimneySide: 'back',
+    });
     textures.addCanvas('bld_house_small', canvas);
     textures.addCanvas('obj_house_small', canvas);
+  }
+
+  // 12B. Timber Manor (3x2 Two-Story Medium House)
+  private static createMediumHouseSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_house_medium')) return;
+    const canvas = this.drawIsoBuildingCanvas({
+      canvasW: 188,
+      canvasH: 172,
+      baseCenterY: 124,
+      tileW: 3,
+      tileH: 2,
+      wallH: 32,
+      upperH: 22,
+      roofH: 28,
+      wallLeftColor: '#9a5b25',
+      wallRightColor: '#754116',
+      upperLeftColor: '#fef3c7',
+      upperRightColor: '#e7d5a9',
+      roofLightColor: '#b93822',
+      roofDarkColor: '#882414',
+      roofGableColor: '#e7d5a9',
+      doorSide: 'left',
+      hasFlowerBoxes: true,
+      hasDormer: true,
+      hasTimberBeams: true,
+      chimneySide: 'back',
+    });
+    textures.addCanvas('bld_house_medium', canvas);
+    textures.addCanvas('obj_house_medium', canvas);
+  }
+
+  // 12C. Grand Homestead Villa (3x3 Large Two-Story Villa)
+  private static createLargeHouseSprite(textures: Phaser.Textures.TextureManager) {
+    if (textures.exists('bld_house_large')) return;
+    const canvas = this.drawIsoBuildingCanvas({
+      canvasW: 224,
+      canvasH: 196,
+      baseCenterY: 140,
+      tileW: 3,
+      tileH: 3,
+      wallH: 36,
+      upperH: 24,
+      roofH: 34,
+      wallLeftColor: '#d6cfc2',
+      wallRightColor: '#b5ada0',
+      upperLeftColor: '#fef9c3',
+      upperRightColor: '#e9dfaf',
+      roofLightColor: '#3b6e8c',
+      roofDarkColor: '#254b63',
+      roofGableColor: '#e9dfaf',
+      doorSide: 'left',
+      hasFlowerBoxes: true,
+      hasDormer: true,
+      hasTimberBeams: true,
+      chimneySide: 'back',
+    });
+    textures.addCanvas('bld_house_large', canvas);
+    textures.addCanvas('obj_house_large', canvas);
   }
 
   // 13. Clean Wooden Fence
@@ -2017,114 +2576,29 @@ export class PixelArtGenerator {
 
   // 21. Charming Town Props & Architecture (Cottages, Bakery Stall, Benches, Flower Planters, Crates, Barrels, Signposts)
   private static createTownPropsAndBuildings(textures: Phaser.Textures.TextureManager) {
-    // 1. Cozy Two-Story Town Residence / Cottage (84x88)
+    // 1. Cozy Two-Story Town Residence / Cottage (2x2 True Isometric Architecture)
     if (!textures.exists('obj_town_house')) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 84;
-      canvas.height = 88;
-      const ctx = canvas.getContext('2d')!;
-
-      // Drop shadow
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
-      ctx.beginPath();
-      ctx.ellipse(42, 78, 36, 9, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Ground Floor: Warm River Cobblestone & Masonry
-      ctx.fillStyle = '#57534e';
-      ctx.fillRect(16, 48, 52, 28);
-      ctx.fillStyle = '#78716c';
-      ctx.fillRect(18, 49, 48, 3);
-
-      // Upper Floor: Cream Timber-Framed Stucco
-      ctx.fillStyle = '#fef3c7';
-      ctx.fillRect(14, 28, 56, 22);
-
-      // Tudor timber framing beams
-      ctx.fillStyle = '#451a03';
-      ctx.fillRect(14, 28, 56, 3); // upper trim
-      ctx.fillRect(14, 47, 56, 3); // mid trim
-      ctx.fillRect(14, 28, 4, 22); // left timber
-      ctx.fillRect(66, 28, 4, 22); // right timber
-      ctx.fillRect(40, 28, 4, 22); // center timber
-      // Diagonal cross beams
-      ctx.strokeStyle = '#451a03';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(18, 29);
-      ctx.lineTo(39, 48);
-      ctx.moveTo(44, 29);
-      ctx.lineTo(65, 48);
-      ctx.stroke();
-
-      // Pitched Terracotta Tile Roof
-      ctx.fillStyle = '#b45309';
-      ctx.beginPath();
-      ctx.moveTo(42, 6);
-      ctx.lineTo(76, 29);
-      ctx.lineTo(8, 29);
-      ctx.closePath();
-      ctx.fill();
-
-      // Roof tile ridge lines
-      ctx.strokeStyle = '#78350f';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(42, 6);
-      ctx.lineTo(42, 29);
-      ctx.moveTo(25, 18);
-      ctx.lineTo(59, 18);
-      ctx.stroke();
-
-      // Upper dormer window with warm glow
-      ctx.fillStyle = '#292524';
-      ctx.fillRect(36, 12, 12, 10);
-      ctx.fillStyle = '#fbbf24';
-      ctx.fillRect(37, 13, 10, 8);
-
-      // Ground floor arched oak door with brass ring
-      ctx.fillStyle = '#451a03';
-      ctx.beginPath();
-      ctx.roundRect(36, 56, 14, 20, [6, 6, 0, 0]);
-      ctx.fill();
-      ctx.fillStyle = '#fbbf24';
-      ctx.beginPath();
-      ctx.arc(47, 67, 1.3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Lower glowing windows with flower box
-      ctx.fillStyle = '#292524';
-      ctx.fillRect(20, 56, 12, 12);
-      ctx.fillStyle = '#fde047';
-      ctx.fillRect(21, 57, 10, 10);
-      ctx.fillStyle = '#292524';
-      ctx.fillRect(54, 56, 12, 12);
-      ctx.fillStyle = '#fde047';
-      ctx.fillRect(55, 57, 10, 10);
-
-      // Window flower box overflowing with red/pink blooms
-      ctx.fillStyle = '#78350f';
-      ctx.fillRect(19, 68, 14, 3);
-      ctx.fillRect(53, 68, 14, 3);
-      ctx.fillStyle = '#ef4444';
-      ctx.fillRect(21, 67, 3, 2);
-      ctx.fillRect(26, 67, 3, 2);
-      ctx.fillRect(30, 67, 2, 2);
-      ctx.fillStyle = '#ec4899';
-      ctx.fillRect(55, 67, 3, 2);
-      ctx.fillRect(60, 67, 3, 2);
-
-      // Chimney with cozy smoke
-      ctx.fillStyle = '#991b1b';
-      ctx.fillRect(58, 2, 8, 16);
-      ctx.fillStyle = '#b91c1c';
-      ctx.fillRect(57, 1, 10, 2);
-      ctx.fillStyle = 'rgba(241, 245, 249, 0.65)';
-      ctx.beginPath();
-      ctx.arc(62, -2, 3, 0, Math.PI * 2);
-      ctx.arc(65, -6, 4, 0, Math.PI * 2);
-      ctx.fill();
-
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 148,
+        canvasH: 156,
+        baseCenterY: 116,
+        tileW: 2,
+        tileH: 2,
+        wallH: 30,
+        upperH: 20,
+        roofH: 26,
+        wallLeftColor: '#78716c',
+        wallRightColor: '#57534e',
+        upperLeftColor: '#fef3c7',
+        upperRightColor: '#e7d5a9',
+        roofLightColor: '#c2571a',
+        roofDarkColor: '#8d360e',
+        roofGableColor: '#e7d5a9',
+        doorSide: 'left',
+        hasFlowerBoxes: true,
+        hasTimberBeams: true,
+        chimneySide: 'back',
+      });
       textures.addCanvas('obj_town_house', canvas);
       textures.addCanvas('bld_town_house', canvas);
     }
@@ -2434,6 +2908,266 @@ export class PixelArtGenerator {
     }
   }
 
+  // 21B. Integrated Village Shop Buildings (3x2 & 2x2) + Front Display Shelves/Racks
+  private static createVillageShopBuildings(textures: Phaser.Textures.TextureManager) {
+    // 1. Village Bakery House (3x2)
+    if (!textures.exists('obj_house_bakery')) {
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 188,
+        canvasH: 172,
+        baseCenterY: 124,
+        tileW: 3,
+        tileH: 2,
+        wallH: 36,
+        roofH: 28,
+        wallLeftColor: '#f5deb3',
+        wallRightColor: '#d9bc8c',
+        roofLightColor: '#ea580c',
+        roofDarkColor: '#9a3412',
+        roofGableColor: '#e2c598',
+        doorSide: 'left',
+        hasAwning: { colors: ['#ea580c', '#fef3c7'] },
+        hasFlowerBoxes: true,
+        chimneySide: 'back',
+        signType: 'bakery',
+      });
+      textures.addCanvas('obj_house_bakery', canvas);
+    }
+
+    // 2. General Store (3x2)
+    if (!textures.exists('obj_house_general')) {
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 188,
+        canvasH: 172,
+        baseCenterY: 124,
+        tileW: 3,
+        tileH: 2,
+        wallH: 36,
+        upperH: 16,
+        roofH: 26,
+        wallLeftColor: '#9f1239',
+        wallRightColor: '#6d0d27',
+        upperLeftColor: '#fde68a',
+        upperRightColor: '#d9c074',
+        roofLightColor: '#475569',
+        roofDarkColor: '#334155',
+        roofGableColor: '#d9c074',
+        doorSide: 'left',
+        hasAwning: { colors: ['#881337', '#fef08a'] },
+        hasFlowerBoxes: false,
+        chimneySide: 'none',
+        signType: 'general',
+      });
+      textures.addCanvas('obj_house_general', canvas);
+    }
+
+    // 3. Fresh Grocery Shop (3x2)
+    if (!textures.exists('obj_house_grocery')) {
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 188,
+        canvasH: 172,
+        baseCenterY: 124,
+        tileW: 3,
+        tileH: 2,
+        wallH: 36,
+        roofH: 28,
+        wallLeftColor: '#dcfce7',
+        wallRightColor: '#b5d9c1',
+        roofLightColor: '#15803d',
+        roofDarkColor: '#14532d',
+        roofGableColor: '#c3e6cf',
+        doorSide: 'left',
+        hasAwning: { colors: ['#16a34a', '#ffffff'] },
+        hasFlowerBoxes: true,
+        chimneySide: 'none',
+        signType: 'grocery',
+      });
+      textures.addCanvas('obj_house_grocery', canvas);
+    }
+
+    // 4. Blacksmith Forge Shop (3x2)
+    if (!textures.exists('obj_house_blacksmith')) {
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 188,
+        canvasH: 172,
+        baseCenterY: 124,
+        tileW: 3,
+        tileH: 2,
+        wallH: 36,
+        roofH: 28,
+        wallLeftColor: '#64748b',
+        wallRightColor: '#475569',
+        roofLightColor: '#334155',
+        roofDarkColor: '#1e293b',
+        roofGableColor: '#475569',
+        trimColor: '#1c1917',
+        doorSide: 'left',
+        hasFlowerBoxes: false,
+        hasForgeHearth: true,
+        chimneySide: 'right',
+        signType: 'blacksmith',
+      });
+      textures.addCanvas('obj_house_blacksmith', canvas);
+    }
+
+    // 5. Charming Flower Shop (2x2)
+    if (!textures.exists('obj_house_florist')) {
+      const canvas = this.drawIsoBuildingCanvas({
+        canvasW: 148,
+        canvasH: 140,
+        baseCenterY: 100,
+        tileW: 2,
+        tileH: 2,
+        wallH: 34,
+        roofH: 26,
+        wallLeftColor: '#fce7f3',
+        wallRightColor: '#e2c5d4',
+        roofLightColor: '#22c55e',
+        roofDarkColor: '#15803d',
+        roofGableColor: '#e2c5d4',
+        doorSide: 'left',
+        hasAwning: { colors: ['#ec4899', '#fdf2f8'] },
+        hasFlowerBoxes: true,
+        chimneySide: 'none',
+        signType: 'florist',
+      });
+      textures.addCanvas('obj_house_florist', canvas);
+    }
+
+    // 6. Bakery Bread & Pastry Display Shelf (48x42)
+    if (!textures.exists('obj_shelf_bakery')) {
+      const c = document.createElement('canvas');
+      c.width = 48;
+      c.height = 42;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(24, 36, 18, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(8, 12, 32, 24);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(10, 14, 28, 8);
+      ctx.fillRect(10, 25, 28, 8);
+      // Croissants & loaves
+      ctx.fillStyle = '#f59e0b';
+      for (const bx of [14, 21, 28, 34]) {
+        ctx.beginPath();
+        ctx.ellipse(bx, 18, 3, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(13, 27, 9, 4);
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(31, 29, 3, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('obj_shelf_bakery', c);
+    }
+
+    // 7. Grocery Fresh Produce Display Shelf (48x42)
+    if (!textures.exists('obj_shelf_grocery')) {
+      const c = document.createElement('canvas');
+      c.width = 48;
+      c.height = 42;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(24, 36, 18, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(8, 14, 32, 22);
+      // Upper bin: Red apples & carrots
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(14, 18, 2.8, 0, Math.PI * 2);
+      ctx.arc(19, 17, 2.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f97316';
+      ctx.fillRect(26, 16, 9, 3);
+      // Lower bin: Crisp cabbages & lemons
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(15, 28, 3.2, 0, Math.PI * 2);
+      ctx.arc(22, 28, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.arc(31, 28, 2.5, 0, Math.PI * 2);
+      ctx.arc(35, 27, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('obj_shelf_grocery', c);
+    }
+
+    // 8. Blacksmith Tool & Ingot Rack (48x44)
+    if (!textures.exists('obj_rack_blacksmith')) {
+      const c = document.createElement('canvas');
+      c.width = 48;
+      c.height = 44;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.38)';
+      ctx.beginPath();
+      ctx.ellipse(24, 38, 17, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(10, 10, 3, 28);
+      ctx.fillRect(35, 10, 3, 28);
+      ctx.fillRect(10, 10, 28, 3);
+      ctx.fillRect(10, 26, 28, 4);
+      // Hanging iron sword & hammer
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(17, 13, 3, 12);
+      ctx.fillRect(25, 13, 3, 10);
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(23, 20, 7, 4);
+      // Stacked iron ingots on shelf
+      ctx.fillStyle = '#64748b';
+      ctx.fillRect(15, 22, 6, 4);
+      ctx.fillRect(28, 22, 6, 4);
+      textures.addCanvas('obj_rack_blacksmith', c);
+    }
+
+    // 9. Tiered Florist Flower Stand (48x44)
+    if (!textures.exists('obj_flower_stand')) {
+      const c = document.createElement('canvas');
+      c.width = 48;
+      c.height = 44;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+      ctx.beginPath();
+      ctx.ellipse(24, 38, 18, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(8, 18, 32, 18);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(10, 14, 28, 5);
+      // Lush greenery & vibrant floral buckets
+      ctx.fillStyle = '#16a34a';
+      ctx.beginPath();
+      ctx.arc(16, 14, 5, 0, Math.PI * 2);
+      ctx.arc(24, 13, 5.5, 0, Math.PI * 2);
+      ctx.arc(32, 14, 5, 0, Math.PI * 2);
+      ctx.fill();
+      const blooms = [
+        [14, 12, '#facc15'],
+        [18, 15, '#ef4444'],
+        [24, 11, '#ec4899'],
+        [28, 14, '#c084fc'],
+        [33, 12, '#f43f5e'],
+        [16, 24, '#f97316'],
+        [25, 24, '#38bdf8'],
+        [32, 24, '#facc15'],
+      ] as const;
+      for (const [fx, fy, col] of blooms) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(fx, fy, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      textures.addCanvas('obj_flower_stand', c);
+    }
+  }
+
   // 22. Agricultural & Farm Environment Sprites (Stone Well, Hay Bales, Scarecrow, Wheat, Cabbage, Pumpkin)
   private static createFarmEnvironmentSprites(textures: Phaser.Textures.TextureManager) {
     // 1. Village Stone Water Well (48x56)
@@ -2705,7 +3439,7 @@ export class PixelArtGenerator {
     }
   }
 
-  // 23. Modern Stylized 2D Character Spritesheet (High Fidelity, Crisp Contours, Volumetric Shading)
+  // 23. High-Resolution 2x Stylized 2D Character Spritesheet (64x88 per frame, rendered at scale 0.5 for crisp 32x44 presence)
   // 12 frames (4 directions x 3 animation steps): [Down 0..2, Left 3..5, Right 6..8, Up 9..11]
   private static createCharacterSpritesheet(
     textures: Phaser.Textures.TextureManager,
@@ -2717,8 +3451,8 @@ export class PixelArtGenerator {
   ) {
     if (textures.exists(key)) return;
 
-    const frameW = 32;
-    const frameH = 44;
+    const frameW = 64;
+    const frameH = 88;
     const totalFrames = 12;
     const canvas = document.createElement('canvas');
     canvas.width = frameW * totalFrames;
@@ -2728,255 +3462,355 @@ export class PixelArtGenerator {
     for (let f = 0; f < totalFrames; f++) {
       const dirIndex = Math.floor(f / 3); // 0=down, 1=left, 2=right, 3=up
       const stepIndex = f % 3; // 0=left leg step, 1=idle, 2=right leg step
-      const ox = f * frameW;
 
-      // Soft grounded drop shadow beneath character feet
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+      ctx.save();
+      ctx.translate(f * frameW, 0);
+      ctx.scale(2, 2); // Render in 32x44 logical coordinates onto 64x88 crisp physical canvas
+
+      // Crisp grounded contact shadow beneath character feet
+      const footShadow = ctx.createRadialGradient(16, 40, 1, 16, 40, 10.5);
+      footShadow.addColorStop(0, 'rgba(2, 6, 23, 0.55)');
+      footShadow.addColorStop(0.55, 'rgba(15, 23, 42, 0.28)');
+      footShadow.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      ctx.fillStyle = footShadow;
       ctx.beginPath();
-      ctx.ellipse(ox + 16, 40, 10, 3.8, 0, 0, Math.PI * 2);
+      ctx.ellipse(16, 40, 10.5, 4, 0, 0, Math.PI * 2);
       ctx.fill();
 
       // Natural bobbing offset when walking
-      const bob = stepIndex === 1 ? 0 : -1;
+      const bob = stepIndex === 1 ? 0 : -0.9;
 
-      // --- 1. LEGS & BOOTS ---
-      const bootSoleColor = '#0f172a';
+      // --- 1. LEGS & SHADED BOOTS ---
+      const bootSoleColor = '#090d16';
       const bootLeatherColor = '#334155';
-      const bootTrimColor = '#64748b';
+      const bootHighlightColor = '#475569';
+      const bootTrimColor = '#94a3b8';
 
       if (dirIndex === 0 || dirIndex === 3) {
-        // Facing Down or Up
         const leftLegY = stepIndex === 0 ? 33 : 35;
         const rightLegY = stepIndex === 2 ? 33 : 35;
 
         // Left Leg & Boot
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(10.6, leftLegY + bob - 0.3, 5.3, 6.2, 1);
+        ctx.fill();
         ctx.fillStyle = bootLeatherColor;
-        ctx.fillRect(ox + 11, leftLegY + bob, 4.5, 5.5);
+        ctx.fillRect(11, leftLegY + bob, 4.5, 5.2);
+        ctx.fillStyle = bootHighlightColor;
+        ctx.fillRect(11.3, leftLegY + bob + 0.5, 1.8, 3.6);
         ctx.fillStyle = bootSoleColor;
-        ctx.fillRect(ox + 10.5, leftLegY + bob + 4.5, 5.5, 1.8);
+        ctx.fillRect(10.5, leftLegY + bob + 4.4, 5.5, 1.6);
         ctx.fillStyle = bootTrimColor;
-        ctx.fillRect(ox + 11, leftLegY + bob + 1, 4.5, 1.2);
+        ctx.fillRect(11, leftLegY + bob + 0.8, 4.5, 1.0);
 
         // Right Leg & Boot
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(16.6, rightLegY + bob - 0.3, 5.3, 6.2, 1);
+        ctx.fill();
         ctx.fillStyle = bootLeatherColor;
-        ctx.fillRect(ox + 17, rightLegY + bob, 4.5, 5.5);
+        ctx.fillRect(17, rightLegY + bob, 4.5, 5.2);
+        ctx.fillStyle = bootHighlightColor;
+        ctx.fillRect(17.3, rightLegY + bob + 0.5, 1.8, 3.6);
         ctx.fillStyle = bootSoleColor;
-        ctx.fillRect(ox + 16.5, rightLegY + bob + 4.5, 5.5, 1.8);
+        ctx.fillRect(16.5, rightLegY + bob + 4.4, 5.5, 1.6);
         ctx.fillStyle = bootTrimColor;
-        ctx.fillRect(ox + 17, rightLegY + bob + 1, 4.5, 1.2);
+        ctx.fillRect(17, rightLegY + bob + 0.8, 4.5, 1.0);
       } else if (dirIndex === 1) {
-        // Facing Left
-        const legShift = stepIndex === 0 ? -2.5 : stepIndex === 2 ? 2.5 : 0;
+        const legShift = stepIndex === 0 ? -2.4 : stepIndex === 2 ? 2.4 : 0;
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(12.6 + legShift, 33.7 + bob, 5.8, 6.2);
         ctx.fillStyle = bootLeatherColor;
-        ctx.fillRect(ox + 13 + legShift, 34 + bob, 5, 5.5);
+        ctx.fillRect(13 + legShift, 34 + bob, 5, 5.2);
+        ctx.fillStyle = bootHighlightColor;
+        ctx.fillRect(13.3 + legShift, 34.4 + bob, 2, 3.5);
         ctx.fillStyle = bootSoleColor;
-        ctx.fillRect(ox + 12 + legShift, 38.5 + bob, 6.5, 1.8);
+        ctx.fillRect(12 + legShift, 38.4 + bob, 6.5, 1.7);
       } else {
-        // Facing Right
-        const legShift = stepIndex === 0 ? 2.5 : stepIndex === 2 ? -2.5 : 0;
+        const legShift = stepIndex === 0 ? 2.4 : stepIndex === 2 ? -2.4 : 0;
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(13.6 + legShift, 33.7 + bob, 5.8, 6.2);
         ctx.fillStyle = bootLeatherColor;
-        ctx.fillRect(ox + 14 + legShift, 34 + bob, 5, 5.5);
+        ctx.fillRect(14 + legShift, 34 + bob, 5, 5.2);
+        ctx.fillStyle = bootHighlightColor;
+        ctx.fillRect(14.3 + legShift, 34.4 + bob, 2, 3.5);
         ctx.fillStyle = bootSoleColor;
-        ctx.fillRect(ox + 13.5 + legShift, 38.5 + bob, 6.5, 1.8);
+        ctx.fillRect(13.5 + legShift, 38.4 + bob, 6.5, 1.7);
       }
 
-      // --- 2. TORSO / TUNIC CLOTHING ---
-      // Subtle dark silhouette edge
+      // --- 2. TORSO / TUNIC WITH FABRIC GRADIENT & RIM LIGHT ---
+      // Crisp outer silhouette contour
       ctx.fillStyle = '#0f172a';
       ctx.beginPath();
-      ctx.roundRect(ox + 9.5, 22.5 + bob, 13, 13, 3);
+      ctx.roundRect(9.2, 22.2 + bob, 13.6, 13.6, 3.2);
       ctx.fill();
 
-      // Main fabric
+      // Main fabric base
       ctx.fillStyle = clothesColor;
       ctx.beginPath();
-      ctx.roundRect(ox + 10, 23 + bob, 12, 12, 2.5);
+      ctx.roundRect(10, 23 + bob, 12, 12, 2.5);
       ctx.fill();
 
-      // Top fabric shoulder highlight
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
-      ctx.fillRect(ox + 11, 23 + bob, 10, 2);
+      // Volumetric vertical shading overlay across torso
+      const torsoShade = ctx.createLinearGradient(10, 23 + bob, 10, 35 + bob);
+      torsoShade.addColorStop(0, 'rgba(255, 255, 255, 0.24)');
+      torsoShade.addColorStop(0.45, 'rgba(255, 255, 255, 0.0)');
+      torsoShade.addColorStop(1, 'rgba(15, 23, 42, 0.30)');
+      ctx.fillStyle = torsoShade;
+      ctx.beginPath();
+      ctx.roundRect(10, 23 + bob, 12, 12, 2.5);
+      ctx.fill();
+
+      // Subtle vertical seam/tunic fold
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
+      ctx.fillRect(15.6, 26 + bob, 0.8, 5);
 
       // Collar / Neckline
       if (dirIndex === 0) {
         ctx.fillStyle = '#f8fafc';
         ctx.beginPath();
-        ctx.moveTo(ox + 14, 23 + bob);
-        ctx.lineTo(ox + 16, 26 + bob);
-        ctx.lineTo(ox + 18, 23 + bob);
+        ctx.moveTo(13.8, 23 + bob);
+        ctx.lineTo(16, 26.2 + bob);
+        ctx.lineTo(18.2, 23 + bob);
         ctx.closePath();
         ctx.fill();
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.25)';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
       }
 
-      // Sturdy Leather Belt & Polished Brass Buckle
+      // Leather Belt & Beveled Gold Buckle
       ctx.fillStyle = '#78350f';
-      ctx.fillRect(ox + 10, 31 + bob, 12, 2.8);
-      ctx.fillStyle = '#0f172a'; // Belt shadow
-      ctx.fillRect(ox + 10, 33.5 + bob, 12, 0.8);
-      // Gold Buckle
+      ctx.fillRect(10, 31 + bob, 12, 2.8);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(10, 31 + bob, 12, 1);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(10, 33.5 + bob, 12, 0.8);
       ctx.fillStyle = '#f59e0b';
-      ctx.fillRect(ox + 14.5, 30.5 + bob, 3, 3.2);
+      ctx.fillRect(14.5, 30.5 + bob, 3, 3.2);
       ctx.fillStyle = '#fef08a';
-      ctx.fillRect(ox + 15, 31 + bob, 2, 2);
+      ctx.fillRect(15, 31 + bob, 2, 1.8);
 
-      // Arms & Hands
-      ctx.fillStyle = skinColor;
+      // Arms & Hands with dark outline + shading
       if (dirIndex === 0) {
-        // Sleeves
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(7.1, 22.7 + bob, 3.7, 8.2, 1.2);
+        ctx.roundRect(21.2, 22.7 + bob, 3.7, 8.2, 1.2);
+        ctx.fill();
         ctx.fillStyle = clothesColor;
-        ctx.fillRect(ox + 7.5, 23 + bob, 3, 4);
-        ctx.fillRect(ox + 21.5, 23 + bob, 3, 4);
-        // Hands
+        ctx.fillRect(7.5, 23 + bob, 3, 4);
+        ctx.fillRect(21.5, 23 + bob, 3, 4);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.fillRect(7.5, 23 + bob, 3, 1.2);
+        ctx.fillRect(21.5, 23 + bob, 3, 1.2);
         ctx.fillStyle = skinColor;
-        ctx.fillRect(ox + 7.5, 27 + bob, 3, 3.5);
-        ctx.fillRect(ox + 21.5, 27 + bob, 3, 3.5);
+        ctx.fillRect(7.5, 27 + bob, 3, 3.4);
+        ctx.fillRect(21.5, 27 + bob, 3, 3.4);
       } else if (dirIndex === 1) {
-        // Swinging arm left
-        const armOffset = stepIndex === 0 ? 3 : stepIndex === 2 ? -3 : 0;
+        const armOffset = stepIndex === 0 ? 2.8 : stepIndex === 2 ? -2.8 : 0;
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(12.6 + armOffset, 23.6 + bob, 4.3, 8.3, 1.2);
+        ctx.fill();
         ctx.fillStyle = clothesColor;
-        ctx.fillRect(ox + 13 + armOffset, 24 + bob, 3.5, 4);
+        ctx.fillRect(13 + armOffset, 24 + bob, 3.5, 4);
         ctx.fillStyle = skinColor;
-        ctx.fillRect(ox + 13 + armOffset, 28 + bob, 3.5, 3.5);
+        ctx.fillRect(13 + armOffset, 28 + bob, 3.5, 3.4);
       } else if (dirIndex === 2) {
-        // Swinging arm right
-        const armOffset = stepIndex === 0 ? -3 : stepIndex === 2 ? 3 : 0;
+        const armOffset = stepIndex === 0 ? -2.8 : stepIndex === 2 ? 2.8 : 0;
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(15.1 + armOffset, 23.6 + bob, 4.3, 8.3, 1.2);
+        ctx.fill();
         ctx.fillStyle = clothesColor;
-        ctx.fillRect(ox + 15.5 + armOffset, 24 + bob, 3.5, 4);
+        ctx.fillRect(15.5 + armOffset, 24 + bob, 3.5, 4);
         ctx.fillStyle = skinColor;
-        ctx.fillRect(ox + 15.5 + armOffset, 28 + bob, 3.5, 3.5);
+        ctx.fillRect(15.5 + armOffset, 28 + bob, 3.5, 3.4);
       }
 
-      // --- 3. HEAD & FACE ---
-      // Head silhouette contour
+      // --- 3. HEAD & EXPRESSIVE FACE ---
       ctx.fillStyle = '#0f172a';
       ctx.beginPath();
-      ctx.arc(ox + 16, 15 + bob, 7, 0, Math.PI * 2);
+      ctx.arc(16, 15 + bob, 7.2, 0, Math.PI * 2);
       ctx.fill();
 
-      // Base skin
       ctx.fillStyle = skinColor;
       ctx.beginPath();
-      ctx.arc(ox + 16, 15 + bob, 6.5, 0, Math.PI * 2);
+      ctx.arc(16, 15 + bob, 6.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Facial Features (Stylized, Expressive Eyes & Rosy Blush)
+      // Soft warm forehead light & chin shadow
+      const headGrad = ctx.createRadialGradient(14.5, 13 + bob, 1, 16, 15 + bob, 6.8);
+      headGrad.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
+      headGrad.addColorStop(0.65, 'rgba(255, 255, 255, 0)');
+      headGrad.addColorStop(1, 'rgba(124, 45, 18, 0.22)');
+      ctx.fillStyle = headGrad;
+      ctx.beginPath();
+      ctx.arc(16, 15 + bob, 6.5, 0, Math.PI * 2);
+      ctx.fill();
+
       if (dirIndex === 0) {
-        // Cheerful Rosy Cheek Blush
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.35)';
+        // Cheek Blush
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.36)';
         ctx.beginPath();
-        ctx.ellipse(ox + 11.5, 17.5 + bob, 2.2, 1.2, 0, 0, Math.PI * 2);
-        ctx.ellipse(ox + 20.5, 17.5 + bob, 2.2, 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(11.6, 17.5 + bob, 2.1, 1.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(20.4, 17.5 + bob, 2.1, 1.1, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Eyes: Dark contour & lashes
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(ox + 12.5, 13.5 + bob, 2.4, 2.8);
-        ctx.fillRect(ox + 17.5, 13.5 + bob, 2.4, 2.8);
-
-        // White sparkle catchlight highlight
+        // Crisp Sclera + Iris Eyes
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(ox + 12.8, 13.7 + bob, 1.2, 1.2);
-        ctx.fillRect(ox + 17.8, 13.7 + bob, 1.2, 1.2);
-
-        // Smile
-        ctx.strokeStyle = '#9a3412';
-        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(ox + 14.5, 18.5 + bob);
-        ctx.lineTo(ox + 17.5, 18.5 + bob);
+        ctx.roundRect(12.2, 13.4 + bob, 2.7, 2.9, 0.8);
+        ctx.roundRect(17.1, 13.4 + bob, 2.7, 2.9, 0.8);
+        ctx.fill();
+
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.roundRect(12.5, 13.5 + bob, 2.2, 2.7, 0.6);
+        ctx.roundRect(17.4, 13.5 + bob, 2.2, 2.7, 0.6);
+        ctx.fill();
+
+        // Twin sparkle catchlights
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(12.7, 13.8 + bob, 1.0, 1.0);
+        ctx.fillRect(17.6, 13.8 + bob, 1.0, 1.0);
+        ctx.fillRect(13.8, 15.2 + bob, 0.6, 0.6);
+        ctx.fillRect(18.7, 15.2 + bob, 0.6, 0.6);
+
+        // Warm gentle smile
+        ctx.strokeStyle = '#7c2d12';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(14.5, 18.4 + bob);
+        ctx.quadraticCurveTo(16, 19.3 + bob, 17.5, 18.4 + bob);
         ctx.stroke();
       } else if (dirIndex === 1) {
-        // Looking left
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.32)';
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.34)';
         ctx.beginPath();
-        ctx.ellipse(ox + 11.5, 17.5 + bob, 2, 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(11.5, 17.5 + bob, 1.9, 1.1, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(ox + 11, 13.5 + bob, 2.4, 2.8);
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(ox + 11.2, 13.7 + bob, 1.2, 1.2);
+        ctx.fillRect(10.9, 13.4 + bob, 2.6, 2.8);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(11.0, 13.5 + bob, 2.2, 2.7);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(11.2, 13.7 + bob, 1.0, 1.0);
       } else if (dirIndex === 2) {
-        // Looking right
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.32)';
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.34)';
         ctx.beginPath();
-        ctx.ellipse(ox + 20.5, 17.5 + bob, 2, 1.2, 0, 0, Math.PI * 2);
+        ctx.ellipse(20.5, 17.5 + bob, 1.9, 1.1, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(ox + 18.5, 13.5 + bob, 2.4, 2.8);
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(ox + 18.7, 13.7 + bob, 1.2, 1.2);
+        ctx.fillRect(18.5, 13.4 + bob, 2.6, 2.8);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(18.8, 13.5 + bob, 2.2, 2.7);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(18.9, 13.7 + bob, 1.0, 1.0);
       }
 
-      // --- 4. VOLUMETRIC STYLED HAIR & CAP ---
+      // --- 4. VOLUMETRIC STYLED HAIR ---
       ctx.fillStyle = hairColor;
       if (dirIndex === 0) {
-        // Front hair dome
         ctx.beginPath();
-        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 0.95, Math.PI * 2.05);
+        ctx.arc(16, 12 + bob, 7.6, Math.PI * 0.94, Math.PI * 2.06);
         ctx.fill();
 
-        // Bangs / Locks
-        ctx.fillRect(ox + 9, 11 + bob, 3.5, 6);
-        ctx.fillRect(ox + 19.5, 11 + bob, 3.5, 6);
-        ctx.fillRect(ox + 13.5, 11 + bob, 5, 2.5);
+        // Dark hairline rim
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
 
-        // Specular crown hair shine
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+        // Bangs & side locks
+        ctx.fillStyle = hairColor;
+        ctx.fillRect(9, 11 + bob, 3.5, 6);
+        ctx.fillRect(19.5, 11 + bob, 3.5, 6);
+        ctx.fillRect(13.5, 11 + bob, 5, 2.5);
+
+        // Specular crown hair sheen
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.arc(ox + 16, 9 + bob, 4.5, Math.PI * 1.1, Math.PI * 1.9);
+        ctx.arc(16, 9.2 + bob, 4.6, Math.PI * 1.1, Math.PI * 1.9);
         ctx.stroke();
 
         if (gender === 'female') {
-          // Flowing side tresses / pigtails
           ctx.fillStyle = hairColor;
-          ctx.fillRect(ox + 8, 16 + bob, 3, 8);
-          ctx.fillRect(ox + 21, 16 + bob, 3, 8);
-          // Hair tie ribbons
+          ctx.fillRect(8, 16 + bob, 3, 8);
+          ctx.fillRect(21, 16 + bob, 3, 8);
           ctx.fillStyle = '#ec4899';
-          ctx.fillRect(ox + 8, 18 + bob, 3, 1.5);
-          ctx.fillRect(ox + 21, 18 + bob, 3, 1.5);
+          ctx.fillRect(8, 18 + bob, 3, 1.5);
+          ctx.fillRect(21, 18 + bob, 3, 1.5);
         }
       } else if (dirIndex === 1) {
-        // Facing Left
         ctx.beginPath();
-        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 0.75, Math.PI * 1.95);
+        ctx.arc(16, 12 + bob, 7.6, Math.PI * 0.75, Math.PI * 1.95);
         ctx.fill();
-        ctx.fillRect(ox + 10, 11 + bob, 4, 5);
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.5)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.fillStyle = hairColor;
+        ctx.fillRect(10, 11 + bob, 4, 5);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(16, 9.5 + bob, 4.5, Math.PI * 1.0, Math.PI * 1.75);
+        ctx.stroke();
         if (gender === 'female') {
-          ctx.fillRect(ox + 16, 15 + bob, 4, 9);
+          ctx.fillStyle = hairColor;
+          ctx.fillRect(16, 15 + bob, 4, 9);
+          ctx.fillStyle = '#ec4899';
+          ctx.fillRect(16.5, 17 + bob, 3, 1.4);
         }
       } else if (dirIndex === 2) {
-        // Facing Right
         ctx.beginPath();
-        ctx.arc(ox + 16, 12 + bob, 7.5, Math.PI * 1.05, Math.PI * 2.25);
+        ctx.arc(16, 12 + bob, 7.6, Math.PI * 1.05, Math.PI * 2.25);
         ctx.fill();
-        ctx.fillRect(ox + 18, 11 + bob, 4, 5);
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.5)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.fillStyle = hairColor;
+        ctx.fillRect(18, 11 + bob, 4, 5);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(16, 9.5 + bob, 4.5, Math.PI * 1.25, Math.PI * 2.0);
+        ctx.stroke();
         if (gender === 'female') {
-          ctx.fillRect(ox + 12, 15 + bob, 4, 9);
+          ctx.fillStyle = hairColor;
+          ctx.fillRect(12, 15 + bob, 4, 9);
+          ctx.fillStyle = '#ec4899';
+          ctx.fillRect(12.5, 17 + bob, 3, 1.4);
         }
       } else {
-        // Facing Up (Back of head)
         ctx.beginPath();
-        ctx.arc(ox + 16, 13 + bob, 7.5, 0, Math.PI * 2);
+        ctx.arc(16, 13 + bob, 7.6, 0, Math.PI * 2);
         ctx.fill();
-        // Hair shine highlight arc
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.arc(ox + 16, 12 + bob, 5, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.arc(16, 12 + bob, 5, Math.PI * 1.2, Math.PI * 1.8);
         ctx.stroke();
 
         if (gender === 'female') {
           ctx.fillStyle = hairColor;
-          ctx.fillRect(ox + 9, 16 + bob, 3.5, 8);
-          ctx.fillRect(ox + 19.5, 16 + bob, 3.5, 8);
+          ctx.fillRect(9, 16 + bob, 3.5, 8);
+          ctx.fillRect(19.5, 16 + bob, 3.5, 8);
+          ctx.fillStyle = '#ec4899';
+          ctx.fillRect(9, 18 + bob, 3.5, 1.4);
+          ctx.fillRect(19.5, 18 + bob, 3.5, 1.4);
         }
       }
+
+      ctx.restore();
     }
 
-    // Add to Phaser texture manager as a spritesheet!
     textures.addSpriteSheet(key, canvas as any, {
       frameWidth: frameW,
       frameHeight: frameH,

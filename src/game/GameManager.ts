@@ -26,6 +26,7 @@ export class GameManager {
   public resourceSystem: ResourceSystem;
   public networkSystem: NetworkSystem;
   public playerProfile: PlayerProfile;
+  public initialPosition: { tileX: number; tileY: number };
 
   constructor(profile?: PlayerProfile, userId?: string, initialState?: SavedGameState) {
     this.userId = userId;
@@ -37,6 +38,7 @@ export class GameManager {
     this.networkSystem = new NetworkSystem();
 
     const saved = initialState || SaveSystem.loadGame(userId);
+    this.initialPosition = saved?.position || { tileX: 30, tileY: 30 };
     if (saved) {
       this.playerProfile = profile || saved.player;
       this.inventorySystem.deserialize(saved.inventory);
@@ -64,8 +66,7 @@ export class GameManager {
       this.game = null;
     }
 
-    const saved = SaveSystem.loadGame();
-    const initPos = saved?.position || { tileX: 30, tileY: 30 };
+    const initPos = this.initialPosition || { tileX: 30, tileY: 30 };
 
     this.worldScene = new WorldScene();
     this.worldScene.setupData({

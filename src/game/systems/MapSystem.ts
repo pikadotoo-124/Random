@@ -190,44 +190,61 @@ export class MapSystem {
       }
     }
 
-    // 6. Central Plaza (Center: tx 24..36, ty 24..36) - Preserved exactly!
-    for (let y = 23; y <= 37; y++) {
-      for (let x = 23; x <= 37; x++) {
-        if (x === 30 || y === 30 || (x >= 27 && x <= 33 && y >= 27 && y <= 33)) {
+    // 6. Integrated Village Town Center (tx 21..39, ty 21..39)
+    // Natural mix of cobblestone plaza & avenues, warm village lanes, and lush pocket park grass
+    for (let y = 21; y <= 39; y++) {
+      for (let x = 21; x <= 39; x++) {
+        const isMainAvenue = x === 30 || x === 31 || y === 30 || y === 31;
+        const isCentralPlaza = x >= 28 && x <= 32 && y >= 28 && y <= 32;
+        const isPocketPark = x >= 33 && x <= 38 && y >= 36 && y <= 39;
+        const isFlowerGarden = x >= 26 && x <= 29 && y >= 35 && y <= 39;
+        const isOuterFringeGrass =
+          ((x === 21 || x === 22) && y >= 21 && y <= 24) ||
+          ((x === 38 || x === 39) && y >= 21 && y <= 24) ||
+          (y === 21 && (x < 29 || x > 32)) ||
+          (y === 39 && (x < 29 || x > 32));
+
+        if (isCentralPlaza || isMainAvenue) {
           this.tiles[y][x] = 'cobble';
-        } else if ((x === 25 || x === 35) && y >= 25 && y <= 35) {
-          this.tiles[y][x] = 'dirt';
+        } else if (isPocketPark || isFlowerGarden || isOuterFringeGrass) {
+          this.tiles[y][x] = 'grass';
         } else {
-          this.tiles[y][x] = 'wood_floor';
+          this.tiles[y][x] = 'dirt';
         }
         this.collisionMap[y][x] = false;
       }
     }
+    // Pocket Park gravel walkway leading from SE market into the park
+    this.tiles[36][34] = 'dirt';
+    this.tiles[36][35] = 'dirt';
+    // Flower Shop front entrance path
+    this.tiles[35][28] = 'dirt';
+    this.tiles[36][28] = 'dirt';
 
-    // 7. Main City Paths connecting outward
+    // 7. Main City Paths connecting outward cleanly from Village Center (21..39)
     // Path North through Mountain Pass
-    for (let y = 0; y < 24; y++) {
+    for (let y = 0; y < 21; y++) {
       this.tiles[y][30] = 'dirt';
       this.tiles[y][31] = 'dirt';
       this.collisionMap[y][30] = false;
       this.collisionMap[y][31] = false;
     }
     // Path South to Homesteads & Lake
-    for (let y = 37; y < 112; y++) {
+    for (let y = 40; y < 112; y++) {
       this.tiles[y][30] = 'dirt';
       this.tiles[y][31] = 'dirt';
       this.collisionMap[y][30] = false;
       this.collisionMap[y][31] = false;
     }
     // Path West to Lake Shore
-    for (let x = 8; x < 24; x++) {
+    for (let x = 8; x < 21; x++) {
       this.tiles[30][x] = 'dirt';
       this.tiles[31][x] = 'dirt';
       this.collisionMap[30][x] = false;
       this.collisionMap[31][x] = false;
     }
     // Path East to Whispering Forest & Mountain Foot
-    for (let x = 37; x < 112; x++) {
+    for (let x = 40; x < 112; x++) {
       this.tiles[30][x] = 'dirt';
       this.tiles[31][x] = 'dirt';
       this.collisionMap[30][x] = false;

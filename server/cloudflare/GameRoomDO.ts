@@ -35,6 +35,10 @@ interface DurableObjectNamespace {
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  ASSETS?: {
+    fetch(request: Request): Promise<Response>;
+  };
+  FIREBASE_PROJECT_ID?: string;
 }
 
 /**
@@ -130,22 +134,8 @@ export class GameRoomDO {
       case 'c:auth_join': {
         const { idToken, profile } = msg.payload;
 
-        // Verify player capacity limit
-        if (this.players.size >= this.maxPlayers) {
-          const fullMsg: ServerMessage = {
-            type: 's:room_full',
-            payload: {
-              message: 'Room capacity reached (10/10).',
-              maxPlayers: this.maxPlayers,
-            },
-          };
-          ws.send(JSON.stringify(fullMsg));
-          ws.close(1008, 'Room full');
-          return;
-        }
-
         // Cryptographically verify Firebase ID token using Google JWKS
-        const projectId = 'intrepid-cyclist-mbvhw';
+        const projectId = this.env.FIREBASE_PROJECT_ID || 'intrepid-cyclist-mbvhw';
         const authResult = await verifyFirebaseIdToken(idToken, projectId);
 
         if (!authResult.valid || !authResult.claims) {
@@ -166,6 +156,20 @@ export class GameRoomDO {
         const verifiedUid = authResult.claims.uid;
         const playerName = (profile?.name || authResult.claims.name || 'Settler').slice(0, 16);
 
+        // Verify player capacity limit (allow reconnecting player already in room)
+        if (!this.players.has(verifiedUid) && this.players.size >= this.maxPlayers) {
+          const fullMsg: ServerMessage = {
+            type: 's:room_full',
+            payload: {
+              message: 'Room capacity reached (10/10).',
+              maxPlayers: this.maxPlayers,
+            },
+          };
+          ws.send(JSON.stringify(fullMsg));
+          ws.close(1008, 'Room full');
+          return;
+        }
+
         // Disconnect previous session of the same player if exists
         for (const [s, pid] of this.sockets.entries()) {
           if (pid === verifiedUid && s !== ws) {
@@ -176,15 +180,16 @@ export class GameRoomDO {
           }
         }
 
+        const gender = profile?.gender === 'female' ? 'female' : 'male';
         const newPlayer: PlayerPresenceState = {
           playerId: verifiedUid,
           playerName,
-          gender: profile.gender,
-          positionX: Math.max(0, Math.min(59, profile.positionX || 30)),
-          positionY: Math.max(0, Math.min(59, profile.positionY || 30)),
+          gender,
+          positionX: Math.max(0, Math.min(119, profile?.positionX ?? 30)),
+          positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
           facingDirection: 'down',
           movementState: 'idle',
-          color: profile.gender === 'female' ? '#10b981' : '#3b82f6',
+          color: gender === 'female' ? '#10b981' : '#3b82f6',
           lastUpdate: Date.now(),
         };
 
@@ -227,9 +232,9 @@ export class GameRoomDO {
         const player = this.players.get(playerId);
         if (!player) return;
 
-        // Validate movement bounds
-        const targetX = Math.max(0, Math.min(59, msg.payload.x));
-        const targetY = Math.max(0, Math.min(59, msg.payload.y));
+        // Validate movement bounds (120x120 map: 0..119)
+        const targetX = Math.max(0, Math.min(119, msg.payload.x));
+        const targetY = Math.max(0, Math.min(119, msg.payload.y));
 
         player.positionX = targetX;
         player.positionY = targetY;
@@ -290,7 +295,12 @@ export class GameRoomDO {
         if (!building) return;
 
         building.placedBy = playerId;
-        this.placedBuildings.push(building);
+        const existingIdx = this.placedBuildings.findIndex((b) => b.id === building.id);
+        if (existingIdx !== -1) {
+          this.placedBuildings[existingIdx] = building;
+        } else {
+          this.placedBuildings.push(building);
+        }
 
         // Persist to Durable Object storage
         await this.state.storage.put('placedBuildings', this.placedBuildings);

@@ -33,13 +33,36 @@ export const BuildMenuModal: React.FC<BuildMenuModalProps> = ({
   }[] = [
     {
       type: 'house_small',
-      title: 'သစ်သားအိမ် (Wooden Cottage)',
+      title: 'သစ်သားအိမ်ငယ် (Wooden Cottage)',
       description: 'နွေးထွေးသော အမိုး၊ ပြတင်းပေါက်နှင့် မီးလင်းဖို ပါရှိသည့် သက်တောင့်သက်သာ သစ်သားအိမ်ငယ်။',
       icon: '🏡',
       tiles: '၂x၂ ကွက်',
       mats: [
         { name: 'သစ်သား', icon: '🪵', count: 15, itemId: 'wood' },
         { name: 'ကျောက်တုံး', icon: '🪨', count: 8, itemId: 'stone' },
+      ],
+    },
+    {
+      type: 'house_medium',
+      title: 'နှစ်ထပ်သစ်သားအိမ် (Timber Manor)',
+      description: 'ကျယ်ဝန်းသော နှစ်ထပ်သစ်သားနှင့် ကျောက်သားစပ် လူနေအိမ်ကောင်း။',
+      icon: '🏘️',
+      tiles: '၃x၂ ကွက်',
+      mats: [
+        { name: 'သစ်သား', icon: '🪵', count: 25, itemId: 'wood' },
+        { name: 'ကျောက်တုံး', icon: '🪨', count: 14, itemId: 'stone' },
+      ],
+    },
+    {
+      type: 'house_large',
+      title: 'စံအိမ်ကြီး (Grand Villa)',
+      description: 'ခမ်းနားထည်ဝါသော ဥယျာဉ်စံအိမ်ကြီး။ ခိုင်ခံ့သော ကျောက်အုတ်မြစ်နှင့် နှစ်ထပ်ခေါင်မိုး ပါရှိသည်။',
+      icon: '🏰',
+      tiles: '၃x၃ ကွက်',
+      mats: [
+        { name: 'သစ်သား', icon: '🪵', count: 40, itemId: 'wood' },
+        { name: 'ကျောက်တုံး', icon: '🪨', count: 24, itemId: 'stone' },
+        { name: 'အမျှင်', icon: '🌾', count: 10, itemId: 'fiber' },
       ],
     },
     {

@@ -20,6 +20,8 @@ export type ItemId =
   | 'rod_basic'
   | 'fence_wood'
   | 'house_small'
+  | 'house_medium'
+  | 'house_large'
   | 'campfire'
   | 'storage_box'
   | 'lantern';
@@ -40,7 +42,7 @@ export interface InventorySlot {
   quantity: number;
 }
 
-export type BuildingType = 'house_small' | 'fence_wood' | 'campfire' | 'storage_box' | 'lantern';
+export type BuildingType = 'house_small' | 'house_medium' | 'house_large' | 'fence_wood' | 'campfire' | 'storage_box' | 'lantern';
 
 export interface PlacedBuilding {
   id: string;

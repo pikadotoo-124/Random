@@ -77,6 +77,10 @@ export class NetworkSystem {
    * Defaults to local express server `/ws` (or env/custom Cloudflare Worker URL)
    */
   public getWebSocketUrl(): string {
+    const envWsUrl = (import.meta as any).env?.VITE_WS_URL;
+    if (envWsUrl && typeof envWsUrl === 'string' && envWsUrl.trim()) {
+      return envWsUrl.trim();
+    }
     if (typeof window === 'undefined') return 'ws://localhost:3000/ws';
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}/ws`;

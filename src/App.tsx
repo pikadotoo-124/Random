@@ -110,16 +110,17 @@ function GamePlay() {
     };
 
     // Connect to Realtime Multiplayer Server with Firebase Auth Token
-    const tokenGetter = async () => {
+    gm.networkSystem.localPlayerId = user.uid;
+    const tokenGetter = async (forceRefresh = false) => {
       try {
-        return await user.getIdToken();
+        return await user.getIdToken(forceRefresh);
       } catch (err) {
         console.warn('Firebase token retrieval error:', err);
         return '';
       }
     };
 
-    tokenGetter().then((token) => {
+    tokenGetter(false).then((token) => {
       if (token) {
         gm.networkSystem.connect(
           token,
@@ -129,7 +130,7 @@ function GamePlay() {
             positionX: playerCoords.x,
             positionY: playerCoords.y,
           },
-          tokenGetter
+          () => tokenGetter(true)
         );
       }
     });
@@ -137,22 +138,28 @@ function GamePlay() {
     // Multiplayer Network Event Listeners
     const unsubs = [
       gm.networkSystem.on('status_changed', (evt) => {
-        const status = evt.payload as ConnectionStatus;
+        const status = (evt.payload?.status || evt.payload) as ConnectionStatus;
         setConnectionStatus(status);
+        if (typeof evt.payload?.playerCount === 'number') {
+          setOnlineCount(evt.payload.playerCount);
+        }
         if (status === 'room_full') {
           setRoomFullNotice(true);
         }
       }),
-      gm.networkSystem.on('world_sync', (evt) => {
+      gm.networkSystem.on('room_state', (evt) => {
         const syncState = evt.payload;
-        const count = (syncState?.players?.length || 0) + 1;
+        if (typeof syncState?.playerCount === 'number') {
+          setOnlineCount(syncState.playerCount);
+        }
+      }),
+      gm.networkSystem.on('player_joined', (evt) => {
+        const count = evt.payload?.playerCount ?? gm.networkSystem.getOnlinePlayers().length + 1;
         setOnlineCount(count);
       }),
-      gm.networkSystem.on('player_joined', () => {
-        setOnlineCount(gm.networkSystem.getOnlinePlayers().length + 1);
-      }),
-      gm.networkSystem.on('player_left', () => {
-        setOnlineCount(gm.networkSystem.getOnlinePlayers().length + 1);
+      gm.networkSystem.on('player_left', (evt) => {
+        const count = evt.payload?.playerCount ?? gm.networkSystem.getOnlinePlayers().length + 1;
+        setOnlineCount(count);
       }),
       gm.networkSystem.on('chat_message', (evt) => {
         const msg = evt.payload as ChatMessage;
@@ -368,7 +375,7 @@ function GamePlay() {
               <button
                 onClick={() => {
                   setRoomFullNotice(false);
-                  user?.getIdToken().then((token) => {
+                  user?.getIdToken(true).then((token) => {
                     if (token) {
                       gameManagerRef.current?.networkSystem.connect(
                         token,
@@ -378,7 +385,7 @@ function GamePlay() {
                           positionX: playerCoords.x,
                           positionY: playerCoords.y,
                         },
-                        () => user.getIdToken()
+                        () => user.getIdToken(true)
                       );
                     }
                   });
