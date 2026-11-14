@@ -63,6 +63,14 @@ export const BuildingManageModal: React.FC<BuildingManageModalProps> = ({
                 </span>
                 <span>•</span>
                 <span>{info.size}</span>
+                {building.type === 'fence_wood' && (
+                  <>
+                    <span>•</span>
+                    <span className="text-amber-300">
+                      {((building.rotation ?? 0) % 2 === 0) ? '↖↘ NW–SE' : '↗↙ NE–SW'}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -108,7 +116,11 @@ export const BuildingManageModal: React.FC<BuildingManageModalProps> = ({
                   className="w-full py-3 px-4 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-xs flex items-center justify-center gap-2 border border-stone-700 transition cursor-pointer active:scale-95"
                 >
                   <Move size={16} className="text-sky-400" />
-                  <span>အဆောက်အအုံ နေရာရွှေ့ပြောင်းမည် (Move)</span>
+                  <span>
+                    {building.type === 'fence_wood'
+                      ? 'နေရာရွှေ့ / လှည့်မည် (Move & Rotate)'
+                      : 'အဆောက်အအုံ နေရာရွှေ့ပြောင်းမည် (Move)'}
+                  </span>
                 </button>
 
                 {/* Demolish Button */}

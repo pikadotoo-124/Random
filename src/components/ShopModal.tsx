@@ -12,10 +12,11 @@ import { SoundSynth } from '../game/utils/SoundSynth';
 
 interface ShopModalProps {
   inventory: InventorySystem;
+  onSold?: (goldEarned: number) => void;
   onClose: () => void;
 }
 
-export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onClose }) => {
+export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose }) => {
   const [activeTab, setActiveTab] = useState<'buy' | 'sell'>('sell');
 
   // Items for sale by merchant
@@ -50,6 +51,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onClose }) => {
     inventory.removeItem(itemId, 1);
     inventory.addCoins(sellPrice);
     SoundSynth.playCoin();
+    onSold?.(sellPrice);
   };
 
   return (

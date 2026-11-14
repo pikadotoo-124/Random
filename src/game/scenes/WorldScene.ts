@@ -4,7 +4,7 @@
  */
 
 import * as Phaser from 'phaser';
-import { ITEMS, MAP_CONFIG } from '../constants';
+import { BUILDABLE_ZONE_BOUNDS, ITEMS, MAP_CONFIG } from '../constants';
 import { BuildingSystem } from '../systems/BuildingSystem';
 import { CraftingSystem } from '../systems/CraftingSystem';
 import { InventorySystem } from '../systems/InventorySystem';
@@ -12,7 +12,7 @@ import { MapSystem } from '../systems/MapSystem';
 import { NetworkSystem, RemotePlayer } from '../systems/NetworkSystem';
 import { ResourceSystem } from '../systems/ResourceSystem';
 import { PixelArtGenerator } from '../textures/PixelArtGenerator';
-import { BuildingType, ItemId, PlacedBuilding, PlayerProfile, ResourceNode, TileType } from '../types';
+import { BuildingType, FenceRotation, ItemId, PlacedBuilding, PlayerProfile, ResourceNode, TileType } from '../types';
 import { SoundSynth } from '../utils/SoundSynth';
 
 export class WorldScene extends Phaser.Scene {
@@ -50,6 +50,8 @@ export class WorldScene extends Phaser.Scene {
   private keyB!: Phaser.Input.Keyboard.Key;
   private keyC!: Phaser.Input.Keyboard.Key;
   private keyM!: Phaser.Input.Keyboard.Key;
+  private keyR!: Phaser.Input.Keyboard.Key;
+  private keyEnter!: Phaser.Input.Keyboard.Key;
 
   // External joystick vector from mobile UI
   public joystickVector = { x: 0, y: 0 };
@@ -57,12 +59,21 @@ export class WorldScene extends Phaser.Scene {
   // Building mode
   public buildModeType: BuildingType | null = null;
   public movingBuildingId: string | null = null;
+  public buildRotation: FenceRotation = 0;
+  public isPlacementPinned = false;
   public placementCooldown = 0;
   public selectedPlacementTile = { tx: 30, ty: 30 };
   public lastPlacementCheck: { valid: boolean; reason?: string } = { valid: false };
   public buildGhostSprite: Phaser.GameObjects.Sprite | null = null;
   public buildGridHighlights: Phaser.GameObjects.Sprite[] = [];
+  public buildableZoneGraphics: Phaser.GameObjects.Graphics | null = null;
   public hoverTile = { tx: 30, ty: 30 };
+
+  // Tracking last saved tile / interaction target
+  private lastReportedTileX = -999;
+  private lastReportedTileY = -999;
+  private lastReportedZone = '';
+  private lastEmittedTargetId: string | null = null;
 
   // Game Object Containers & Maps
   private tileSprites: Map<string, Phaser.GameObjects.Image> = new Map();
@@ -84,17 +95,20 @@ export class WorldScene extends Phaser.Scene {
   private floatingTexts: Phaser.GameObjects.Text[] = [];
 
   // Interaction prompt callback to React UI
-  public onInteractionChange?: (prompt: { type: string; title: string; subtitle: string; actionKey: string } | null) => void;
+  public onInteractionChange?: (prompt: { type: string; title: string; subtitle: string; actionKey: string; targetId?: string } | null) => void;
   public onTileHover?: (tileX: number, tileY: number, zoneName: string) => void;
   public onPlayerMove?: (tileX: number, tileY: number, zoneName: string) => void;
   public onOpenUIModal?: (modal: 'inventory' | 'crafting' | 'shop' | 'building' | 'map' | 'storage', data?: any) => void;
   public onStateChanged?: () => void;
+  public onResourceGathered?: () => void;
+  public onBuildingBuilt?: (isMove: boolean) => void;
   public onPlacementStatusChange?: (status: {
     active: boolean;
     buildingType: BuildingType | null;
     isMoving: boolean;
     tileX: number;
     tileY: number;
+    rotation: FenceRotation;
     valid: boolean;
     reason?: string;
   }) => void;
@@ -343,7 +357,7 @@ export class WorldScene extends Phaser.Scene {
     };
   }
 
-  private getBuildingVisualConfig(type: BuildingType): { tex: string; originY: number } {
+  private getBuildingVisualConfig(type: BuildingType, rotation: FenceRotation = 0): { tex: string; originY: number } {
     switch (type) {
       case 'house_small':
         return { tex: 'obj_house_small', originY: 100 / 140 };
@@ -351,8 +365,10 @@ export class WorldScene extends Phaser.Scene {
         return { tex: 'obj_house_medium', originY: 124 / 172 };
       case 'house_large':
         return { tex: 'obj_house_large', originY: 140 / 196 };
-      case 'fence_wood':
-        return { tex: 'obj_fence_wood', originY: 0.75 };
+      case 'fence_wood': {
+        const rot = BuildingSystem.normalizeRotation(rotation);
+        return { tex: `obj_fence_wood_${rot}`, originY: 38 / 56 };
+      }
       case 'campfire':
         return { tex: 'obj_campfire', originY: 0.75 };
       case 'storage_box':
@@ -405,6 +421,7 @@ export class WorldScene extends Phaser.Scene {
       const prop = this.add.sprite(p.x, p.y + 14, tex);
       prop.setOrigin(0.5, originY);
       prop.setDepth(d + 35);
+      this.mapSystem.setProtectedProp(tileX, tileY, true);
       if (solid) this.mapSystem.setCollision(tileX, tileY, true);
       return prop;
     };
@@ -679,7 +696,8 @@ export class WorldScene extends Phaser.Scene {
       const h = b.height || fp.height;
       const { x, y, depth } = this.getFootprintWorldPos(b.tileX, b.tileY, w, h);
       const renderDepth = b.type === 'campfire' ? (b.tileX + b.tileY) * 100 + 35 : depth;
-      const { tex, originY } = this.getBuildingVisualConfig(b.type);
+      const rot = BuildingSystem.normalizeRotation(b.rotation);
+      const { tex, originY } = this.getBuildingVisualConfig(b.type, rot);
 
       const existing = this.buildingSprites.get(b.id);
       if (existing) {
@@ -863,17 +881,25 @@ export class WorldScene extends Phaser.Scene {
         ...incoming,
         width: incoming.width || fp.width,
         height: incoming.height || fp.height,
+        rotation: incoming.type === 'fence_wood' ? BuildingSystem.normalizeRotation(incoming.rotation) : 0,
       };
       const existingIdx = this.buildingSystem.buildings.findIndex((b) => b.id === building.id);
       if (existingIdx !== -1) {
         const prev = this.buildingSystem.buildings[existingIdx];
-        if (prev.tileX !== building.tileX || prev.tileY !== building.tileY) {
+        const posOrRotChanged =
+          prev.tileX !== building.tileX ||
+          prev.tileY !== building.tileY ||
+          BuildingSystem.normalizeRotation(prev.rotation) !== BuildingSystem.normalizeRotation(building.rotation);
+        if (posOrRotChanged) {
           for (let dy = 0; dy < prev.height; dy++) {
             for (let dx = 0; dx < prev.width; dx++) {
               this.mapSystem.setCollision(prev.tileX + dx, prev.tileY + dy, false);
             }
           }
-          this.buildingSystem.buildings[existingIdx] = building;
+          this.buildingSystem.buildings[existingIdx] = {
+            ...building,
+            storage: prev.storage || building.storage,
+          };
           if (building.type !== 'campfire') {
             for (let dy = 0; dy < building.height; dy++) {
               for (let dx = 0; dx < building.width; dx++) {
@@ -893,7 +919,12 @@ export class WorldScene extends Phaser.Scene {
           }
         }
         this.renderPlacedBuildings();
-        if (building.placedBy !== this.networkSystem.localPlayerId) {
+        const isMine = this.buildingSystem.isPersonalBuilding(
+          building,
+          this.networkSystem.localPlayerId || undefined,
+          this.playerProfile.name
+        );
+        if (!isMine) {
           this.spawnFloatingText(building.tileX, building.tileY, `အဆောက်အအုံအသစ် ဆောက်လုပ်ပြီးပါပြီ!`, '#34d399');
         }
       }
@@ -938,6 +969,7 @@ export class WorldScene extends Phaser.Scene {
             ...rawB,
             width: rawB.width || fp.width,
             height: rawB.height || fp.height,
+            rotation: rawB.type === 'fence_wood' ? BuildingSystem.normalizeRotation(rawB.rotation) : 0,
           };
           if (!this.buildingSystem.buildings.some((existing) => existing.id === b.id)) {
             this.buildingSystem.buildings.push(b);
@@ -968,6 +1000,8 @@ export class WorldScene extends Phaser.Scene {
     this.keyB = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.B);
     this.keyC = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
     this.keyM = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.M);
+    this.keyR = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
+    this.keyEnter = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
 
     // E: Interact / Gather
     this.keyE.on('down', () => {
@@ -994,6 +1028,20 @@ export class WorldScene extends Phaser.Scene {
       if (this.onOpenUIModal) this.onOpenUIModal('map');
     });
 
+    // R: Rotate fence preview when building/moving fence
+    this.keyR.on('down', () => {
+      if (this.buildModeType === 'fence_wood') {
+        this.rotateBuildPreview();
+      }
+    });
+
+    // Enter: Confirm building placement when build mode active
+    this.keyEnter.on('down', () => {
+      if (this.buildModeType) {
+        this.confirmPlacementFromUI();
+      }
+    });
+
     // ESC: Cancel Build Mode if active
     this.input.keyboard?.on('keydown-ESC', () => {
       if (this.buildModeType) {
@@ -1001,7 +1049,7 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
-    // Pointer click/tap for mouse movement or building placement
+    // Pointer click/tap for mouse movement or building preview pinning (NO auto-confirm!)
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       const { tx, ty } = MapSystem.worldToTile(worldPoint.x, worldPoint.y);
@@ -1010,9 +1058,10 @@ export class WorldScene extends Phaser.Scene {
         // Cooldown check to prevent accidental click-through from UI modals
         if (Date.now() < this.placementCooldown) return;
 
+        // Pin preview cleanly at clicked/tapped tile so player can inspect, rotate, or press Confirm
+        this.isPlacementPinned = true;
         this.selectedPlacementTile = { tx, ty };
         this.updateBuildPreview(tx, ty);
-        this.confirmBuildingPlacement(tx, ty);
       } else {
         // Check if player clicked directly on an existing placed building!
         const clickedBuilding = this.buildingSystem.buildings.find(b =>
@@ -1024,6 +1073,20 @@ export class WorldScene extends Phaser.Scene {
             this.playerTileY - (clickedBuilding.tileY + clickedBuilding.height / 2)
           );
           if (dist <= 3.5) {
+            const isOwner = this.buildingSystem.isPersonalBuilding(
+              clickedBuilding,
+              this.networkSystem.localPlayerId || undefined,
+              this.playerProfile.name
+            );
+            if (!isOwner) {
+              this.spawnFloatingText(
+                clickedBuilding.tileX,
+                clickedBuilding.tileY,
+                `${clickedBuilding.placedBy || 'အခြားကစားသမား'} ၏ အဆောက်အအုံ`,
+                '#94a3b8'
+              );
+              return;
+            }
             if (this.onSelectPlacedBuilding) {
               this.onSelectPlacedBuilding(clickedBuilding);
               return;
@@ -1040,7 +1103,7 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
-    // Pointer move for building preview & hover
+    // Pointer move for building preview & hover (respects pinned preview tile)
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       const { tx, ty } = MapSystem.worldToTile(worldPoint.x, worldPoint.y);
@@ -1053,7 +1116,7 @@ export class WorldScene extends Phaser.Scene {
         }
       }
 
-      if (this.buildModeType) {
+      if (this.buildModeType && !this.isPlacementPinned && !pointer.wasTouch) {
         this.selectedPlacementTile = { tx, ty };
         this.updateBuildPreview(tx, ty);
       }
@@ -1076,16 +1139,48 @@ export class WorldScene extends Phaser.Scene {
       this.buildGridHighlights.push(h);
     }
     this.buildGhostSprite = this.add.sprite(0, 0, 'obj_house_small').setVisible(false).setAlpha(0.75).setDepth(9991);
+
+    // Draw isometric outline of the Homestead Buildable Zone (X: 40..114, Y: 40..114), visible only in build mode
+    const g = this.add.graphics().setDepth(9985).setVisible(false);
+    const { minX, minY, maxX, maxY } = BUILDABLE_ZONE_BOUNDS;
+    const nw = MapSystem.tileToWorld(minX, minY);
+    const ne = MapSystem.tileToWorld(maxX, minY);
+    const se = MapSystem.tileToWorld(maxX, maxY);
+    const sw = MapSystem.tileToWorld(minX, maxY);
+    g.lineStyle(3, 0x34d399, 0.72);
+    g.beginPath();
+    g.moveTo(nw.x, nw.y);
+    g.lineTo(ne.x + 32, ne.y + 16);
+    g.lineTo(se.x, se.y + 32);
+    g.lineTo(sw.x - 32, sw.y + 16);
+    g.closePath();
+    g.strokePath();
+    this.buildableZoneGraphics = g;
+  }
+
+  public rotateBuildPreview(): void {
+    if (this.buildModeType !== 'fence_wood') return;
+    this.buildRotation = ((this.buildRotation + 1) % 4) as FenceRotation;
+    if (this.buildGhostSprite) {
+      const { tex, originY } = this.getBuildingVisualConfig('fence_wood', this.buildRotation);
+      this.buildGhostSprite.setTexture(tex);
+      this.buildGhostSprite.setOrigin(0.5, originY);
+    }
+    SoundSynth.playRustle();
+    this.updateBuildPreview(this.selectedPlacementTile.tx, this.selectedPlacementTile.ty);
   }
 
   public setBuildMode(type: BuildingType | null, movingBuildingId?: string): void {
     this.buildModeType = type;
     this.movingBuildingId = movingBuildingId || null;
-    this.placementCooldown = Date.now() + 300; // 300ms cooldown to block modal click-through
+    this.isPlacementPinned = false;
+    this.placementCooldown = Date.now() + 260;
 
     if (!type) {
+      this.buildRotation = 0;
       for (const h of this.buildGridHighlights) h.setVisible(false);
       if (this.buildGhostSprite) this.buildGhostSprite.setVisible(false);
+      if (this.buildableZoneGraphics) this.buildableZoneGraphics.setVisible(false);
       if (this.onPlacementStatusChange) {
         this.onPlacementStatusChange({
           active: false,
@@ -1093,16 +1188,27 @@ export class WorldScene extends Phaser.Scene {
           isMoving: false,
           tileX: 0,
           tileY: 0,
+          rotation: 0,
           valid: false,
         });
       }
     } else {
-      const { tex, originY } = this.getBuildingVisualConfig(type);
+      if (movingBuildingId) {
+        const existing = this.buildingSystem.buildings.find((b) => b.id === movingBuildingId);
+        this.buildRotation = existing ? BuildingSystem.normalizeRotation(existing.rotation) : 0;
+      } else {
+        this.buildRotation = 0;
+      }
+
+      const { tex, originY } = this.getBuildingVisualConfig(type, this.buildRotation);
 
       if (this.buildGhostSprite) {
         this.buildGhostSprite.setTexture(tex);
         this.buildGhostSprite.setOrigin(0.5, originY);
         this.buildGhostSprite.setVisible(true);
+      }
+      if (this.buildableZoneGraphics) {
+        this.buildableZoneGraphics.setVisible(true);
       }
 
       // Default preview spot: 2 tiles away from player in current facing direction
@@ -1126,6 +1232,10 @@ export class WorldScene extends Phaser.Scene {
     if (!this.buildModeType || !this.buildGhostSprite) return;
 
     this.selectedPlacementTile = { tx, ty };
+    const { tex, originY } = this.getBuildingVisualConfig(this.buildModeType, this.buildRotation);
+    this.buildGhostSprite.setTexture(tex);
+    this.buildGhostSprite.setOrigin(0.5, originY);
+
     const fp = BuildingSystem.getFootprint(this.buildModeType);
     const { x: ghostX, y: ghostY } = this.getFootprintWorldPos(tx, ty, fp.width, fp.height);
     this.buildGhostSprite.setPosition(ghostX, ghostY);
@@ -1136,7 +1246,9 @@ export class WorldScene extends Phaser.Scene {
     });
 
     const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
-    const resourcePositions = this.resourceSystem.nodes.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
+    const resourcePositions = this.resourceSystem.nodes
+      .filter((n) => !n.depletedUntil || n.depletedUntil <= Date.now())
+      .map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
 
     const check = this.buildingSystem.canPlaceBuilding(
       this.buildModeType,
@@ -1172,10 +1284,10 @@ export class WorldScene extends Phaser.Scene {
 
     if (isValid) {
       this.buildGhostSprite.setTint(0x4ade80); // Vibrant Emerald Green tint
-      this.buildGhostSprite.setAlpha(0.8);
+      this.buildGhostSprite.setAlpha(0.84);
     } else {
       this.buildGhostSprite.setTint(0xf87171); // Crisp Rose Red tint
-      this.buildGhostSprite.setAlpha(0.65);
+      this.buildGhostSprite.setAlpha(0.68);
     }
 
     if (this.onPlacementStatusChange) {
@@ -1185,6 +1297,7 @@ export class WorldScene extends Phaser.Scene {
         isMoving: !!this.movingBuildingId,
         tileX: tx,
         tileY: ty,
+        rotation: this.buildRotation,
         valid: isValid,
         reason: !hasItemOrMoving ? 'အိတ်ထဲတွင် အဆောက်အအုံ မလုံလောက်ပါ' : check.reason,
       });
@@ -1207,7 +1320,11 @@ export class WorldScene extends Phaser.Scene {
     });
 
     const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
-    const resourcePositions = this.resourceSystem.nodes.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
+    const resourcePositions = this.resourceSystem.nodes
+      .filter((n) => !n.depletedUntil || n.depletedUntil <= Date.now())
+      .map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
+
+    const ownerUid = this.networkSystem.localPlayerId || undefined;
 
     // 1. Move Mode Execution
     if (this.movingBuildingId) {
@@ -1219,7 +1336,8 @@ export class WorldScene extends Phaser.Scene {
         { x: this.playerTileX, y: this.playerTileY },
         remotePositions,
         npcPositions,
-        resourcePositions
+        resourcePositions,
+        this.buildRotation
       );
 
       if (moved) {
@@ -1228,6 +1346,7 @@ export class WorldScene extends Phaser.Scene {
         this.networkSystem.broadcastBuilding(moved);
         this.nudgePlayerIfInsideBuilding(moved.tileX, moved.tileY, moved.width, moved.height);
         this.setBuildMode(null);
+        if (this.onBuildingBuilt) this.onBuildingBuilt(true);
         if (this.onStateChanged) this.onStateChanged();
       } else {
         SoundSynth.playRustle();
@@ -1249,7 +1368,9 @@ export class WorldScene extends Phaser.Scene {
       { x: this.playerTileX, y: this.playerTileY },
       remotePositions,
       npcPositions,
-      resourcePositions
+      resourcePositions,
+      this.buildRotation,
+      ownerUid
     );
 
     if (placed) {
@@ -1258,15 +1379,23 @@ export class WorldScene extends Phaser.Scene {
       this.networkSystem.broadcastBuilding(placed);
       this.nudgePlayerIfInsideBuilding(placed.tileX, placed.tileY, placed.width, placed.height);
 
+      if (this.onBuildingBuilt) this.onBuildingBuilt(false);
+      if (this.onStateChanged) this.onStateChanged();
+
       // If no more items in inventory, exit build mode
       if (!this.inventorySystem.hasItem(this.buildModeType, 1)) {
         this.setBuildMode(null);
+      } else if (this.buildModeType === 'fence_wood') {
+        // Advance 1 tile along current isometric fence axis so building continuous fence lines is effortless
+        const stepX = this.buildRotation % 2 === 0 ? 1 : 0;
+        const stepY = this.buildRotation % 2 === 1 ? 1 : 0;
+        const nextTx = this.mapSystem.isTileInBounds(tx + stepX, ty + stepY) ? tx + stepX : tx;
+        const nextTy = this.mapSystem.isTileInBounds(tx + stepX, ty + stepY) ? ty + stepY : ty;
+        this.isPlacementPinned = true;
+        this.updateBuildPreview(nextTx, nextTy);
       } else {
-        // Refresh preview for next piece
+        this.isPlacementPinned = false;
         this.updateBuildPreview(tx, ty);
-      }
-      if (this.onStateChanged) {
-        this.onStateChanged();
       }
     } else {
       SoundSynth.playRustle();
@@ -1440,6 +1569,9 @@ export class WorldScene extends Phaser.Scene {
     this.gatherProgressBarBg.setVisible(false);
     this.gatherProgressBarFill.setVisible(false);
 
+    if (this.onResourceGathered) {
+      this.onResourceGathered();
+    }
     if (this.onStateChanged) {
       this.onStateChanged();
     }
@@ -1634,10 +1766,37 @@ export class WorldScene extends Phaser.Scene {
     // 4. Update Interaction Proximity Detection
     this.checkNearbyInteractions();
 
-    // 5. Notify React of player position
-    const currentZone = this.mapSystem.getZoneAt(Math.round(this.playerTileX), Math.round(this.playerTileY));
+    // 5. Notify React of player position and trigger debounced save on tile/zone change
+    const intX = Math.round(this.playerTileX);
+    const intY = Math.round(this.playerTileY);
+    const currentZone = this.mapSystem.getZoneAt(intX, intY);
     if (this.onPlayerMove) {
-      this.onPlayerMove(Math.round(this.playerTileX), Math.round(this.playerTileY), currentZone.name);
+      this.onPlayerMove(intX, intY, currentZone.name);
+    }
+
+    if (
+      this.lastReportedTileX !== intX ||
+      this.lastReportedTileY !== intY ||
+      this.lastReportedZone !== currentZone.name
+    ) {
+      const isInitial = this.lastReportedTileX === -999;
+      this.lastReportedTileX = intX;
+      this.lastReportedTileY = intY;
+      this.lastReportedZone = currentZone.name;
+      if (!isInitial && this.onStateChanged) {
+        this.onStateChanged();
+      }
+    }
+  }
+
+  private emitInteractionPrompt(
+    prompt: { type: string; title: string; subtitle: string; actionKey: string; targetId: string } | null
+  ): void {
+    const nextId = prompt ? prompt.targetId : null;
+    if (nextId === this.lastEmittedTargetId) return;
+    this.lastEmittedTargetId = nextId;
+    if (this.onInteractionChange) {
+      this.onInteractionChange(prompt);
     }
   }
 
@@ -1649,36 +1808,36 @@ export class WorldScene extends Phaser.Scene {
     const distGeneral = Math.hypot(ptx - 24, pty - 28);
     const distGrocery = Math.hypot(ptx - 24, pty - 35);
     const distMarket = Math.hypot(ptx - 35, pty - 33);
-    this.isNearShop = distGeneral <= 2.5 || distGrocery <= 2.5 || distMarket <= 2.4;
+    this.isNearShop = distGeneral <= 2.05 || distGrocery <= 2.05 || distMarket <= 2.0;
 
     // B. Crafting Station / Blacksmith Forge (33, 25 and 34, 25)
     const distCraft = Math.min(Math.hypot(ptx - 33, pty - 25), Math.hypot(ptx - 34, pty - 25));
-    this.isNearCraftStation = distCraft <= 2.5;
+    this.isNearCraftStation = distCraft <= 2.05;
 
     // C. Friendly Village NPCs (Bakery, Florist, Elder, Farmer)
     this.nearbyVillageNpc = null;
-    if (Math.hypot(ptx - 24, pty - 24) <= 2.3) {
+    if (Math.hypot(ptx - 24, pty - 24) <= 1.9) {
       this.nearbyVillageNpc = {
         role: 'baker',
         title: 'ကလာရာ၏ မုန့်ဖို (Village Bakery)',
         subtitle: 'လတ်လတ်ဆတ်ဆတ် မုန့်နံ့လေးတွေ သင်းနေပါတယ်',
         message: 'မင်္ဂလာပါ! ပူပူနွေးနွေး ပေါင်မုန့်လေးတွေ ဖုတ်နေပါတယ် 🥐',
       };
-    } else if (Math.hypot(ptx - 28, pty - 36) <= 2.3) {
+    } else if (Math.hypot(ptx - 28, pty - 36) <= 1.9) {
       this.nearbyVillageNpc = {
         role: 'florist',
         title: 'ဒေစီ၏ ပန်းဆိုင်လေး (Flower Shop)',
         subtitle: 'ရောင်စုံပန်းပွင့်လေးများဖြင့် ရွာလေးကို အလှဆင်ထားသည်',
         message: 'ရွာပန်းခြံအတွက် ပန်းလှလှလေးတွေ ပြုစုနေပါတယ် 🌸',
       };
-    } else if (Math.hypot(ptx - 29, pty - 29) <= 2.2) {
+    } else if (Math.hypot(ptx - 29, pty - 29) <= 1.85) {
       this.nearbyVillageNpc = {
         role: 'elder',
         title: 'ရွာလူကြီး အာသာ (Elder Arthur)',
         subtitle: 'စကားပြောရန် [E] နှိပ်ပါ',
         message: 'Random City ရွာလေးမှ ကြိုဆိုပါတယ် လူငယ်လေး! 🏡',
       };
-    } else if (Math.hypot(ptx - 50, pty - 74) <= 2.4) {
+    } else if (Math.hypot(ptx - 50, pty - 74) <= 1.9) {
       this.nearbyVillageNpc = {
         role: 'farmer',
         title: 'လယ်သမားကြီး သောမတ်စ်',
@@ -1687,7 +1846,7 @@ export class WorldScene extends Phaser.Scene {
       };
     }
 
-    // D. Nearby Placed Buildings (Cottage, Manor, Villa, Fence, Campfire, Storage Chest, Lantern)
+    // D. Nearby Personal Placed Buildings (Cottage, Manor, Villa, Fence, Campfire, Storage Chest, Lantern)
     this.isNearCampfire = false;
     this.nearbyStorageChest = null;
     this.nearbyPlacedBuilding = null;
@@ -1695,105 +1854,110 @@ export class WorldScene extends Phaser.Scene {
       const centerX = b.tileX + b.width / 2;
       const centerY = b.tileY + b.height / 2;
       const dist = Math.hypot(ptx - centerX, pty - centerY);
-      if (dist <= Math.max(2.4, Math.max(b.width, b.height) * 0.95)) {
-        this.nearbyPlacedBuilding = b;
+      const radius = Math.max(1.85, Math.max(b.width, b.height) * 0.72);
+      if (dist <= radius) {
+        const isMine = this.buildingSystem.isPersonalBuilding(
+          b,
+          this.networkSystem.localPlayerId || undefined,
+          this.playerProfile.name
+        );
         if (b.type === 'campfire') {
           this.isNearCampfire = true;
-        } else if (b.type === 'storage_box') {
-          this.nearbyStorageChest = b;
+        }
+        if (isMine) {
+          this.nearbyPlacedBuilding = b;
+          if (b.type === 'storage_box') {
+            this.nearbyStorageChest = b;
+          }
         }
       }
     }
 
-    // E. Nearby Resource Node
-    const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.8);
+    // E. Nearby Resource Node (tighter proximity check so hints only trigger when close enough to gather)
+    const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.55);
 
-    // Formulate HUD prompt for user in Burmese
-    if (this.onInteractionChange) {
-      if (this.isNearShop) {
-        const shopTitle = distGrocery <= 2.5
-          ? 'မာယာ၏ ကုန်စိမ်းနှင့်သစ်သီးဆိုင်'
-          : distMarket <= 2.4
+    // Emit compact HUD prompt only when targetId changes
+    if (this.isNearShop) {
+      const shopId = distGrocery <= 2.05 ? 'shop_grocery' : distMarket <= 2.0 ? 'shop_market' : 'shop_general';
+      const shopTitle =
+        shopId === 'shop_grocery'
+          ? 'မာယာ၏ ကုန်စိမ်းဆိုင်'
+          : shopId === 'shop_market'
           ? 'အာရီယာ၏ ဈေးဆိုင်တန်း'
-          : 'ဘားနဘီ၏ အထွေထွေကုန်စုံဆိုင်';
-        this.onInteractionChange({
-          type: 'shop',
-          title: shopTitle,
-          subtitle: 'ကိရိယာ၊ အစားအစာနှင့် အိမ်ဆောက်ပစ္စည်းများ ဝယ်/ရောင်းရန်',
-          actionKey: 'E',
-        });
-      } else if (this.isNearCraftStation) {
-        this.onInteractionChange({
-          type: 'crafting',
-          title: 'ပန်းပဲဖိုနှင့် လက်မှုလုပ်ငန်းခုံ',
-          subtitle: 'ပုဆိန်၊ ပေါက်ပြား၊ အိမ်အရွယ်အစားစုံ ဖန်တီးရန်',
-          actionKey: 'E',
-        });
-      } else if (this.nearbyPlacedBuilding) {
-        const bName = this.nearbyPlacedBuilding.type === 'house_small'
+          : 'ဘားနဘီ၏ ကုန်စုံဆိုင်';
+      this.emitInteractionPrompt({
+        type: 'shop',
+        title: shopTitle,
+        subtitle: 'ဝယ်/ရောင်းရန်',
+        actionKey: 'E',
+        targetId: shopId,
+      });
+    } else if (this.isNearCraftStation) {
+      this.emitInteractionPrompt({
+        type: 'crafting',
+        title: 'လက်မှုလုပ်ငန်းခုံ',
+        subtitle: 'ပစ္စည်းဖန်တီးရန်',
+        actionKey: 'E',
+        targetId: 'craft_station',
+      });
+    } else if (this.nearbyPlacedBuilding) {
+      const b = this.nearbyPlacedBuilding;
+      const bName =
+        b.type === 'house_small'
           ? 'သစ်သားအိမ်ငယ်'
-          : this.nearbyPlacedBuilding.type === 'house_medium'
+          : b.type === 'house_medium'
           ? 'နှစ်ထပ်သစ်သားအိမ်'
-          : this.nearbyPlacedBuilding.type === 'house_large'
+          : b.type === 'house_large'
           ? 'စံအိမ်ကြီး'
-          : this.nearbyPlacedBuilding.type === 'fence_wood'
+          : b.type === 'fence_wood'
           ? 'သစ်သားခြံစည်းရိုး'
-          : this.nearbyPlacedBuilding.type === 'storage_box'
+          : b.type === 'storage_box'
           ? 'သိုလှောင်သေတ္တာ'
-          : this.nearbyPlacedBuilding.type === 'campfire'
+          : b.type === 'campfire'
           ? 'မီးဖို'
-          : this.nearbyPlacedBuilding.type === 'lantern'
+          : b.type === 'lantern'
           ? 'မီးအိမ်တိုင်'
           : 'အဆောက်အအုံ';
-        this.onInteractionChange({
-          type: 'building_manage',
-          title: `${bName} စီမံခန့်ခွဲမှု`,
-          subtitle: 'ရွှေ့ပြောင်းရန် သို့မဟုတ် ဖျက်သိမ်းရန် [E] နှိပ်ပါ',
-          actionKey: 'E',
-        });
-      } else if (nearbyNode) {
-        let actionWord = 'ရိတ်သိမ်းမည်';
-        let toolHint = '';
-        if (nearbyNode.type === 'tree') {
-          actionWord = 'သစ်ခုတ်မည် (သစ်ပင်)';
-          toolHint = 'ပုဆိန်ဖြင့် ခုတ်ပါက သစ်သားပိုမိုရရှိသည်';
-        } else if (nearbyNode.type === 'rock') {
-          actionWord = 'ကျောက်ခွဲမည် (ကျောက်တုံး)';
-          toolHint = 'ပေါက်ပြားဖြင့် ခွဲပါက ကျောက်တုံးပိုမိုရရှိသည်';
-        } else if (nearbyNode.type === 'bush') {
-          actionWord = 'အပင်အမျှင်ခူးမည် (ချုံပုတ်)';
-          toolHint = 'သဘာဝအမျှင်နှင့် သစ်သီးများရရှိသည်';
-        } else if (nearbyNode.type === 'animal') {
-          actionWord = 'အမဲလိုက်မည် (တောရိုင်းတိရစ္ဆာန်)';
-          toolHint = 'လတ်ဆတ်သော အသားစိမ်းရရှိသည်';
-        } else if (nearbyNode.type === 'lake_fish') {
-          actionWord = 'ငါးမျှားမည် (ရေကန်)';
-          toolHint = 'လတ်ဆတ်သော ရေကန်ငါးများ ရရှိသည်';
-        }
+      this.emitInteractionPrompt({
+        type: b.type === 'storage_box' ? 'storage' : 'building_manage',
+        title: bName,
+        subtitle: b.type === 'storage_box' ? 'သေတ္တာဖွင့်ရန်' : 'စီမံရန် / ရွှေ့ရန်',
+        actionKey: 'E',
+        targetId: `bld_${b.id}`,
+      });
+    } else if (nearbyNode) {
+      let actionWord = 'ရိတ်သိမ်းမည်';
+      if (nearbyNode.type === 'tree') actionWord = 'သစ်ခုတ်မည်';
+      else if (nearbyNode.type === 'rock') actionWord = 'ကျောက်ခွဲမည်';
+      else if (nearbyNode.type === 'bush') actionWord = 'အမျှင်ခူးမည်';
+      else if (nearbyNode.type === 'animal') actionWord = 'အမဲလိုက်မည်';
+      else if (nearbyNode.type === 'lake_fish') actionWord = 'ငါးမျှားမည်';
 
-        this.onInteractionChange({
-          type: 'gather',
-          title: actionWord,
-          subtitle: toolHint,
-          actionKey: 'E',
-        });
-      } else if (this.isNearCampfire) {
-        this.onInteractionChange({
-          type: 'campfire',
-          title: 'နွေးထွေးသော မီးဖို',
-          subtitle: 'အသားနှင့် ငါးများ ကင်ရန်/ချက်ပြုတ်ရန်',
-          actionKey: 'E',
-        });
-      } else if (this.nearbyVillageNpc) {
-        this.onInteractionChange({
-          type: 'npc',
-          title: this.nearbyVillageNpc.title,
-          subtitle: this.nearbyVillageNpc.subtitle,
-          actionKey: 'E',
-        });
-      } else {
-        this.onInteractionChange(null);
-      }
+      this.emitInteractionPrompt({
+        type: 'gather',
+        title: actionWord,
+        subtitle: 'စတင်ရိတ်သိမ်းရန်',
+        actionKey: 'E',
+        targetId: `node_${nearbyNode.id}`,
+      });
+    } else if (this.isNearCampfire) {
+      this.emitInteractionPrompt({
+        type: 'campfire',
+        title: 'မီးဖို',
+        subtitle: 'ချက်ပြုတ်ရန်',
+        actionKey: 'E',
+        targetId: 'campfire_cook',
+      });
+    } else if (this.nearbyVillageNpc) {
+      this.emitInteractionPrompt({
+        type: 'npc',
+        title: this.nearbyVillageNpc.title,
+        subtitle: 'စကားပြောရန်',
+        actionKey: 'E',
+        targetId: `npc_${this.nearbyVillageNpc.role}`,
+      });
+    } else {
+      this.emitInteractionPrompt(null);
     }
   }
 

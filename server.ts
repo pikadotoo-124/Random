@@ -267,7 +267,9 @@ async function createServer() {
             const { building } = msg.payload;
             if (!building) return;
 
-            building.placedBy = playerId;
+            const player = players.get(playerId);
+            building.ownerId = playerId;
+            building.placedBy = building.placedBy || player?.playerName || playerId;
             const existingIdx = placedBuildings.findIndex((b) => b.id === building.id);
             if (existingIdx !== -1) {
               placedBuildings[existingIdx] = building;
@@ -289,7 +291,8 @@ async function createServer() {
             const idx = placedBuildings.findIndex((b) => b.id === buildingId);
             if (idx === -1) return;
 
-            if (placedBuildings[idx].placedBy !== playerId) {
+            const owner = placedBuildings[idx].ownerId || placedBuildings[idx].placedBy;
+            if (owner !== playerId) {
               ws.send(JSON.stringify({
                 type: 's:error',
                 payload: { code: 'FORBIDDEN', message: 'You can only dismantle your own structures.' },

@@ -44,6 +44,8 @@ export interface InventorySlot {
 
 export type BuildingType = 'house_small' | 'house_medium' | 'house_large' | 'fence_wood' | 'campfire' | 'storage_box' | 'lantern';
 
+export type FenceRotation = 0 | 1 | 2 | 3;
+
 export interface PlacedBuilding {
   id: string;
   type: BuildingType;
@@ -51,6 +53,8 @@ export interface PlacedBuilding {
   tileY: number;
   width: number;
   height: number;
+  rotation?: FenceRotation;
+  ownerId?: string;
   placedBy: string;
   createdAt: number;
   storage?: InventorySlot[];
@@ -88,6 +92,20 @@ export interface PlayerProfile {
   clothesColor: string;
   coins: number;
   currentTool: ItemId | null;
+}
+
+export interface PlayerStats {
+  health: number;
+  stamina: number;
+  totalGathered: number;
+  totalCrafted: number;
+  totalBuilt: number;
+  totalSoldGold: number;
+}
+
+export interface PlayerWorldChanges {
+  tutorialCompleted: boolean;
+  discoveredZones: string[];
 }
 
 export interface ZoneDefinition {

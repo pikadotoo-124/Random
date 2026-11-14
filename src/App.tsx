@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ChatBox } from './components/ChatBox';
 import { ActionPromptHUD } from './components/ActionPromptHUD';
@@ -24,13 +24,22 @@ import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { GameManager } from './game/GameManager';
 import { ChatMessage, ConnectionStatus } from './game/multiplayer/types';
 import { SaveSystem } from './game/systems/SaveSystem';
-import { BuildingType, PlacedBuilding, PlayerProfile } from './game/types';
+import { BuildingType, FenceRotation, PlacedBuilding, PlayerProfile } from './game/types';
+
+function detectTouchViewport(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const hasCoarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const hasTouch = (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) || 'ontouchstart' in window;
+  return hasCoarse || (hasTouch && w <= 1180) || w < 768 || (w <= 1024 && h <= 540);
+}
 
 /**
- * GamePlay component mounted only after authentication and profile are ready
+ * GamePlay component mounted only after authentication, profile, and cloud gameState are hydrated
  */
 function GamePlay() {
-  const { user, profile, gameState, loading } = useAuth();
+  const { user, profile, gameState, cloudSyncStatus, retryCloudSave, registerBeforeSignOutSave } = useAuth();
   const gameManagerRef = useRef<GameManager | null>(null);
 
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile>(() => {
@@ -46,11 +55,10 @@ function GamePlay() {
     };
   });
 
-  const [coins, setCoins] = useState<number>(() => {
-    return gameState?.inventory?.coins ?? 25;
-  });
-
-  const [currentZone, setCurrentZone] = useState('Central Plaza (Main City)');
+  const [coins, setCoins] = useState<number>(() => gameState?.inventory?.coins ?? 25);
+  const [currentZone, setCurrentZone] = useState<string>(
+    () => gameState?.currentZone || 'Central Plaza (Main City)'
+  );
   const [playerCoords, setPlayerCoords] = useState<{ x: number; y: number }>(() => {
     if (gameState?.position) {
       return { x: gameState.position.tileX, y: gameState.position.tileY };
@@ -58,11 +66,17 @@ function GamePlay() {
     return { x: 30, y: 30 };
   });
 
+  const [tutorialCompleted, setTutorialCompleted] = useState<boolean>(() =>
+    Boolean(gameState?.playerWorldChanges?.tutorialCompleted)
+  );
+  const [isTouchMode, setIsTouchMode] = useState<boolean>(detectTouchViewport);
+
   const [interactionPrompt, setInteractionPrompt] = useState<{
     type: string;
     title: string;
     subtitle: string;
     actionKey: string;
+    targetId?: string;
   } | null>(null);
 
   // Active Modals
@@ -79,6 +93,7 @@ function GamePlay() {
     isMoving: boolean;
     tileX: number;
     tileY: number;
+    rotation: FenceRotation;
     valid: boolean;
     reason?: string;
   } | null>(null);
@@ -92,20 +107,41 @@ function GamePlay() {
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
 
+  useEffect(() => {
+    const updateTouch = () => setIsTouchMode(detectTouchViewport());
+    window.addEventListener('resize', updateTouch);
+    window.addEventListener('orientationchange', updateTouch);
+    return () => {
+      window.removeEventListener('resize', updateTouch);
+      window.removeEventListener('orientationchange', updateTouch);
+    };
+  }, []);
+
   // Initialize Phaser Game instance and Multiplayer
   useEffect(() => {
-    if (!user) return;
+    if (!user || !gameState) return;
 
-    const gm = new GameManager(playerProfile, user.uid, gameState || undefined);
+    const initialProf = gameState.player || playerProfile;
+    setPlayerProfile(initialProf);
+    setCoins(gameState.inventory.coins);
+    setPlayerCoords({ x: gameState.position.tileX, y: gameState.position.tileY });
+    if (gameState.currentZone) setCurrentZone(gameState.currentZone);
+    setTutorialCompleted(Boolean(gameState.playerWorldChanges?.tutorialCompleted));
+
+    const gm = new GameManager(initialProf, user.uid, gameState);
     gameManagerRef.current = gm;
+
+    // Register authoritative pre-signout cloud flush BEFORE Phaser cleanup
+    registerBeforeSignOutSave(async () => {
+      await gm.saveCurrentState(true);
+    });
 
     gm.initGame('phaser-canvas-container');
 
-    // Subscribe to inventory updates (shop, crafting, chest transfer)
+    // Subscribe to inventory updates (shop, crafting, chest transfer, building)
     gm.inventorySystem.onUpdate = () => {
       setCoins(gm.inventorySystem.coins);
       setInventoryVersion((v) => v + 1);
-      // Trigger debounced cloud save
       gm.saveCurrentState(false);
     };
 
@@ -125,10 +161,10 @@ function GamePlay() {
         gm.networkSystem.connect(
           token,
           {
-            name: playerProfile.name,
-            gender: playerProfile.gender,
-            positionX: playerCoords.x,
-            positionY: playerCoords.y,
+            name: initialProf.name,
+            gender: initialProf.gender,
+            positionX: gameState.position.tileX,
+            positionY: gameState.position.tileY,
           },
           () => tokenGetter(true)
         );
@@ -204,27 +240,54 @@ function GamePlay() {
         setSelectedManageBuilding(building);
       };
 
-      // When player gathers resource or places building, save
+      gm.worldScene.onResourceGathered = () => {
+        gm.recordStat('totalGathered', 1);
+      };
+
+      gm.worldScene.onBuildingBuilt = (isMove) => {
+        if (!isMove) {
+          gm.recordStat('totalBuilt', 1);
+        }
+      };
+
       gm.worldScene.onStateChanged = () => {
         gm.saveCurrentState(false);
       };
     }
 
-    // Auto-save player state (position & stats) every 20 seconds
+    // Periodic safety auto-save every 20 seconds
     const autoSaveTimer = setInterval(() => {
       gm.saveCurrentState(false);
     }, 20000);
 
-    // Immediate save before leaving page
-    const handleBeforeUnload = () => {
+    // Reliable flush on page hide / tab switch / unload
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        gm.flushPendingLocalOnly();
+        gm.saveCurrentState(true);
+      }
+    };
+    const handlePageHide = () => {
+      gm.flushPendingLocalOnly();
       gm.saveCurrentState(true);
     };
+    const handleBeforeUnload = () => {
+      gm.flushPendingLocalOnly();
+      gm.saveCurrentState(true);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
       clearInterval(autoSaveTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      registerBeforeSignOutSave(null);
       unsubs.forEach((unsub) => unsub());
+      gm.flushPendingLocalOnly();
       gm.saveCurrentState(true);
       gm.destroy();
       gameManagerRef.current = null;
@@ -244,14 +307,23 @@ function GamePlay() {
   };
 
   // Trigger Action
-  const handleTriggerAction = () => {
+  const handleTriggerAction = useCallback(() => {
+    if (!tutorialCompleted) {
+      setTutorialCompleted(true);
+      gameManagerRef.current?.markTutorialCompleted();
+    }
     gameManagerRef.current?.triggerAction();
-  };
+  }, [tutorialCompleted]);
+
+  const handleDismissTutorial = useCallback(() => {
+    setTutorialCompleted(true);
+    gameManagerRef.current?.markTutorialCompleted();
+  }, []);
 
   // Mobile Joystick move
-  const handleJoystickMove = (vx: number, vy: number) => {
+  const handleJoystickMove = useCallback((vx: number, vy: number) => {
     gameManagerRef.current?.setJoystickVector(vx, vy);
-  };
+  }, []);
 
   // Zoom controls
   const handleZoomIn = () => gameManagerRef.current?.zoomIn();
@@ -268,6 +340,10 @@ function GamePlay() {
     setActiveBuildingPiece(null);
     setPlacementStatus(null);
     gameManagerRef.current?.setBuildMode(null);
+  };
+
+  const handleRotateBuildPreview = () => {
+    gameManagerRef.current?.rotateBuildPreview();
   };
 
   // Town Chat Toggle & Shortcuts
@@ -299,6 +375,8 @@ function GamePlay() {
       } else if (e.key === 'Escape') {
         if (isChatOpen) {
           setIsChatOpen(false);
+        } else if (activeModal) {
+          setActiveModal(null);
         }
       }
     };
@@ -317,8 +395,10 @@ function GamePlay() {
     window.location.reload();
   };
 
+  const isBuildActive = Boolean(placementStatus?.active || activeBuildingPiece);
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-stone-950 font-sans select-none">
+    <div className="relative w-screen h-[100dvh] overflow-hidden bg-stone-950 font-sans select-none">
       {/* 1. Phaser 3 Canvas Viewport */}
       <div id="phaser-canvas-container" className="absolute inset-0 w-full h-full" />
 
@@ -331,11 +411,16 @@ function GamePlay() {
         onOpenModal={(modal) => setActiveModal(modal)}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
-        isBuildMode={!!activeBuildingPiece}
+        isBuildMode={isBuildActive}
         onCancelBuildMode={handleCancelBuildMode}
         onlineCount={onlineCount}
         maxPlayers={10}
         connectionStatus={connectionStatus}
+        cloudSyncStatus={cloudSyncStatus}
+        onRetryCloudSave={() => {
+          gameManagerRef.current?.saveCurrentState(true);
+          retryCloudSave();
+        }}
         isChatOpen={isChatOpen}
         unreadChatCount={unreadChatCount}
         onToggleChat={handleToggleChat}
@@ -399,14 +484,24 @@ function GamePlay() {
         </div>
       )}
 
-      {/* 3. Context-sensitive Action Prompt HUD */}
-      <ActionPromptHUD prompt={interactionPrompt} onTrigger={handleTriggerAction} />
+      {/* 3. Context-sensitive Action Prompt HUD (Clean, brief, non-blocking) */}
+      <ActionPromptHUD
+        prompt={interactionPrompt}
+        onTrigger={handleTriggerAction}
+        isTouchMode={isTouchMode}
+        tutorialCompleted={tutorialCompleted}
+        onDismissTutorial={handleDismissTutorial}
+        isBuildMode={isBuildActive}
+      />
 
       {/* 4. Mobile Virtual Joystick & Touch Controls */}
       <MobileControls
         onJoystickMove={handleJoystickMove}
         onInteract={handleTriggerAction}
         onOpenModal={(modal) => setActiveModal(modal)}
+        hasNearbyInteraction={Boolean(interactionPrompt)}
+        isBuildMode={isBuildActive}
+        isModalOpen={Boolean(activeModal || selectedManageBuilding)}
       />
 
       {/* 5. Inventory Modal */}
@@ -425,6 +520,10 @@ function GamePlay() {
           inventory={gameManagerRef.current.inventorySystem}
           isNearWorkbench={gameManagerRef.current.worldScene?.isNearCraftStation ?? true}
           isNearCampfire={gameManagerRef.current.worldScene?.isNearCampfire ?? false}
+          onCrafted={() => {
+            gameManagerRef.current?.recordStat('totalCrafted', 1);
+            gameManagerRef.current?.saveCurrentState(false);
+          }}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -433,6 +532,10 @@ function GamePlay() {
       {activeModal === 'shop' && gameManagerRef.current && (
         <ShopModal
           inventory={gameManagerRef.current.inventorySystem}
+          onSold={(goldEarned) => {
+            gameManagerRef.current?.recordStat('totalSoldGold', goldEarned);
+            gameManagerRef.current?.saveCurrentState(false);
+          }}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -462,11 +565,13 @@ function GamePlay() {
         <StorageBoxModal
           building={selectedStorageBuilding}
           inventory={gameManagerRef.current.inventorySystem}
+          onStorageChanged={() => {
+            gameManagerRef.current?.saveCurrentState(false);
+          }}
           onClose={() => {
             setActiveModal(null);
             setSelectedStorageBuilding(null);
-            // Save state after storage chest transfer
-            gameManagerRef.current?.saveCurrentState(false);
+            gameManagerRef.current?.saveCurrentState(true);
           }}
         />
       )}
@@ -476,21 +581,25 @@ function GamePlay() {
         <SettingsModal
           playerProfile={playerProfile}
           onClose={() => setActiveModal(null)}
-          onSave={() => gameManagerRef.current?.saveCurrentState(true)}
+          onSave={() => {
+            gameManagerRef.current?.saveCurrentState(true);
+          }}
           onReset={handleResetGame}
           onNameUpdated={handleNameUpdated}
         />
       )}
 
-      {/* 12. Building Placement HUD (Ghost Preview & Position Confirmation) */}
+      {/* 12. Building Placement HUD (Ghost Preview, Fence Rotation & Position Confirmation) */}
       {placementStatus && placementStatus.active && placementStatus.buildingType && (
         <BuildingPlacementHUD
           buildingType={placementStatus.buildingType}
           isMoving={placementStatus.isMoving}
           tileX={placementStatus.tileX}
           tileY={placementStatus.tileY}
+          rotation={placementStatus.rotation}
           valid={placementStatus.valid}
           reason={placementStatus.reason}
+          onRotate={handleRotateBuildPreview}
           onConfirm={() => {
             gameManagerRef.current?.confirmBuildPlacement();
           }}
@@ -524,15 +633,15 @@ function GamePlay() {
 }
 
 /**
- * Root Application Container with Authentication Gate
+ * Root Application Container with strict Cloud Hydration Gate
  */
 function RootContainer() {
-  const { user, profile, loading, createProfileAndStart } = useAuth();
+  const { user, profile, gameState, loading, createProfileAndStart } = useAuth();
 
-  // 1. Initial Authentication & Firestore Checking
-  if (loading && !user) {
+  // 1. Wait for Auth AND Cloud Save hydration before mounting Character Select or GamePlay
+  if (loading || (user && profile && !gameState)) {
     return (
-      <div className="w-screen h-screen flex flex-col items-center justify-center bg-stone-950 text-stone-200 gap-3 select-none">
+      <div className="w-screen h-[100dvh] flex flex-col items-center justify-center bg-stone-950 text-stone-200 gap-3 select-none">
         <Loader2 size={36} className="animate-spin text-amber-500" />
         <div className="text-sm font-semibold tracking-wide text-stone-300">
           Connecting to Random City Cloud...
@@ -558,7 +667,7 @@ function RootContainer() {
     );
   }
 
-  // 4. Authenticated & Profile ready: Start the World!
+  // 4. Authenticated, Profile & Cloud Save ready: Start the World!
   return <GamePlay />;
 }
 

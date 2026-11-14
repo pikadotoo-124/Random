@@ -155,8 +155,8 @@ export const BuildMenuModal: React.FC<BuildMenuModalProps> = ({
 
         {/* Blueprint cards */}
         <div className="p-6 overflow-y-auto space-y-3">
-          <div className="text-xs text-stone-400 mb-2">
-            ဆောက်လုပ်လိုသည့် အဆောက်အအုံကို ရွေးချယ်ပြီး မြေပြင်ပေါ်တွင် နေရာချထားနိုင်ပါသည် (မြို့လယ်ပလာဇာပြင်ပ နေရာလွတ်များတွင် ဆောက်လုပ်နိုင်သည်)။
+          <div className="text-xs text-emerald-300/90 bg-emerald-950/40 border border-emerald-800/50 rounded-xl px-3.5 py-2.5 mb-2 leading-relaxed">
+            🏡 <strong>ဆောက်လုပ်နိုင်သော ဇုန် (Homestead District — X: 40–114, Y: 40–114):</strong> အိမ်နှင့် ခြံစည်းရိုးများကို သတ်မှတ်ထားသော အိမ်ရာဇုန်အတွင်း မြေလွတ်နေရာများတွင်သာ ဆောက်လုပ်နိုင်ပါသည် (မြို့လယ်၊ လမ်းမ၊ ရေပြင်နှင့် စိုက်ခင်းများပေါ်တွင် မဆောက်နိုင်ပါ)။
           </div>
 
           <div className="grid grid-cols-1 gap-3">

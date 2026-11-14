@@ -68,7 +68,7 @@
         },
         "playerStats": {
           "type": "object",
-          "description": "Lifetime stats and survival meters"
+          "description": "Lifetime player stats (health, stamina, totalGathered, totalCrafted, totalBuilt, totalSoldGold)"
         },
         "lastSavedAt": {
           "type": "string",
@@ -85,7 +85,7 @@
       "properties": {
         "placedBuildings": {
           "type": "array",
-          "description": "List of buildings constructed by player"
+          "description": "List of buildings constructed by player including rotation, ownerId, and storage"
         },
         "storageBoxes": {
           "type": "array",
@@ -93,7 +93,7 @@
         },
         "playerWorldChanges": {
           "type": "object",
-          "description": "World modifications record"
+          "description": "World modifications record (tutorialCompleted, discoveredZones)"
         },
         "lastSavedAt": {
           "type": "string",

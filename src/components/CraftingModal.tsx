@@ -16,6 +16,7 @@ interface CraftingModalProps {
   inventory: InventorySystem;
   isNearWorkbench: boolean;
   isNearCampfire: boolean;
+  onCrafted?: () => void;
   onClose: () => void;
 }
 
@@ -24,6 +25,7 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
   inventory,
   isNearWorkbench,
   isNearCampfire,
+  onCrafted,
   onClose,
 }) => {
   const [selectedRecipeId, setSelectedRecipeId] = useState<string>(craftingSystem.recipes[0].id);
@@ -38,6 +40,7 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
     const success = craftingSystem.craft(selectedRecipe, inventory, isNearWorkbench, isNearCampfire);
     if (success) {
       SoundSynth.playSuccess();
+      onCrafted?.();
     }
   };
 

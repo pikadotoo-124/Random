@@ -2024,35 +2024,111 @@ export class PixelArtGenerator {
     textures.addCanvas('obj_house_large', canvas);
   }
 
-  // 13. Clean Wooden Fence
+  // 13. Clean Isometric Grid-Aligned Wooden Fence (4 rotations: 0=NW-SE, 1=NE-SW, 2=NW-SE Braced, 3=NE-SW Braced)
   private static createFenceSprite(textures: Phaser.Textures.TextureManager) {
-    if (textures.exists('bld_fence_wood')) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = 44;
-    canvas.height = 36;
-    const ctx = canvas.getContext('2d')!;
+    if (textures.exists('obj_fence_wood_0')) return;
 
-    // Shadow
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.3)';
-    ctx.fillRect(6, 28, 32, 4);
+    // 64x56 canvas centered on tile diamond at (32, 38) -> originY = 38 / 56
+    // Diamond edge midpoints:
+    //   NW-SE axis (along tx): Left-Top edge (16, 30) <-> Right-Bottom edge (48, 46)
+    //   NE-SW axis (along ty): Right-Top edge (48, 30) <-> Left-Bottom edge (16, 46)
+    const drawFenceCanvas = (rot: 0 | 1 | 2 | 3) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 56;
+      const ctx = canvas.getContext('2d')!;
 
-    // Posts
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(8, 10, 5, 20);
-    ctx.fillRect(30, 10, 5, 20);
+      const isAxisX = rot % 2 === 0; // 0 & 2 align along tx (NW -> SE); 1 & 3 align along ty (NE -> SW)
+      const isBracedVariant = rot >= 2;
 
-    // Post caps
-    ctx.fillStyle = '#b45309';
-    ctx.fillRect(7, 8, 7, 3);
-    ctx.fillRect(29, 8, 7, 3);
+      const startX = isAxisX ? 16 : 48;
+      const startY = 30;
+      const endX = isAxisX ? 48 : 16;
+      const endY = 46;
+      const midX = 32;
+      const midY = 38;
 
-    // Cross rails
-    ctx.fillStyle = '#92400e';
-    ctx.fillRect(10, 14, 24, 4);
-    ctx.fillRect(10, 22, 24, 4);
+      // Ground contact shadow along isometric line
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.32)';
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(startX, startY + 2);
+      ctx.lineTo(endX, endY + 2);
+      ctx.stroke();
 
-    textures.addCanvas('bld_fence_wood', canvas);
-    textures.addCanvas('obj_fence_wood', canvas);
+      // Helper to draw a shaded vertical post anchored at ground (px, py)
+      const drawPost = (px: number, py: number, height: number, width = 5) => {
+        const halfW = Math.floor(width / 2);
+        // Shadow side
+        ctx.fillStyle = '#5c2808';
+        ctx.fillRect(px - halfW, py - height, width, height);
+        // Lit side (sun from top-left)
+        ctx.fillStyle = isAxisX ? '#854d0e' : '#9a5b13';
+        ctx.fillRect(px - halfW, py - height, Math.max(2, width - 2), height);
+        // Beveled wooden cap
+        ctx.fillStyle = '#d97706';
+        ctx.fillRect(px - halfW - 1, py - height - 2, width + 2, 3);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(px - halfW - 1, py - height - 2, width, 1);
+      };
+
+      // Back post first (upper in isometric depth)
+      drawPost(startX, startY, 17, 5);
+
+      // Isometric sloped horizontal rails (edge-to-edge seamless connection!)
+      const drawRail = (offsetY: number, thickness: number, color: string, highlight: string) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = thickness;
+        ctx.lineCap = 'butt';
+        ctx.beginPath();
+        ctx.moveTo(startX, startY - offsetY);
+        ctx.lineTo(endX, endY - offsetY);
+        ctx.stroke();
+
+        // Top bevel highlight
+        ctx.strokeStyle = highlight;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(startX, startY - offsetY - thickness / 2);
+        ctx.lineTo(endX, endY - offsetY - thickness / 2);
+        ctx.stroke();
+      };
+
+      // Bottom rail & Top rail
+      drawRail(6, 3.5, '#78350f', '#b45309');
+      drawRail(13, 3.5, '#92400e', '#d97706');
+
+      if (isBracedVariant) {
+        // Diagonal cross-brace / picket detail to visually distinguish rotations 2 & 3
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(startX + (endX - startX) * 0.2, startY + (endY - startY) * 0.2 - 12);
+        ctx.lineTo(endX - (endX - startX) * 0.2, endY - (endY - startY) * 0.2 - 5);
+        ctx.stroke();
+      }
+
+      // Center post
+      drawPost(midX, midY, isBracedVariant ? 20 : 18, isBracedVariant ? 6 : 5);
+
+      // Front post last (closest to viewer)
+      drawPost(endX, endY, 17, 5);
+
+      return canvas;
+    };
+
+    const c0 = drawFenceCanvas(0);
+    const c1 = drawFenceCanvas(1);
+    const c2 = drawFenceCanvas(2);
+    const c3 = drawFenceCanvas(3);
+
+    textures.addCanvas('obj_fence_wood_0', c0);
+    textures.addCanvas('obj_fence_wood_1', c1);
+    textures.addCanvas('obj_fence_wood_2', c2);
+    textures.addCanvas('obj_fence_wood_3', c3);
+    textures.addCanvas('bld_fence_wood', c0);
+    textures.addCanvas('obj_fence_wood', c0);
   }
 
   // 14. Campfire (Lit & Unlit)

@@ -13,12 +13,14 @@ import { SoundSynth } from '../game/utils/SoundSynth';
 interface StorageBoxModalProps {
   building: PlacedBuilding;
   inventory: InventorySystem;
+  onStorageChanged?: () => void;
   onClose: () => void;
 }
 
 export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
   building,
   inventory,
+  onStorageChanged,
   onClose,
 }) => {
   if (!building.storage) {
@@ -39,6 +41,7 @@ export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
 
     SoundSynth.playSuccess();
     setRenderTick((t) => t + 1);
+    onStorageChanged?.();
   };
 
   const withdrawItem = (itemId: ItemId) => {
@@ -53,6 +56,7 @@ export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
     inventory.addItem(itemId, 1);
     SoundSynth.playSuccess();
     setRenderTick((t) => t + 1);
+    onStorageChanged?.();
   };
 
   return (

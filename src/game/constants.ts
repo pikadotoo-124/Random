@@ -14,6 +14,22 @@ export const MAP_CONFIG = {
   ORIGIN_Y: 100,
 };
 
+export const TOWN_PROTECTED_BOUNDS = {
+  minX: 21,
+  minY: 21,
+  maxX: 39,
+  maxY: 39,
+};
+
+export const BUILDABLE_ZONE_BOUNDS = {
+  id: 'building_area',
+  name: 'အခြေချရပ်ကွက် (Homestead District)',
+  minX: 40,
+  minY: 40,
+  maxX: 114,
+  maxY: 114,
+};
+
 export const ITEMS: Record<ItemId, ItemDefinition> = {
   wood: {
     id: 'wood',

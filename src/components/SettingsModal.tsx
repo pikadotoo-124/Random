@@ -38,9 +38,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onReset,
   onNameUpdated,
 }) => {
-  const { user, profile, signOutUser, updateName, isOffline } = useAuth();
+  const { user, signOutUser, updateName, cloudSyncStatus, retryCloudSave } = useAuth();
   const [sound, setSound] = useState(SoundSynth.enabled);
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Edit Name State
   const [isEditingName, setIsEditingName] = useState(false);
@@ -55,10 +55,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleSaveClick = () => {
+  const handleSaveClick = async () => {
     onSave();
-    setSaveStatus('Progress saved to Cloud Firestore & LocalStorage!');
-    setTimeout(() => setSaveStatus(null), 3500);
+    const ok = await retryCloudSave();
+    setSaveStatus({
+      ok,
+      text: ok
+        ? 'ကစားထားသော အချက်အလက်များကို Cloud Firestore နှင့် Device တွင် အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!'
+        : 'Cloud ချိတ်ဆက်မှု မရသေးသဖြင့် စက်ထဲတွင် ယာယီသိမ်းထားပါသည်။ အင်တာနက်ရလျှင် အလိုအလျောက် Sync လုပ်ပါမည်။',
+    });
+    setTimeout(() => setSaveStatus(null), 4000);
   };
 
   const handleSaveName = async () => {
@@ -107,7 +113,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="p-6 overflow-y-auto space-y-5">
           {/* User Account & Character Card */}
           <div className="p-4 rounded-xl bg-stone-950/60 border border-stone-800 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-stone-800 border border-stone-700 flex items-center justify-center text-xl">
                   {playerProfile.gender === 'female' ? '👩‍🌾' : '👨‍🌾'}
@@ -154,12 +160,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   )}
                   {nameError && <div className="text-[11px] text-red-400 mt-0.5">{nameError}</div>}
-                  <div className="text-[11px] text-stone-400 flex items-center gap-2 mt-0.5">
+                  <div className="text-[11px] text-stone-400 flex items-center gap-2 mt-0.5 flex-wrap">
                     <span>{playerProfile.gender === 'female' ? 'အမျိုးသမီး ကစားသမား' : 'အမျိုးသား ကစားသမား'}</span>
                     <span>•</span>
-                    <span className="text-emerald-400 flex items-center gap-1">
+                    <span
+                      className={`flex items-center gap-1 ${
+                        cloudSyncStatus.status === 'error'
+                          ? 'text-rose-400'
+                          : cloudSyncStatus.status === 'pending_offline'
+                          ? 'text-orange-400'
+                          : 'text-emerald-400'
+                      }`}
+                    >
                       <Cloud size={12} />
-                      <span>Firebase Cloud သိမ်းဆည်းမှု စနစ်အလုပ်လုပ်နေသည်</span>
+                      <span>
+                        {cloudSyncStatus.status === 'saving'
+                          ? 'Cloud သိမ်းနေသည်...'
+                          : cloudSyncStatus.status === 'error'
+                          ? 'Cloud Sync ချို့ယွင်းချက်ရှိသည်'
+                          : cloudSyncStatus.status === 'pending_offline'
+                          ? 'Offline ဖြစ်နေ၍ Local သိမ်းထားသည်'
+                          : 'Firebase Cloud သိမ်းဆည်းမှု စနစ်အလုပ်လုပ်နေသည်'}
+                      </span>
                     </span>
                   </div>
                 </div>
@@ -223,16 +245,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className="text-amber-400 font-bold">B</span>
               </div>
               <div className="p-2 bg-stone-900 rounded border border-stone-800 flex justify-between">
-                <span>ပစ္စည်းဖန်တီးခြင်းခုံ:</span>
-                <span className="text-amber-400 font-bold">C</span>
+                <span>ခြံစည်းရိုးလှည့်ရန်:</span>
+                <span className="text-amber-400 font-bold">R</span>
               </div>
               <div className="p-2 bg-stone-900 rounded border border-stone-800 flex justify-between">
-                <span>ကမ္ဘာ့မြေပုံ:</span>
-                <span className="text-amber-400 font-bold">M</span>
+                <span>ဖန်တီးခုံ / မြေပုံ:</span>
+                <span className="text-amber-400 font-bold">C / M</span>
               </div>
             </div>
             <div className="text-[11px] text-stone-400 italic">
-              ဖုန်းဖြင့်ကစားသူများသည် Virtual Joystick နှင့် လုပ်ဆောင်ချက်ခလုတ်ကို အသုံးပြုနိုင်ပါသည်။
+              ဖုန်းဖြင့်ကစားသူများသည် Virtual Joystick နှင့် ညာဘက်လုပ်ဆောင်ချက်ခလုတ်များကို အသုံးပြုနိုင်ပါသည်။
             </div>
           </div>
 
@@ -261,8 +283,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {saveStatus && (
-              <div className="p-2 rounded bg-emerald-950/80 border border-emerald-700/80 text-emerald-300 text-xs text-center font-medium animate-fade-in">
-                ကစားထားသော အချက်အလက်များကို Cloud Firestore နှင့် Device တွင် အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!
+              <div
+                className={`p-2 rounded border text-xs text-center font-medium ${
+                  saveStatus.ok
+                    ? 'bg-emerald-950/80 border-emerald-700/80 text-emerald-300'
+                    : 'bg-orange-950/80 border-orange-700/80 text-orange-300'
+                }`}
+              >
+                {saveStatus.text}
               </div>
             )}
           </div>

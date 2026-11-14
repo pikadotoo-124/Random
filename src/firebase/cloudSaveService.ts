@@ -6,8 +6,9 @@
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from './config';
 import { handleFirestoreError, OperationType } from './errorHandler';
-import { PlacedBuilding, PlayerProfile } from '../game/types';
-import { SavedGameState } from '../game/systems/SaveSystem';
+import { PlacedBuilding, PlayerProfile, PlayerStats, PlayerWorldChanges } from '../game/types';
+import { BuildingSystem } from '../game/systems/BuildingSystem';
+import { CURRENT_SAVE_VERSION, SavedGameState, SaveSystem } from '../game/systems/SaveSystem';
 
 export interface UserProfileDoc {
   uid: string;
@@ -27,17 +28,21 @@ export interface PlayerStateDoc {
   equipment: {
     currentTool: string | null;
   };
-  playerStats: {
-    health: number;
-    stamina: number;
-  };
+  playerStats: PlayerStats;
   lastSavedAt: string;
+}
+
+export interface StoredChestSnapshot {
+  id: string;
+  tileX: number;
+  tileY: number;
+  storage: { item: string; quantity: number }[];
 }
 
 export interface WorldStateDoc {
   placedBuildings: PlacedBuilding[];
-  storageBoxes: any[];
-  playerWorldChanges: Record<string, boolean>;
+  storageBoxes: StoredChestSnapshot[];
+  playerWorldChanges: PlayerWorldChanges | Record<string, any>;
   lastSavedAt: string;
 }
 
@@ -96,7 +101,7 @@ export class CloudSaveService {
       gender,
       createdAt: now,
       lastLoginAt: now,
-      gameVersion: 1,
+      gameVersion: CURRENT_SAVE_VERSION,
     };
 
     try {
@@ -111,13 +116,11 @@ export class CloudSaveService {
    * Update login timestamp on users/{uid}
    */
   public static async updateLastLogin(uid: string): Promise<void> {
-    const path = `users/${uid}`;
     try {
       await updateDoc(doc(db, 'users', uid), {
         lastLoginAt: new Date().toISOString(),
       });
     } catch (err) {
-      // Non-critical background update
       console.warn('Could not update last login timestamp:', err);
     }
   }
@@ -137,15 +140,17 @@ export class CloudSaveService {
   }
 
   /**
-   * Load entire game state: playerState and worldState
+   * Load entire game state: playerState and worldState, migrating v1 docs cleanly to v2
    */
   public static async loadGameState(uid: string, profile: UserProfileDoc): Promise<SavedGameState | null> {
     const playerStatePath = `users/${uid}/gameData/playerState`;
     const worldStatePath = `users/${uid}/gameData/worldState`;
 
     try {
-      const playerSnap = await getDoc(doc(db, 'users', uid, 'gameData', 'playerState'));
-      const worldSnap = await getDoc(doc(db, 'users', uid, 'gameData', 'worldState'));
+      const [playerSnap, worldSnap] = await Promise.all([
+        getDoc(doc(db, 'users', uid, 'gameData', 'playerState')),
+        getDoc(doc(db, 'users', uid, 'gameData', 'worldState')),
+      ]);
 
       if (!playerSnap.exists()) {
         return null;
@@ -161,12 +166,45 @@ export class CloudSaveService {
         hairColor: profile.gender === 'male' ? '#292524' : '#78350f',
         clothesColor: profile.gender === 'male' ? '#3b82f6' : '#10b981',
         coins: playerDoc.gold ?? 25,
-        currentTool: (playerDoc.equipment?.currentTool as any) || 'axe_basic',
+        currentTool: (playerDoc.equipment?.currentTool as any) ?? 'axe_basic',
       };
 
-      const gameState: SavedGameState = {
-        version: 1,
-        lastSaved: Date.parse(playerDoc.lastSavedAt || new Date().toISOString()) || Date.now(),
+      // Rehydrate placedBuildings and restore storageBoxes snapshot if building.storage is missing
+      const chestMap = new Map<string, any[]>();
+      if (Array.isArray(worldDoc?.storageBoxes)) {
+        for (const box of worldDoc.storageBoxes) {
+          if (box?.id && Array.isArray(box.storage)) {
+            chestMap.set(box.id, box.storage);
+          }
+        }
+      }
+
+      const hydratedBuildings: PlacedBuilding[] = ((worldDoc?.placedBuildings as PlacedBuilding[]) || []).map((b) => {
+        const fp = BuildingSystem.getFootprint(b.type);
+        const restoredStorage =
+          Array.isArray(b.storage) && b.storage.length > 0
+            ? b.storage
+            : chestMap.get(b.id) || (b.type === 'storage_box' ? [] : undefined);
+
+        return {
+          ...b,
+          width: b.width || fp.width,
+          height: b.height || fp.height,
+          rotation: b.type === 'fence_wood' ? BuildingSystem.normalizeRotation(b.rotation) : 0,
+          ownerId: b.ownerId || uid,
+          storage: restoredStorage,
+        };
+      });
+
+      const parsedTime = Math.max(
+        Date.parse(playerDoc.lastSavedAt || '') || 0,
+        Date.parse(worldDoc?.lastSavedAt || '') || 0
+      );
+
+      const rawState: Partial<SavedGameState> = {
+        version: profile.gameVersion || 1,
+        lastSaved: parsedTime || Date.now(),
+        currentZone: playerDoc.currentZone || 'Central Plaza (Main City)',
         player: playerProfile,
         position: {
           tileX: playerDoc.positionX ?? 30,
@@ -176,10 +214,15 @@ export class CloudSaveService {
           slots: (playerDoc.inventory as any) || [],
           coins: playerDoc.gold ?? 25,
         },
-        buildings: (worldDoc?.placedBuildings as any) || [],
+        buildings: hydratedBuildings,
+        playerStats: {
+          ...SaveSystem.getDefaultStats(),
+          ...(playerDoc.playerStats || {}),
+        },
+        playerWorldChanges: worldDoc?.playerWorldChanges as PlayerWorldChanges,
       };
 
-      return gameState;
+      return SaveSystem.migrateGameState(rawState, profile.playerName, profile.gender);
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, `${playerStatePath} & ${worldStatePath}`);
     }
@@ -191,42 +234,65 @@ export class CloudSaveService {
   public static async saveGameState(
     uid: string,
     state: SavedGameState,
-    currentZone = 'Central Plaza'
+    currentZone = 'Central Plaza (Main City)'
   ): Promise<boolean> {
     const playerStatePath = `users/${uid}/gameData/playerState`;
     const worldStatePath = `users/${uid}/gameData/worldState`;
-    const now = new Date().toISOString();
+    const now = new Date(state.lastSaved || Date.now()).toISOString();
+
+    const stats: PlayerStats = {
+      ...SaveSystem.getDefaultStats(),
+      ...(state.playerStats || {}),
+    };
+
+    const worldChanges: PlayerWorldChanges = {
+      ...SaveSystem.getDefaultWorldChanges(),
+      ...(state.playerWorldChanges || {}),
+    };
 
     const playerDoc: PlayerStateDoc = {
       positionX: state.position.tileX,
       positionY: state.position.tileY,
-      currentZone,
+      currentZone: state.currentZone || currentZone,
       gold: state.inventory.coins,
       inventory: state.inventory.slots.map((s) => ({ item: s.item, quantity: s.quantity })),
       equipment: {
         currentTool: state.player.currentTool || null,
       },
-      playerStats: {
-        health: 100,
-        stamina: 100,
-      },
+      playerStats: stats,
       lastSavedAt: now,
     };
 
-    const worldDoc: WorldStateDoc = {
-      placedBuildings: state.buildings.map((b) => ({
+    const serializedBuildings: PlacedBuilding[] = state.buildings.map((b) => {
+      const fp = BuildingSystem.getFootprint(b.type);
+      return {
         id: b.id,
         type: b.type,
         tileX: b.tileX,
         tileY: b.tileY,
-        width: b.width,
-        height: b.height,
-        placedBy: b.placedBy,
+        width: b.width || fp.width,
+        height: b.height || fp.height,
+        rotation: b.type === 'fence_wood' ? BuildingSystem.normalizeRotation(b.rotation) : 0,
+        ownerId: b.ownerId || uid,
+        placedBy: b.placedBy || state.player.name,
         createdAt: b.createdAt,
         storage: b.storage ? b.storage.map((s) => ({ item: s.item, quantity: s.quantity })) : [],
-      })),
-      storageBoxes: [],
-      playerWorldChanges: {},
+      };
+    });
+
+    const storageBoxes: StoredChestSnapshot[] = serializedBuildings
+      .filter((b) => b.type === 'storage_box')
+      .map((b) => ({
+        id: b.id,
+        tileX: b.tileX,
+        tileY: b.tileY,
+        storage: (b.storage || []).map((s) => ({ item: s.item, quantity: s.quantity })),
+      }));
+
+    const worldDoc: WorldStateDoc = {
+      placedBuildings: serializedBuildings,
+      storageBoxes,
+      playerWorldChanges: worldChanges,
       lastSavedAt: now,
     };
 

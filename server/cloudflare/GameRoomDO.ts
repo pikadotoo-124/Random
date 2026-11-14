@@ -294,7 +294,9 @@ export class GameRoomDO {
         const { building } = msg.payload;
         if (!building) return;
 
-        building.placedBy = playerId;
+        const player = this.players.get(playerId);
+        building.ownerId = playerId;
+        building.placedBy = building.placedBy || player?.playerName || playerId;
         const existingIdx = this.placedBuildings.findIndex((b) => b.id === building.id);
         if (existingIdx !== -1) {
           this.placedBuildings[existingIdx] = building;
@@ -325,7 +327,8 @@ export class GameRoomDO {
         if (idx === -1) return;
 
         // Authoritative validation: only building owner can dismantle
-        if (this.placedBuildings[idx].placedBy !== playerId) {
+        const owner = this.placedBuildings[idx].ownerId || this.placedBuildings[idx].placedBy;
+        if (owner !== playerId) {
           ws.send(JSON.stringify({ type: 's:error', payload: { code: 'FORBIDDEN', message: 'You can only dismantle your own structures.' } }));
           return;
         }

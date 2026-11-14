@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MAP_CONFIG, ZONES } from '../constants';
+import { BUILDABLE_ZONE_BOUNDS, MAP_CONFIG, TOWN_PROTECTED_BOUNDS, ZONES } from '../constants';
 import { TileType, ZoneDefinition } from '../types';
 
 export class MapSystem {
@@ -11,12 +11,14 @@ export class MapSystem {
   public height: number;
   public tiles: TileType[][];
   public collisionMap: boolean[][];
+  public protectedPropTiles: Set<string>;
 
   constructor(width = MAP_CONFIG.WIDTH, height = MAP_CONFIG.HEIGHT) {
     this.width = width;
     this.height = height;
     this.tiles = [];
     this.collisionMap = [];
+    this.protectedPropTiles = new Set();
     this.generateWorld();
   }
 
@@ -389,5 +391,64 @@ export class MapSystem {
     if (this.isTileInBounds(tx, ty)) {
       this.collisionMap[ty][tx] = solid;
     }
+  }
+
+  /**
+   * Mark a tile as a protected world prop (e.g., scarecrow, hay bale, town prop)
+   */
+  public setProtectedProp(tx: number, ty: number, isProtected = true): void {
+    const key = `${tx}_${ty}`;
+    if (isProtected) {
+      this.protectedPropTiles.add(key);
+    } else {
+      this.protectedPropTiles.delete(key);
+    }
+  }
+
+  /**
+   * Validate whether a single tile belongs to the designated Buildable Zone (Homestead District)
+   * and is not a protected road, water, cliff, farmland, town center, or world prop.
+   */
+  public isTileInBuildableZone(tx: number, ty: number): { allowed: boolean; reason?: string } {
+    if (!this.isTileInBounds(tx, ty)) {
+      return { allowed: false, reason: 'မြေပုံနယ်နိမိတ်ပြင်ပ ဖြစ်နေပါသည် (Out of bounds)' };
+    }
+
+    if (
+      tx >= TOWN_PROTECTED_BOUNDS.minX &&
+      tx <= TOWN_PROTECTED_BOUNDS.maxX &&
+      ty >= TOWN_PROTECTED_BOUNDS.minY &&
+      ty <= TOWN_PROTECTED_BOUNDS.maxY
+    ) {
+      return { allowed: false, reason: 'မြို့လယ်ရွာနှင့် အများပြည်သူနေရာတွင် ဆောက်လုပ်ခွင့်မရှိပါ' };
+    }
+
+    if (
+      tx < BUILDABLE_ZONE_BOUNDS.minX ||
+      tx > BUILDABLE_ZONE_BOUNDS.maxX ||
+      ty < BUILDABLE_ZONE_BOUNDS.minY ||
+      ty > BUILDABLE_ZONE_BOUNDS.maxY
+    ) {
+      return {
+        allowed: false,
+        reason: 'အခြေချရပ်ကွက် (Homestead District: X 40-114, Y 40-114) အတွင်း၌သာ ဆောက်လုပ်နိုင်ပါသည်',
+      };
+    }
+
+    const tile = this.tiles[ty][tx];
+    if (tile === 'water' || tile === 'bridge' || tile === 'cliff') {
+      return { allowed: false, reason: 'ရေပြင်၊ တံတား (သို့) ကျောက်ဆောင်ပေါ်တွင် ဆောက်လုပ်၍မရပါ' };
+    }
+    if (tile === 'dirt') {
+      return { allowed: false, reason: 'လမ်းမပေါ်တွင် ဆောက်လုပ်၍မရပါ (မြေကွက်လွတ်ပေါ်တွင် ဆောက်ပါ)' };
+    }
+    if (tile === 'farmland') {
+      return { allowed: false, reason: 'စိုက်ပျိုးမြေကွက်ပေါ်တွင် ဆောက်လုပ်၍မရပါ' };
+    }
+    if (this.protectedPropTiles.has(`${tx}_${ty}`)) {
+      return { allowed: false, reason: 'ရွာပိုင်ပစ္စည်းများ ရှိနေသောနေရာတွင် ဆောက်လုပ်၍မရပါ' };
+    }
+
+    return { allowed: true };
   }
 }
