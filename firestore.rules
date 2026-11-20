@@ -17,28 +17,74 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function isValidUserProfile(data, userId) {
-      return data.uid == userId &&
+      return data.keys().hasAll(['uid', 'playerName', 'gender']) &&
+        data.keys().hasOnly(['uid', 'playerName', 'gender', 'createdAt', 'lastLoginAt', 'gameVersion']) &&
+        data.uid == userId &&
         data.playerName is string &&
         data.playerName.size() >= 3 &&
         data.playerName.size() <= 16 &&
-        (data.gender == 'male' || data.gender == 'female');
+        (data.gender == 'male' || data.gender == 'female') &&
+        (!('gameVersion' in data) || data.gameVersion is number) &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('lastLoginAt' in data) || (data.lastLoginAt is string && data.lastLoginAt.size() <= 64));
+    }
+
+    function isValidPlayerState(data) {
+      return data.keys().hasAll(['positionX', 'positionY', 'gold', 'inventory']) &&
+        data.keys().hasOnly(['positionX', 'positionY', 'currentZone', 'gold', 'inventory', 'equipment', 'playerStats', 'lastSavedAt']) &&
+        data.positionX is number &&
+        data.positionY is number &&
+        data.gold is number &&
+        data.gold >= 0 &&
+        data.inventory is list &&
+        data.inventory.size() <= 100 &&
+        (!('currentZone' in data) || (data.currentZone is string && data.currentZone.size() <= 128)) &&
+        (!('equipment' in data) || data.equipment is map) &&
+        (!('playerStats' in data) || data.playerStats is map) &&
+        (!('lastSavedAt' in data) || (data.lastSavedAt is string && data.lastSavedAt.size() <= 64));
+    }
+
+    function isValidWorldState(data) {
+      return data.keys().hasAll(['placedBuildings']) &&
+        data.keys().hasOnly(['placedBuildings', 'storageBoxes', 'playerWorldChanges', 'lastSavedAt']) &&
+        data.placedBuildings is list &&
+        data.placedBuildings.size() <= 500 &&
+        (!('storageBoxes' in data) || (data.storageBoxes is list && data.storageBoxes.size() <= 200)) &&
+        (!('playerWorldChanges' in data) || data.playerWorldChanges is map) &&
+        (!('lastSavedAt' in data) || (data.lastSavedAt is string && data.lastSavedAt.size() <= 64));
     }
 
     // User profile document
     match /users/{userId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
-      allow update: if isOwner(userId) && isValidUserProfile(request.resource.data, userId);
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        request.resource.data.keys().hasAll(['gameVersion']) &&
+        isValidUserProfile(request.resource.data, userId);
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(request.resource.data, userId) &&
+        request.resource.data.uid == resource.data.uid &&
+        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playerName', 'lastLoginAt', 'gameVersion']);
       allow delete: if false;
 
       // Subcollection for playerState and worldState
       match /gameData/{docId} {
-        allow read: if isOwner(userId);
-        allow write: if isOwner(userId) && isValidId(docId) && (docId == 'playerState' || docId == 'worldState');
+        allow get: if isOwner(userId) && isValidId(userId) && (docId == 'playerState' || docId == 'worldState');
+        allow list: if false;
+        allow create, update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(docId) &&
+          (
+            (docId == 'playerState' && isValidPlayerState(request.resource.data)) ||
+            (docId == 'worldState' && isValidWorldState(request.resource.data))
+          );
         allow delete: if false;
       }
     }

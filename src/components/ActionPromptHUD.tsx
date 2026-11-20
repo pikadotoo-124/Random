@@ -4,8 +4,10 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Axe, Coins, Compass, Fish, Flame, Hammer, MessageCircle, Package, Signpost, X } from 'lucide-react';
+import { ArrowRight, Axe, Coins, Compass, Fish, Flame, Hammer, MessageCircle, Package, Shirt, Signpost, X } from 'lucide-react';
 import type { FishingHudState } from '../game/scenes/WorldScene';
+import type { MerchantGuideInfo } from '../game/types';
+import { UI_THEME } from './uiTheme';
 
 interface ActionPromptHUDProps {
   prompt: {
@@ -24,6 +26,8 @@ interface ActionPromptHUDProps {
   fishingState?: FishingHudState | null;
   onCatchFishing?: () => void;
   onCancelFishing?: () => void;
+  merchantGuide?: MerchantGuideInfo | null;
+  onDismissMerchantGuide?: () => void;
 }
 
 export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
@@ -37,6 +41,8 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
   fishingState = null,
   onCatchFishing,
   onCancelFishing,
+  merchantGuide = null,
+  onDismissMerchantGuide,
 }) => {
   const [showOnboarding, setShowOnboarding] = useState<boolean>(!tutorialCompleted);
   const [visibleTargetKey, setVisibleTargetKey] = useState<string | null>(null);
@@ -77,8 +83,10 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
     switch (prompt.type) {
       case 'shop':
         return <Coins className="text-amber-400" size={14} />;
+      case 'clothing_shop':
+        return <Shirt className="text-rose-300" size={14} />;
       case 'crafting':
-        return <Hammer className="text-cyan-400" size={14} />;
+        return <Hammer className="text-sky-400" size={14} />;
       case 'campfire':
         return <Flame className="text-orange-400" size={14} />;
       case 'storage':
@@ -109,24 +117,24 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
       {/* 1. One-time gentle onboarding toast at game start */}
       {showOnboarding && !isBuildMode && (
         <div
-          className="fixed top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-auto max-w-sm w-[90%]"
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-auto max-w-sm w-[92%]"
           onTouchStart={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between gap-3 bg-stone-900/90 backdrop-blur-md border border-amber-500/40 rounded-xl px-3.5 py-2 shadow-xl text-xs text-stone-200">
-            <span className="leading-snug">
+          <div className={`rc-toast-enter flex items-center justify-between gap-3 ${UI_THEME.hudPill} border-amber-500/40 px-3.5 py-2.5 text-xs text-stone-200`}>
+            <span className="leading-relaxed">
               {isTouchMode
                 ? '🎮 ဘယ်ဘက် Joystick ဖြင့် လမ်းလျှောက်ပြီး အနီးရှိအရာများကို [E] ခလုတ်ဖြင့် လုပ်ဆောင်ပါ'
                 : '🎮 WASD ဖြင့် လမ်းလျှောက်ပြီး အနီးရှိအရာများကို [E] နှိပ်၍ လုပ်ဆောင်ပါ'}
             </span>
             <button
               type="button"
-              aria-label="Close tutorial hint"
+              aria-label="လမ်းညွှန်ပိတ်မည်"
               onClick={() => {
                 setShowOnboarding(false);
                 onDismissTutorial?.();
               }}
-              className="text-stone-400 hover:text-white p-1 shrink-0 cursor-pointer"
+              className="text-[#b7ad9d] hover:text-white p-1.5 rounded-lg hover:bg-[#2a241c] shrink-0 cursor-pointer"
             >
               <X size={14} />
             </button>
@@ -136,13 +144,107 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
 
       {/* 1B. Zone Entry Banner Toast when crossing into a new region */}
       {enteredZoneBanner && !isBuildMode && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-none animate-fade-in">
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
           <div
             style={{ borderColor: `${enteredZoneBanner.color}88` }}
-            className="flex items-center gap-2 bg-stone-950/90 backdrop-blur-md border rounded-xl px-4 py-1.5 shadow-2xl"
+            className="rc-toast-enter flex items-center gap-2 bg-[#171410]/92 backdrop-blur-md border rounded-xl px-4 py-1.5 shadow-2xl"
           >
             <Compass size={14} style={{ color: enteredZoneBanner.color }} />
-            <span className="text-xs font-bold text-white whitespace-nowrap">{enteredZoneBanner.name}</span>
+            <span className="text-xs font-bold text-white whitespace-nowrap leading-snug">
+              {enteredZoneBanner.name}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* 1C. Non-intrusive Interactive Gameplay & Direction Guidance */}
+      {merchantGuide?.active && !isBuildMode && (
+        <div
+          className={`fixed ${enteredZoneBanner || showOnboarding ? 'top-28' : 'top-16'} left-1/2 -translate-x-1/2 z-20 pointer-events-auto max-w-sm w-[92%]`}
+          onTouchStart={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div
+            className={`rc-toast-enter flex flex-col gap-1.5 ${UI_THEME.hudPill} ${
+              merchantGuide.kind === 'fishing'
+                ? 'border-sky-500/55'
+                : merchantGuide.kind === 'crafting'
+                ? 'border-indigo-400/55'
+                : 'border-amber-500/50'
+            } px-3 py-2 text-xs text-stone-100`}
+          >
+            <div className="flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                    merchantGuide.kind === 'fishing'
+                      ? 'bg-sky-500/20 border-sky-400/45 text-sky-300'
+                      : merchantGuide.kind === 'crafting'
+                      ? 'bg-indigo-500/20 border-indigo-400/45 text-indigo-300'
+                      : 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                  }`}
+                >
+                  <ArrowRight
+                    size={15}
+                    style={{ transform: `rotate(${merchantGuide.angleDeg}deg)` }}
+                    className="transition-transform duration-150"
+                  />
+                </div>
+                <div className="min-w-0 leading-snug">
+                  <div
+                    className={`font-bold truncate ${
+                      merchantGuide.kind === 'fishing'
+                        ? 'text-sky-200'
+                        : merchantGuide.kind === 'crafting'
+                        ? 'text-indigo-200'
+                        : 'text-amber-200'
+                    }`}
+                  >
+                    {merchantGuide.badgeIcon || '🏪'} {merchantGuide.title} • {merchantGuide.distanceTiles} ကွက် ({merchantGuide.directionLabelMy})
+                  </div>
+                  <div className="text-[11px] text-[#c7beae] truncate">
+                    {merchantGuide.subtitle}
+                  </div>
+                </div>
+              </div>
+              {onDismissMerchantGuide && (
+                <button
+                  type="button"
+                  aria-label="လမ်းညွှန်ပိတ်မည်"
+                  onClick={onDismissMerchantGuide}
+                  className="text-[#b7ad9d] hover:text-white p-1 rounded-lg hover:bg-[#2a241c] shrink-0 cursor-pointer"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {merchantGuide.requirements && merchantGuide.requirements.length > 0 && (
+              <div className="flex items-center flex-wrap gap-1.5 pl-9">
+                {merchantGuide.requirements.map((req) => {
+                  const ok = req.have >= req.need;
+                  return (
+                    <span
+                      key={req.itemId}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono border ${
+                        ok
+                          ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                          : 'bg-rose-950/50 border-rose-500/35 text-rose-200'
+                      }`}
+                    >
+                      <span>{req.icon}</span>
+                      <span className="font-sans">{req.name}</span>
+                      <span className="font-bold">
+                        {req.have}/{req.need}
+                      </span>
+                    </span>
+                  );
+                })}
+                <span className="text-[10px] text-[#9e9484] ml-auto font-mono">
+                  ({merchantGuide.targetX}, {merchantGuide.targetY})
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -150,28 +252,28 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
       {/* 2. Fishing Timing Minigame HUD */}
       {fishingState?.active && !isBuildMode && (
         <div
-          className="fixed bottom-24 sm:bottom-10 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-[86%] max-w-xs"
+          className="fixed bottom-40 sm:bottom-10 left-1/2 -translate-x-1/2 z-30 pointer-events-auto w-[86%] max-w-xs"
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
           onTouchStart={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="bg-stone-950/92 backdrop-blur-md border border-sky-500/50 rounded-2xl p-3 shadow-2xl space-y-2.5">
+          <div className="rc-panel-enter bg-[#181613]/95 backdrop-blur-md border border-sky-500/45 rounded-2xl p-3.5 shadow-2xl space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Fish size={16} className={fishingState.phase === 'bite' ? 'text-emerald-400 animate-bounce' : 'text-sky-400'} />
-                <span className="text-xs font-bold text-white">
+              <div className="flex items-center gap-2 min-w-0">
+                <Fish size={16} className={fishingState.phase === 'bite' ? 'text-emerald-400 animate-bounce shrink-0' : 'text-sky-400 shrink-0'} />
+                <span className="text-xs font-bold text-white leading-snug truncate">
                   {fishingState.phase === 'waiting'
                     ? '🌊 ငါးစာစောင့်နေသည်...'
                     : inSweetSpot
-                    ? '✨ ယခုဆွဲတင်ပါ! (×2 ငါး)'
+                    ? '✨ ယခုဆွဲတင်ပါ! (×၂ ငါး)'
                     : '🐟 ငါးကိုက်ပြီ! အချိန်ကိုက်ဆွဲတင်ပါ'}
                 </span>
               </div>
               <button
                 type="button"
-                aria-label="Cancel fishing"
+                aria-label="ငါးမျှားခြင်း ရပ်နားမည်"
                 onClick={onCancelFishing}
-                className="text-stone-400 hover:text-white p-0.5 cursor-pointer"
+                className="text-[#b7ad9d] hover:text-white p-1 rounded-lg hover:bg-[#2a241c] cursor-pointer shrink-0"
               >
                 <X size={14} />
               </button>
@@ -179,17 +281,14 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
 
             {fishingState.phase === 'bite' ? (
               <>
-                {/* Sweeping Cursor Timing Track */}
-                <div className="relative h-5 rounded-lg bg-stone-800 border border-stone-700 overflow-hidden">
-                  {/* Sweet spot target zone */}
+                <div className="relative h-5 rounded-lg bg-[#110f0c] border border-[#3e362c] overflow-hidden">
                   <div
                     style={{
                       left: `${fishingState.sweetMin * 100}%`,
                       width: `${(fishingState.sweetMax - fishingState.sweetMin) * 100}%`,
                     }}
-                    className="absolute inset-y-0 bg-emerald-500/40 border-x border-emerald-400"
+                    className="absolute inset-y-0 bg-emerald-500/35 border-x border-emerald-400"
                   />
-                  {/* Moving timing needle */}
                   <div
                     style={{ left: `${fishingState.cursorPos * 100}%` }}
                     className={`absolute top-0 bottom-0 w-1.5 -translate-x-1/2 rounded-full shadow ${
@@ -198,8 +297,7 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
                   />
                 </div>
 
-                {/* Remaining bite timer bar */}
-                <div className="h-1 rounded-full bg-stone-800 overflow-hidden">
+                <div className="h-1.5 rounded-full bg-[#110f0c] overflow-hidden">
                   <div
                     style={{ width: `${fishingState.timeLeftRatio * 100}%` }}
                     className="h-full bg-amber-400 transition-all duration-75"
@@ -209,24 +307,24 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
                 <button
                   type="button"
                   onClick={onCatchFishing}
-                  className="w-full py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-bold shadow transition cursor-pointer"
+                  className={`w-full py-2 min-h-[38px] rounded-xl text-xs font-bold ${UI_THEME.primaryGreenBtn}`}
                 >
                   🎣 ဆွဲတင်မည် {isTouchMode ? '' : '[E]'}
                 </button>
               </>
             ) : (
-              <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
-                <div className="h-full w-1/2 bg-sky-500/70 animate-pulse rounded-full" />
+              <div className="h-2 rounded-full bg-[#110f0c] overflow-hidden">
+                <div className="h-full w-1/2 bg-sky-500/75 animate-pulse rounded-full" />
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* 3. Small, unobtrusive, auto-fading contextual pill when near an interactable */}
+      {/* 3. Unobtrusive, auto-fading contextual action prompt when near an interactable */}
       {shouldShowContextPill && prompt && (
         <div
-          className="fixed bottom-20 sm:bottom-8 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+          className="fixed bottom-40 sm:bottom-9 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           <button
@@ -237,16 +335,16 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
               e.stopPropagation();
               onTrigger();
             }}
-            className="pointer-events-auto flex items-center gap-2 bg-stone-900/85 backdrop-blur-md border border-stone-700/80 hover:border-amber-400/70 rounded-xl px-3 py-1.5 shadow-lg text-left transition active:scale-95 cursor-pointer"
+            className={`rc-toast-enter pointer-events-auto flex items-center gap-2 ${UI_THEME.hudPill} hover:border-amber-400/70 px-3 py-1.5 text-left transition active:scale-95 cursor-pointer`}
           >
-            <div className="w-6 h-6 rounded-lg bg-stone-800 flex items-center justify-center shrink-0">
+            <div className="w-6 h-6 rounded-lg bg-[#27221b] border border-[#453b2f] flex items-center justify-center shrink-0">
               {getIcon()}
             </div>
-            <div className="text-[11px] font-semibold text-white whitespace-nowrap max-w-[180px] truncate">
+            <div className="text-[11px] font-semibold text-white whitespace-nowrap max-w-[190px] truncate leading-snug">
               {prompt.title}
             </div>
-            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[10px] font-bold shrink-0">
-              {isTouchMode ? `Touch ${prompt.actionKey}` : `[${prompt.actionKey}]`}
+            <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[10px] font-bold shrink-0">
+              {isTouchMode ? `နှိပ်ပါ ${prompt.actionKey}` : `[${prompt.actionKey}]`}
             </span>
           </button>
         </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BUILDABLE_ZONE_BOUNDS, MAP_CONFIG, TOWN_PROTECTED_BOUNDS, ZONES } from '../constants';
+import { BUILDABLE_ZONE_BOUNDS, BridgeStyle, FARM_PLOTS, MAP_CONFIG, SCENIC_FISHING_PIERS, TOWN_PROTECTED_BOUNDS, ZONES } from '../constants';
 import { TileType, ZoneDefinition } from '../types';
 
 export class MapSystem {
@@ -13,6 +13,7 @@ export class MapSystem {
   public collisionMap: boolean[][];
   public roadTier: ('none' | 'main' | 'trail')[][];
   public protectedPropTiles: Set<string>;
+  public pierTileKeys: Set<string>;
 
   constructor(width = MAP_CONFIG.WIDTH, height = MAP_CONFIG.HEIGHT) {
     this.width = width;
@@ -21,7 +22,14 @@ export class MapSystem {
     this.collisionMap = [];
     this.roadTier = [];
     this.protectedPropTiles = new Set();
+    this.pierTileKeys = new Set();
     this.generateWorld();
+  }
+
+  public getBridgeStyle(tx: number, ty: number): BridgeStyle {
+    if (this.pierTileKeys.has(`${tx}_${ty}`)) return 'pier';
+    if (this.getRoadTier(tx, ty) === 'main') return 'main';
+    return 'rustic';
   }
 
   public getRoadTier(tx: number, ty: number): 'none' | 'main' | 'trail' {
@@ -72,6 +80,7 @@ export class MapSystem {
     this.tiles = [];
     this.collisionMap = [];
     this.roadTier = [];
+    this.pierTileKeys.clear();
 
     // Initialize all as grass
     for (let y = 0; y < this.height; y++) {
@@ -350,10 +359,12 @@ export class MapSystem {
     this.carveRoadTile(49, 73, 'trail');
 
     // 9. Homestead District clearing roads (Southeast: x: 42..112, y: 42..112)
-    // Primary arteries (42, 70) styled as main roads; secondary block lanes (56, 84, 98) as trails
+    // Primary arteries (70) styled as main roads; secondary block lanes (42, 56, 84, 98, 112) as main/trail
+    // Extend y=112 west to x=36 and x=42 south to y=112 so Bridge #8 meets dry riverbanks cleanly on both sides
     for (let y = 42; y <= 112; y += 14) {
       const tier: 'main' | 'trail' = y === 42 || y === 70 ? 'main' : 'trail';
-      for (let x = 40; x <= 110; x++) {
+      const minX = y === 112 ? 36 : 40;
+      for (let x = minX; x <= 110; x++) {
         if (this.tiles[y][x] === 'grass' || this.tiles[y][x] === 'sand') {
           this.carveRoadTile(x, y, tier);
         }
@@ -361,7 +372,8 @@ export class MapSystem {
     }
     for (let x = 42; x <= 112; x += 14) {
       const tier: 'main' | 'trail' = x === 42 || x === 70 ? 'main' : 'trail';
-      for (let y = 40; y <= 110; y++) {
+      const maxY = x === 42 ? 112 : 110;
+      for (let y = 40; y <= maxY; y++) {
         if (this.tiles[y][x] === 'grass' || this.tiles[y][x] === 'sand') {
           this.carveRoadTile(x, y, tier);
         }
@@ -369,48 +381,76 @@ export class MapSystem {
     }
 
     // 10. Natural Narrow Isometric Wooden Bridges across Silverbrook River
-    // Replaces ONLY the single-lane road centerline over water (never blocky 3x3 patches!)
+    // Main avenues (x=70, y=70) receive grand cedar main bridges; secondary crossings receive rustic oak bridges.
     for (let y = 42; y <= 112; y += 14) {
-      for (let x = 40; x <= 110; x++) {
+      const minX = y === 112 ? 36 : 40;
+      const bridgeTier: 'main' | 'trail' = y === 70 ? 'main' : 'trail';
+      for (let x = minX; x <= 110; x++) {
         if (this.tiles[y][x] === 'water') {
           this.tiles[y][x] = 'bridge';
           this.collisionMap[y][x] = false;
-          this.roadTier[y][x] = 'main';
+          this.roadTier[y][x] = bridgeTier;
         }
       }
     }
     for (let x = 42; x <= 112; x += 14) {
-      for (let y = 40; y <= 110; y++) {
+      const maxY = x === 42 ? 112 : 110;
+      const bridgeTier: 'main' | 'trail' = x === 70 ? 'main' : 'trail';
+      for (let y = 40; y <= maxY; y++) {
         if (this.tiles[y][x] === 'water') {
           this.tiles[y][x] = 'bridge';
           this.collisionMap[y][x] = false;
-          this.roadTier[y][x] = 'main';
+          if (this.roadTier[y][x] !== 'main') {
+            this.roadTier[y][x] = bridgeTier;
+          }
         }
       }
     }
 
-    // 11. Agricultural Farmland Plots in Homestead District
-    for (let fy = 73; fy <= 79; fy++) {
-      for (let fx = 45; fx <= 52; fx++) {
-        if (this.tiles[fy][fx] === 'grass') {
-          this.tiles[fy][fx] = 'farmland';
-          this.collisionMap[fy][fx] = false;
+    // 10B. Scenic Wooden Fishing Piers & Lake/River Overlook Platforms
+    for (const pier of SCENIC_FISHING_PIERS) {
+      for (const [tx, ty] of pier.approachTrailTiles) {
+        this.carveRoadTile(tx, ty, 'trail');
+      }
+      for (const [dx, dy] of pier.deckTiles) {
+        if (!this.isTileInBounds(dx, dy)) continue;
+        this.tiles[dy][dx] = 'bridge';
+        this.collisionMap[dy][dx] = false;
+        this.roadTier[dy][dx] = 'trail';
+        this.pierTileKeys.add(`${dx}_${dy}`);
+      }
+    }
+
+    // 11. Structured Agricultural Farmland Plots in Farm District (separated by walkable dirt paths)
+    // Stone Well (49,74) & Farmer Thomas (50,74) sit cleanly on an accessible dirt apron just north of Plot 1
+    for (let cy = 72; cy <= 75; cy++) {
+      for (let cx = 44; cx <= 52; cx++) {
+        if (this.tiles[cy][cx] === 'grass') {
+          this.carveRoadTile(cx, cy, 'trail');
         }
       }
     }
-    for (let fy = 87; fy <= 93; fy++) {
-      for (let fx = 59; fx <= 66; fx++) {
-        if (this.tiles[fy][fx] === 'grass') {
-          this.tiles[fy][fx] = 'farmland';
-          this.collisionMap[fy][fx] = false;
+
+    for (const plot of FARM_PLOTS) {
+      const { minX, minY, maxX, maxY } = plot.bounds;
+      // Carve clean 1-tile walkable dirt border paths around each rectangular plot
+      for (let py = minY - 1; py <= maxY + 1; py++) {
+        for (let px = minX - 1; px <= maxX + 1; px++) {
+          if (!this.isTileInBounds(px, py)) continue;
+          const isBorder = px === minX - 1 || px === maxX + 1 || py === minY - 1 || py === maxY + 1;
+          if (isBorder && this.tiles[py][px] === 'grass') {
+            this.carveRoadTile(px, py, 'trail');
+          }
         }
       }
-    }
-    for (let fy = 73; fy <= 79; fy++) {
-      for (let fx = 73; fx <= 80; fx++) {
-        if (this.tiles[fy][fx] === 'grass') {
-          this.tiles[fy][fx] = 'farmland';
-          this.collisionMap[fy][fx] = false;
+      // Fill clean rectangular tilled brown farmland interior
+      for (let fy = minY; fy <= maxY; fy++) {
+        for (let fx = minX; fx <= maxX; fx++) {
+          if (this.isTileInBounds(fx, fy) && this.tiles[fy][fx] !== 'water' && this.tiles[fy][fx] !== 'bridge') {
+            this.tiles[fy][fx] = 'farmland';
+            this.collisionMap[fy][fx] = false;
+            this.roadTier[fy][fx] = 'none';
+          }
         }
       }
     }

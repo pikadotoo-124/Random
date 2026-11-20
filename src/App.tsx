@@ -11,6 +11,7 @@ import { BuildingPlacementHUD } from './components/BuildingPlacementHUD';
 import { BuildingManageModal } from './components/BuildingManageModal';
 import { BuildMenuModal } from './components/BuildMenuModal';
 import { CharacterSelectModal } from './components/CharacterSelectModal';
+import { ClothingShopModal } from './components/ClothingShopModal';
 import { CraftingModal } from './components/CraftingModal';
 import { InventoryModal } from './components/InventoryModal';
 import { LoginScreen } from './components/LoginScreen';
@@ -20,12 +21,22 @@ import { ShopModal } from './components/ShopModal';
 import { StorageBoxModal } from './components/StorageBoxModal';
 import { TopNavHUD } from './components/TopNavHUD';
 import { WorldMapModal } from './components/WorldMapModal';
+import { UI_THEME } from './components/uiTheme';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { GameManager } from './game/GameManager';
 import { ChatMessage, ConnectionStatus } from './game/multiplayer/types';
 import type { FishingHudState } from './game/scenes/WorldScene';
 import { SaveSystem } from './game/systems/SaveSystem';
-import { BuildingType, FenceRotation, PlacedBuilding, PlayerProfile } from './game/types';
+import { AtmosphereSnapshot, WorldAtmosphereSystem } from './game/systems/WorldAtmosphereSystem';
+import {
+  BuildingType,
+  ClothingEquipmentSlot,
+  EquippedClothingState,
+  FenceRotation,
+  MerchantGuideInfo,
+  PlacedBuilding,
+  PlayerProfile,
+} from './game/types';
 
 function detectTouchViewport(): boolean {
   if (typeof window === 'undefined') return false;
@@ -80,12 +91,17 @@ function GamePlay() {
     targetId?: string;
   } | null>(null);
   const [fishingHudState, setFishingHudState] = useState<FishingHudState | null>(null);
+  const [atmosphereState, setAtmosphereState] = useState<AtmosphereSnapshot | null>(null);
+  const [weatherEffectsEnabled, setWeatherEffectsEnabled] = useState<boolean>(() =>
+    WorldAtmosphereSystem.loadWeatherPreference()
+  );
   const [enteredZoneBanner, setEnteredZoneBanner] = useState<{ name: string; color: string } | null>(null);
+  const [merchantGuide, setMerchantGuide] = useState<MerchantGuideInfo | null>(null);
   const zoneBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Active Modals
   const [activeModal, setActiveModal] = useState<
-    'inventory' | 'crafting' | 'shop' | 'building' | 'map' | 'storage' | 'settings' | null
+    'inventory' | 'crafting' | 'shop' | 'clothing_shop' | 'building' | 'map' | 'storage' | 'settings' | null
   >(null);
 
   const [selectedStorageBuilding, setSelectedStorageBuilding] = useState<PlacedBuilding | null>(null);
@@ -110,14 +126,27 @@ function GamePlay() {
   const [roomFullNotice, setRoomFullNotice] = useState<boolean>(false);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [isWorldReady, setIsWorldReady] = useState<boolean>(false);
 
   useEffect(() => {
-    const updateTouch = () => setIsTouchMode(detectTouchViewport());
-    window.addEventListener('resize', updateTouch);
-    window.addEventListener('orientationchange', updateTouch);
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const updateViewport = () => {
+      setIsTouchMode(detectTouchViewport());
+      gameManagerRef.current?.syncViewportSize();
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        setIsTouchMode(detectTouchViewport());
+        gameManagerRef.current?.syncViewportSize();
+      }, 140);
+    };
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    window.visualViewport?.addEventListener('resize', updateViewport);
     return () => {
-      window.removeEventListener('resize', updateTouch);
-      window.removeEventListener('orientationchange', updateTouch);
+      if (settleTimer) clearTimeout(settleTimer);
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+      window.visualViewport?.removeEventListener('resize', updateViewport);
     };
   }, []);
 
@@ -134,12 +163,26 @@ function GamePlay() {
 
     const gm = new GameManager(initialProf, user.uid, gameState);
     gameManagerRef.current = gm;
+    setPlayerProfile({ ...gm.playerProfile });
 
     // Register authoritative pre-signout cloud flush BEFORE Phaser cleanup
     registerBeforeSignOutSave(async () => {
       await gm.saveCurrentState(true);
     });
 
+    setIsWorldReady(false);
+    gm.onSceneReady = () => {
+      setIsWorldReady(true);
+    };
+    gm.onClothingChanged = () => {
+      setPlayerProfile({
+        ...gm.playerProfile,
+        ownedClothing: [...(gm.playerProfile.ownedClothing || [])],
+        equippedClothing: { ...(gm.playerProfile.equippedClothing || {}) },
+      });
+      setCoins(gm.inventorySystem.coins);
+      setInventoryVersion((v) => v + 1);
+    };
     gm.initGame('phaser-canvas-container');
 
     // Subscribe to inventory updates (shop, crafting, chest transfer, building)
@@ -165,10 +208,11 @@ function GamePlay() {
         gm.networkSystem.connect(
           token,
           {
-            name: initialProf.name,
-            gender: initialProf.gender,
+            name: gm.playerProfile.name,
+            gender: gm.playerProfile.gender,
             positionX: gameState.position.tileX,
             positionY: gameState.position.tileY,
+            equippedClothing: gm.playerProfile.equippedClothing,
           },
           () => tokenGetter(true)
         );
@@ -220,8 +264,8 @@ function GamePlay() {
       };
 
       gm.worldScene.onPlayerMove = (x, y, zone) => {
-        setPlayerCoords({ x, y });
-        setCurrentZone(zone);
+        setPlayerCoords((prev) => (prev.x === x && prev.y === y ? prev : { x, y }));
+        setCurrentZone((prev) => (prev === zone ? prev : zone));
       };
 
       gm.worldScene.onZoneEntered = (zone) => {
@@ -238,7 +282,25 @@ function GamePlay() {
         setFishingHudState(state);
       };
 
+      gm.worldScene.onAtmosphereChange = (snap) => {
+        setAtmosphereState(snap);
+      };
+
+      gm.worldScene.onMerchantGuideChange = (guide) => {
+        setMerchantGuide(guide);
+      };
+
       gm.worldScene.onOpenUIModal = (modal, data) => {
+        if (modal === 'shop' && !gm.worldScene?.isNearShop) {
+          gm.worldScene?.showMerchantGuide(
+            'ဘားနဘီ ကုန်စုံဆိုင်သို့ သွားပါ',
+            'ဆိုင်အနီးသို့ ရောက်မှသာ ဝယ်/ရောင်းပြုလုပ်နိုင်ပါသည်'
+          );
+          return;
+        }
+        if (modal === 'clothing_shop' && !gm.worldScene?.isNearClothingShop) {
+          return;
+        }
         if (modal === 'storage') {
           setSelectedStorageBuilding(data);
           setActiveModal('storage');
@@ -310,6 +372,7 @@ function GamePlay() {
       gm.saveCurrentState(true);
       gm.destroy();
       gameManagerRef.current = null;
+      setIsWorldReady(false);
     };
   }, [user?.uid]);
 
@@ -376,6 +439,12 @@ function GamePlay() {
     });
   };
 
+  // Keep Phaser shortcut/movement input paused whenever a modal, chat, or dialog is open
+  useEffect(() => {
+    const isBlocked = Boolean(activeModal || isChatOpen || selectedManageBuilding || roomFullNotice);
+    gameManagerRef.current?.setUiOverlayOpen(isBlocked);
+  }, [activeModal, isChatOpen, selectedManageBuilding, roomFullNotice]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
@@ -387,12 +456,14 @@ function GamePlay() {
       }
 
       if (e.key === 't' || e.key === 'T') {
-        if (!activeModal) {
+        if (!activeModal && !selectedManageBuilding && !roomFullNotice) {
           e.preventDefault();
           handleToggleChat();
         }
       } else if (e.key === 'Escape') {
-        if (isChatOpen) {
+        if (selectedManageBuilding) {
+          setSelectedManageBuilding(null);
+        } else if (isChatOpen) {
           setIsChatOpen(false);
         } else if (activeModal) {
           setActiveModal(null);
@@ -402,7 +473,7 @@ function GamePlay() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModal, isChatOpen]);
+  }, [activeModal, isChatOpen, selectedManageBuilding, roomFullNotice]);
 
   // Reset Game
   const handleResetGame = () => {
@@ -421,13 +492,32 @@ function GamePlay() {
       {/* 1. Phaser 3 Canvas Viewport */}
       <div id="phaser-canvas-container" className="absolute inset-0 w-full h-full" />
 
+      {/* 1B. Non-blocking World Boot Indicator (never steals joystick touch/pointer events) */}
+      {!isWorldReady && (
+        <div className="pointer-events-none fixed inset-0 z-10 flex items-center justify-center bg-stone-950/70">
+          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-[#181511]/95 border border-[#4a4134] shadow-2xl text-xs font-semibold text-stone-200">
+            <Loader2 size={16} className="animate-spin text-amber-400 shrink-0" />
+            <span>ကမ္ဘာကြီး ပြင်ဆင်နေသည်...</span>
+          </div>
+        </div>
+      )}
+
       {/* 2. Top Navigation & Status Bar */}
       <TopNavHUD
         playerProfile={playerProfile}
         coins={coins}
         currentZone={currentZone}
         coords={playerCoords}
-        onOpenModal={(modal) => setActiveModal(modal)}
+        onOpenModal={(modal) => {
+          if (modal === 'shop' && !gameManagerRef.current?.worldScene?.isNearShop) {
+            gameManagerRef.current?.worldScene?.showMerchantGuide(
+              'ဘားနဘီ ကုန်စုံဆိုင်သို့ သွားပါ',
+              'ဆိုင်အနီးသို့ ရောက်မှသာ ဝယ်/ရောင်းပြုလုပ်နိုင်ပါသည်'
+            );
+            return;
+          }
+          setActiveModal(modal);
+        }}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         isBuildMode={isBuildActive}
@@ -443,6 +533,7 @@ function GamePlay() {
         isChatOpen={isChatOpen}
         unreadChatCount={unreadChatCount}
         onToggleChat={handleToggleChat}
+        atmosphere={atmosphereState}
       />
 
       {/* 2B. Town Chat System (Hidden by default; opens via T key or TopNav button) */}
@@ -460,23 +551,27 @@ function GamePlay() {
 
       {/* Room Full Notification Dialog */}
       {roomFullNotice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="max-w-md w-full bg-stone-900 border border-amber-600/60 rounded-2xl p-6 text-stone-200 shadow-2xl space-y-4">
-            <div className="flex items-center gap-3 text-amber-400">
-              <span className="text-2xl">⚠️</span>
-              <h2 className="text-lg font-bold">လူဦးရေပြည့်နေပါသည် (၁၀/၁၀)</h2>
+        <div className={UI_THEME.backdrop}>
+          <div className={`${UI_THEME.panel} max-w-md p-5 sm:p-6 space-y-4`}>
+            <div className="flex items-center gap-3 text-amber-300">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-lg shrink-0">
+                ⚠️
+              </div>
+              <h2 className="text-base sm:text-lg font-bold leading-snug">လူဦးရေပြည့်နေပါသည် (၁၀/၁၀)</h2>
             </div>
             <p className="text-xs text-stone-300 leading-relaxed">
               Random City အွန်လိုင်းဆာဗာတွင် ကစားသူ ၁၀ ဦး ပြည့်နေပါသည်။ အော့ဖ်လိုင်း (တစ်ဦးတည်း) ဆက်လက်ဆော့ကစားနိုင်သလို ပြန်လည်ချိတ်ဆက်ရန်လည်း ကြိုးစားနိုင်ပါသည်။
             </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
               <button
+                type="button"
                 onClick={() => setRoomFullNotice(false)}
-                className="px-4 py-2 text-xs font-semibold rounded-lg bg-stone-800 text-stone-300 hover:bg-stone-700 transition cursor-pointer"
+                className="px-4 py-2 min-h-[40px] text-xs font-semibold rounded-xl bg-[#27221b] border border-[#453c30] text-stone-200 hover:bg-[#342d24] transition cursor-pointer"
               >
                 တစ်ဦးတည်း ဆက်လက်ကစားမည်
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setRoomFullNotice(false);
                   user?.getIdToken(true).then((token) => {
@@ -488,13 +583,14 @@ function GamePlay() {
                           gender: playerProfile.gender,
                           positionX: playerCoords.x,
                           positionY: playerCoords.y,
+                          equippedClothing: gameManagerRef.current?.playerProfile.equippedClothing,
                         },
                         () => user.getIdToken(true)
                       );
                     }
                   });
                 }}
-                className="px-4 py-2 text-xs font-semibold rounded-lg bg-amber-600 text-white hover:bg-amber-500 transition cursor-pointer"
+                className={`px-4 py-2 min-h-[40px] text-xs font-bold rounded-xl ${UI_THEME.primaryAmberBtn}`}
               >
                 ပြန်လည်ချိတ်ဆက်မည်
               </button>
@@ -515,6 +611,8 @@ function GamePlay() {
         fishingState={fishingHudState}
         onCatchFishing={() => gameManagerRef.current?.triggerFishingCatch()}
         onCancelFishing={() => gameManagerRef.current?.cancelFishing()}
+        merchantGuide={merchantGuide}
+        onDismissMerchantGuide={() => gameManagerRef.current?.worldScene?.dismissMerchantGuide()}
       />
 
       {/* 4. Mobile Virtual Joystick & Touch Controls */}
@@ -524,7 +622,7 @@ function GamePlay() {
         onOpenModal={(modal) => setActiveModal(modal)}
         hasNearbyInteraction={Boolean(interactionPrompt || fishingHudState?.active)}
         isBuildMode={isBuildActive}
-        isModalOpen={Boolean(activeModal || selectedManageBuilding)}
+        isModalOpen={Boolean(activeModal || selectedManageBuilding || roomFullNotice)}
       />
 
       {/* 5. Inventory Modal */}
@@ -533,6 +631,13 @@ function GamePlay() {
           inventory={gameManagerRef.current.inventorySystem}
           onClose={() => setActiveModal(null)}
           onSelectBuilding={handleSelectBuildingPiece}
+          playerGender={playerProfile.gender}
+          ownedClothing={playerProfile.ownedClothing || []}
+          equippedClothing={(playerProfile.equippedClothing || {}) as EquippedClothingState}
+          onEquipClothing={(itemId) => gameManagerRef.current!.equipClothing(itemId)}
+          onUnequipClothing={(slot: ClothingEquipmentSlot) =>
+            gameManagerRef.current!.unequipClothing(slot)
+          }
         />
       )}
 
@@ -543,6 +648,9 @@ function GamePlay() {
           inventory={gameManagerRef.current.inventorySystem}
           isNearWorkbench={gameManagerRef.current.worldScene?.isNearCraftStation ?? true}
           isNearCampfire={gameManagerRef.current.worldScene?.isNearCampfire ?? false}
+          onGuideToCraftStation={() => {
+            gameManagerRef.current?.worldScene?.showCraftingStationGuide();
+          }}
           onCrafted={() => {
             gameManagerRef.current?.recordStat('totalCrafted', 1);
             gameManagerRef.current?.saveCurrentState(false);
@@ -551,8 +659,8 @@ function GamePlay() {
         />
       )}
 
-      {/* 7. Merchant General Store Modal */}
-      {activeModal === 'shop' && gameManagerRef.current && (
+      {/* 7. Merchant General Store Modal (Accessible ONLY when near shop NPC/counter) */}
+      {activeModal === 'shop' && gameManagerRef.current && gameManagerRef.current.worldScene?.isNearShop && (
         <ShopModal
           inventory={gameManagerRef.current.inventorySystem}
           onSold={(goldEarned) => {
@@ -562,6 +670,24 @@ function GamePlay() {
           onClose={() => setActiveModal(null)}
         />
       )}
+
+      {/* 7B. Aunty Gyi Clothing Boutique (Accessible ONLY near Aunty Gyi) */}
+      {activeModal === 'clothing_shop' &&
+        gameManagerRef.current &&
+        gameManagerRef.current.worldScene?.isNearClothingShop && (
+          <ClothingShopModal
+            coins={coins}
+            gender={playerProfile.gender}
+            ownedClothing={playerProfile.ownedClothing || []}
+            equippedClothing={(playerProfile.equippedClothing || {}) as EquippedClothingState}
+            onBuy={(itemId) => gameManagerRef.current!.buyClothing(itemId)}
+            onEquip={(itemId) => gameManagerRef.current!.equipClothing(itemId)}
+            onUnequip={(slot: ClothingEquipmentSlot) =>
+              gameManagerRef.current!.unequipClothing(slot)
+            }
+            onClose={() => setActiveModal(null)}
+          />
+        )}
 
       {/* 8. Building Construction Menu */}
       {activeModal === 'building' && gameManagerRef.current && (
@@ -612,6 +738,11 @@ function GamePlay() {
           }}
           onReset={handleResetGame}
           onNameUpdated={handleNameUpdated}
+          weatherEffectsEnabled={weatherEffectsEnabled}
+          onToggleWeatherEffects={(enabled) => {
+            setWeatherEffectsEnabled(enabled);
+            gameManagerRef.current?.setWeatherEffectsEnabled(enabled);
+          }}
         />
       )}
 
@@ -667,10 +798,10 @@ function RootContainer() {
   // 1. Wait for Auth AND Cloud Save hydration before mounting Character Select or GamePlay
   if (loading || (user && profile && !gameState)) {
     return (
-      <div className="w-screen h-[100dvh] flex flex-col items-center justify-center bg-stone-950 text-stone-200 gap-3 select-none">
-        <Loader2 size={36} className="animate-spin text-amber-500" />
-        <div className="text-sm font-semibold tracking-wide text-stone-300">
-          Connecting to Random City Cloud...
+      <div className="w-screen h-[100dvh] flex flex-col items-center justify-center bg-[#14120f] text-stone-200 gap-3 select-none px-4 text-center">
+        <Loader2 size={36} className="animate-spin text-amber-400" />
+        <div className="text-sm font-semibold leading-snug text-stone-200">
+          Random City Cloud သို့ ချိတ်ဆက်နေသည်...
         </div>
       </div>
     );

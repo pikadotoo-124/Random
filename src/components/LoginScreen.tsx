@@ -6,52 +6,59 @@
 import React from 'react';
 import { Cloud, ShieldCheck, Sparkles, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../firebase/AuthContext';
+import { UI_THEME } from './uiTheme';
 
 export const LoginScreen: React.FC = () => {
   const { signInWithGoogle, loading, authError, clearAuthError, isOffline } = useAuth();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950 p-4 select-none">
-      {/* Background ambient pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-amber-950/20 via-stone-950 to-stone-950 pointer-events-none" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#12100d] p-4 select-none overflow-y-auto">
+      {/* Background meadow & harvest glow */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.16),transparent_55%),radial-gradient(ellipse_at_bottom_right,_rgba(245,158,11,0.12),transparent_50%)] pointer-events-none" />
 
-      <div className="relative w-full max-w-md bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl p-7 text-stone-200">
+      <div className={`${UI_THEME.panel} relative max-w-md p-6 sm:p-7`}>
         {/* Title & Badge */}
         <div className="text-center mb-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold uppercase tracking-wider mb-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/12 border border-amber-500/35 text-amber-300 text-xs font-semibold mb-3">
             <Sparkles size={13} />
-            <span>Step 2A: Cloud Save Enabled</span>
+            <span>Cloud သိမ်းဆည်းမှု စနစ်ပါဝင်သည်</span>
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white font-serif">
+          <h1 className="text-3xl font-extrabold tracking-tight text-white font-serif leading-tight">
             Random City
           </h1>
-          <p className="text-stone-300 text-xs mt-1.5 leading-relaxed">
-            ပေါ့ပါးလန်းဆန်းသော 2D Open-World Multiplayer ဂိမ်း
+          <p className="text-[#c7beae] text-xs mt-1.5 leading-relaxed">
+            သဘာဝဆန်ပြီး ပေါ့ပါးလန်းဆန်းသော 2D Open-World Multiplayer Life-Sim ဂိမ်း
           </p>
         </div>
 
         {/* Feature Highlights */}
-        <div className="p-3.5 bg-stone-950/70 border border-stone-800/80 rounded-xl space-y-2 mb-6 text-xs text-stone-300">
-          <div className="flex items-center gap-2.5">
-            <Cloud size={16} className="text-cyan-400 shrink-0" />
-            <span>Firebase Cloud စနစ်ဖြင့် စက်ပစ္စည်းတိုင်းတွင် အလိုအလျောက် သိမ်းဆည်းနိုင်သည်</span>
+        <div className={`p-3.5 ${UI_THEME.subCard} space-y-2.5 mb-6 text-xs text-stone-200 leading-relaxed`}>
+          <div className="flex items-start gap-2.5">
+            <Cloud size={16} className="text-sky-400 shrink-0 mt-0.5" />
+            <span>
+              Firebase Cloud စနစ်ဖြင့် စက်ပစ္စည်းတိုင်းတွင် အလိုအလျောက် သိမ်းဆည်းနိုင်သည်
+            </span>
           </div>
-          <div className="flex items-center gap-2.5">
-            <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
-            <span>လုံခြုံစိတ်ချရသော Google Account နှင့် Realtime Multiplayer လောက</span>
+          <div className="flex items-start gap-2.5">
+            <ShieldCheck size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+            <span>
+              လုံခြုံစိတ်ချရသော Google အကောင့်နှင့် Realtime Multiplayer လောက
+            </span>
           </div>
         </div>
 
         {/* Error Alert */}
         {authError && (
-          <div className="mb-5 p-3 rounded-xl bg-red-950/60 border border-red-700/60 text-red-200 text-xs flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2">
-              <AlertCircle size={16} className="text-red-400 shrink-0 mt-0.5" />
+          <div className="mb-5 p-3 rounded-xl bg-rose-950/60 border border-rose-700/60 text-rose-200 text-xs flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2 leading-relaxed">
+              <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
               <span>{authError}</span>
             </div>
             <button
+              type="button"
               onClick={clearAuthError}
-              className="text-red-400 hover:text-white text-xs font-bold px-1"
+              aria-label="သတိပေးချက် ပိတ်မည်"
+              className="text-rose-300 hover:text-white text-xs font-bold px-1 cursor-pointer shrink-0"
             >
               ✕
             </button>
@@ -60,7 +67,7 @@ export const LoginScreen: React.FC = () => {
 
         {/* Offline indicator */}
         {isOffline && (
-          <div className="mb-5 p-2.5 rounded-xl bg-amber-950/40 border border-amber-800/50 text-amber-300 text-xs text-center">
+          <div className="mb-5 p-2.5 rounded-xl bg-amber-950/45 border border-amber-700/50 text-amber-200 text-xs text-center leading-snug">
             ⚠️ အော့ဖ်လိုင်း စနစ်ဖြင့် ကစားနေပါသည်
           </div>
         )}
@@ -68,9 +75,10 @@ export const LoginScreen: React.FC = () => {
         {/* Action Button: Sign in with Google */}
         <div className="space-y-3">
           <button
+            type="button"
             onClick={signInWithGoogle}
             disabled={loading}
-            className="w-full py-3.5 px-4 rounded-xl bg-white hover:bg-stone-100 text-stone-900 font-bold text-sm tracking-wide shadow-xl shadow-black/40 transition active:scale-[0.99] flex items-center justify-center gap-3 cursor-pointer disabled:opacity-50"
+            className="w-full py-3.5 px-4 rounded-xl bg-[#f7f4ee] hover:bg-white text-stone-900 font-bold text-sm tracking-wide shadow-xl shadow-black/45 transition active:scale-[0.98] flex items-center justify-center gap-3 cursor-pointer disabled:opacity-50"
           >
             {loading ? (
               <>
@@ -79,7 +87,6 @@ export const LoginScreen: React.FC = () => {
               </>
             ) : (
               <>
-                {/* Official Google 'G' icon */}
                 <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
                   <path
                     fill="#4285F4"
@@ -104,8 +111,8 @@ export const LoginScreen: React.FC = () => {
           </button>
         </div>
 
-        <div className="mt-5 text-center text-[11px] text-stone-400">
-          ကစားထားသော အချက်အလက်များ၊ ရွှေဒင်္ဂါးများနှင့် အဆောက်အအုံများကို Google Account တွင် အလိုအလျောက် သိမ်းဆည်းပေးမည်။
+        <div className="mt-5 text-center text-[11px] text-[#a99f8e] leading-relaxed">
+          ကစားထားသော အချက်အလက်များ၊ ရွှေဒင်္ဂါးများနှင့် အဆောက်အအုံများကို Google အကောင့်တွင် အလိုအလျောက် သိမ်းဆည်းပေးမည်။
         </div>
       </div>
     </div>

@@ -16,6 +16,7 @@ import {
   ChatMessage,
 } from './src/game/multiplayer/types';
 import { PlacedBuilding } from './src/game/types';
+import { ClothingSystem } from './src/game/systems/ClothingSystem';
 import { verifyFirebaseIdToken } from './server/auth/tokenVerifier';
 
 dotenv.config();
@@ -167,6 +168,11 @@ async function createServer() {
             }
 
             const gender = profile?.gender === 'female' ? 'female' : 'male';
+            const equippedClothing = ClothingSystem.normalizeEquippedClothing(
+              profile?.equippedClothing,
+              undefined,
+              gender
+            );
             const newPlayer: PlayerPresenceState = {
               playerId: verifiedUid,
               playerName,
@@ -175,6 +181,7 @@ async function createServer() {
               positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
               facingDirection: 'down',
               movementState: 'idle',
+              equippedClothing,
               color: gender === 'female' ? '#10b981' : '#3b82f6',
               lastUpdate: Date.now(),
             };
@@ -235,6 +242,30 @@ async function createServer() {
                 direction: msg.payload.direction,
                 isMoving: msg.payload.isMoving,
                 action,
+              },
+            }, ws);
+            break;
+          }
+
+          case 'c:outfit_update': {
+            const playerId = sockets.get(ws);
+            if (!playerId) return;
+            const player = players.get(playerId);
+            if (!player) return;
+
+            const cleanOutfit = ClothingSystem.normalizeEquippedClothing(
+              msg.payload?.equippedClothing,
+              undefined,
+              player.gender
+            );
+            player.equippedClothing = cleanOutfit;
+            player.lastUpdate = Date.now();
+
+            broadcast({
+              type: 's:player_outfit',
+              payload: {
+                playerId,
+                equippedClothing: cleanOutfit,
               },
             }, ws);
             break;
@@ -335,11 +366,6 @@ async function createServer() {
               type: 's:chat',
               payload: chatMsg,
             });
-            break;
-          }
-
-          case 'c:ping': {
-            ws.send(JSON.stringify({ type: 's:pong' }));
             break;
           }
         }

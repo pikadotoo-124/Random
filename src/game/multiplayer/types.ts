@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { PlacedBuilding } from '../types';
+import { ActionToolKind, EquippedClothingState, PlacedBuilding } from '../types';
 
 export interface PlayerPresenceState {
   playerId: string; // Firebase UID
@@ -14,6 +14,8 @@ export interface PlayerPresenceState {
   facingDirection: 'down' | 'left' | 'right' | 'up';
   movementState: 'idle' | 'walking' | 'fishing';
   animationState?: 'none' | 'gathering' | 'building' | 'fishing';
+  actionTool?: ActionToolKind;
+  equippedClothing?: EquippedClothingState;
   color: string;
   lastUpdate: number;
 }
@@ -54,6 +56,7 @@ export type ClientMessage =
           gender: 'male' | 'female';
           positionX: number;
           positionY: number;
+          equippedClothing?: EquippedClothingState;
         };
       };
     }
@@ -65,6 +68,7 @@ export type ClientMessage =
         direction: 'down' | 'left' | 'right' | 'up';
         isMoving: boolean;
         action?: 'idle' | 'gathering' | 'building' | 'fishing';
+        actionTool?: ActionToolKind;
       };
     }
   | {
@@ -93,7 +97,10 @@ export type ClientMessage =
       };
     }
   | {
-      type: 'c:ping';
+      type: 'c:outfit_update';
+      payload: {
+        equippedClothing: EquippedClothingState;
+      };
     };
 
 export type ServerMessage =
@@ -137,6 +144,7 @@ export type ServerMessage =
         direction: 'down' | 'left' | 'right' | 'up';
         isMoving: boolean;
         action?: 'idle' | 'gathering' | 'building' | 'fishing';
+        actionTool?: ActionToolKind;
       };
     }
   | {
@@ -170,7 +178,11 @@ export type ServerMessage =
       payload: ChatMessage;
     }
   | {
-      type: 's:pong';
+      type: 's:player_outfit';
+      payload: {
+        playerId: string;
+        equippedClothing: EquippedClothingState;
+      };
     }
   | {
       type: 's:error';

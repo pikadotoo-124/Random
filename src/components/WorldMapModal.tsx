@@ -8,6 +8,7 @@ import { Compass, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { ZONE_SIGNPOSTS } from '../game/constants';
 import { MapSystem } from '../game/systems/MapSystem';
 import { PlacedBuilding, ResourceNode } from '../game/types';
+import { UI_THEME } from './uiTheme';
 
 interface WorldMapModalProps {
   playerCoords: { x: number; y: number };
@@ -60,8 +61,8 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         let col = '#4f8530';
 
         if (tile === 'grass') {
-          if (tx < 38 && ty < 38) col = '#65a30d'; // Wild Meadows
-          else if (tx >= 38 && ty < 48) col = '#15803d'; // Whispering Forest canopy tint
+          if (tx < 38 && ty < 38) col = '#65a30d';
+          else if (tx >= 38 && ty < 48) col = '#15803d';
           else col = (tx + ty) % 2 === 0 ? '#528732' : '#4d802f';
         } else if (tile === 'water') {
           col = tx >= 74 && tx <= 98 && ty >= 14 && ty <= 30 ? '#0d9488' : '#0284c7';
@@ -72,7 +73,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         } else if (tile === 'cliff') {
           col = ty <= 4 ? '#44403c' : '#57534e';
         } else if (tile === 'farmland') {
-          col = '#65a30d';
+          col = '#784421';
         } else if (tile === 'bridge') {
           col = '#b45309';
         } else if (tile === 'dirt') {
@@ -82,15 +83,14 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         ctx.fillStyle = col;
         ctx.fillRect(tx * scale, ty * scale, scale, scale);
 
-        // Farmland furrow stripe hint
         if (tile === 'farmland' && ty % 2 === 0) {
-          ctx.fillStyle = '#3f6212';
+          ctx.fillStyle = '#522d14';
           ctx.fillRect(tx * scale, ty * scale, scale, 1.5);
         }
       }
     }
 
-    // Highlight Town Plaza boundary & Homestead boundary subtly
+    // Town Plaza & Homestead District markers
     ctx.strokeStyle = 'rgba(251, 191, 36, 0.75)';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(21 * scale, 21 * scale, 19 * scale, 19 * scale);
@@ -100,7 +100,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
     ctx.strokeRect(40 * scale, 40 * scale, 75 * scale, 75 * scale);
     ctx.setLineDash([]);
 
-    // Active fishing spots (subtle sky-blue dots on shoreline)
+    // Active fishing spots
     for (const node of resourceNodes) {
       if (node.type !== 'lake_fish') continue;
       if (node.depletedUntil && node.depletedUntil > Date.now()) continue;
@@ -112,14 +112,20 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
 
     // Placed Homestead buildings
     for (const b of placedBuildings) {
-      ctx.fillStyle = b.type.startsWith('house') ? '#f97316' : b.type === 'fence_wood' ? '#d97706' : '#fbbf24';
+      ctx.fillStyle = b.type.startsWith('house')
+        ? '#f97316'
+        : b.type.startsWith('decor_')
+        ? '#ec4899'
+        : b.type === 'fence_wood'
+        ? '#d97706'
+        : '#fbbf24';
       ctx.fillRect(b.tileX * scale, b.tileY * scale, Math.max(1, b.width) * scale, Math.max(1, b.height) * scale);
       ctx.strokeStyle = '#1c1917';
       ctx.lineWidth = 1;
       ctx.strokeRect(b.tileX * scale, b.tileY * scale, Math.max(1, b.width) * scale, Math.max(1, b.height) * scale);
     }
 
-    // Zone Signposts (gold diamond pins)
+    // Zone Signposts
     for (const sign of ZONE_SIGNPOSTS) {
       const sx = (sign.tileX + 0.5) * scale;
       const sy = (sign.tileY + 0.5) * scale;
@@ -151,7 +157,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
   }, [mapSystem, placedBuildings, resourceNodes, onlinePlayers]);
 
   const clampPan = (nx: number, ny: number, targetZoom: number) => {
-    const maxOffset = Math.max(0, ((targetZoom - 1) * 160));
+    const maxOffset = Math.max(0, (targetZoom - 1) * 160);
     return {
       x: Math.max(-maxOffset, Math.min(maxOffset, nx)),
       y: Math.max(-maxOffset, Math.min(maxOffset, ny)),
@@ -165,39 +171,36 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-2 sm:p-4"
-      onClick={onClose}
-    >
+    <div className={UI_THEME.backdrop} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl bg-stone-900 border border-stone-700 rounded-2xl shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden text-stone-200"
+        className={`${UI_THEME.panel} max-w-2xl`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-stone-800 bg-stone-950/50 gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800 flex items-center justify-center text-indigo-400 shrink-0">
+        <div className={UI_THEME.header}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-950/75 border border-emerald-700/50 flex items-center justify-center text-emerald-300 shrink-0">
               <Compass size={18} />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm sm:text-base font-bold text-white tracking-tight truncate">
+              <h2 className="text-sm sm:text-base font-bold text-white tracking-tight leading-snug truncate">
                 Random City ကမ္ဘာ့မြေပုံ (120 × 120)
               </h2>
-              <p className="text-[11px] text-stone-400 truncate">
+              <p className="text-xs text-[#b7ad9d] leading-snug truncate">
                 လက်ရှိဇုန်: <span className="text-amber-300 font-semibold">{currentZone}</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <div className="text-[11px] text-stone-400 font-mono hidden sm:block">
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            <div className="text-xs text-[#b7ad9d] font-mono hidden sm:block">
               <span className="text-white font-bold">X: {playerCoords.x}, Y: {playerCoords.y}</span>
             </div>
 
             <button
               onClick={onClose}
-              aria-label="Close world map"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-stone-400 hover:text-white hover:bg-stone-800 transition cursor-pointer"
+              aria-label="ကမ္ဘာ့မြေပုံ ပိတ်မည်"
+              className={UI_THEME.closeBtn}
             >
               <X size={18} />
             </button>
@@ -208,28 +211,33 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
         <div className="p-3 sm:p-5 overflow-y-auto flex flex-col items-center gap-3">
           {/* Zoom Toolbar */}
           <div className="flex items-center justify-between w-full max-w-md gap-2">
-            <div className="text-[11px] text-stone-400 font-mono sm:hidden">
-              X: <span className="text-white font-bold">{playerCoords.x}</span>, Y: <span className="text-white font-bold">{playerCoords.y}</span>
+            <div className="text-[11px] text-[#b7ad9d] font-mono sm:hidden">
+              X: <span className="text-white font-bold">{playerCoords.x}</span>, Y:{' '}
+              <span className="text-white font-bold">{playerCoords.y}</span>
             </div>
             <div className="flex items-center gap-1.5 ml-auto">
               <button
                 type="button"
                 onClick={() => applyZoom(zoom - 0.5)}
                 disabled={zoom <= 1}
-                className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 disabled:opacity-40 text-xs flex items-center gap-1 border border-stone-700 cursor-pointer"
+                aria-label="မြေပုံ ချုံ့မည်"
+                title="မြေပုံ ချုံ့မည်"
+                className="w-8 h-8 rounded-lg bg-[#27221b] hover:bg-[#352d24] disabled:opacity-40 text-stone-200 flex items-center justify-center border border-[#463c2f] cursor-pointer transition"
               >
-                <ZoomOut size={13} />
+                <ZoomOut size={14} />
               </button>
-              <span className="text-xs font-mono text-stone-300 min-w-[42px] text-center">
+              <span className="text-xs font-mono text-stone-200 min-w-[44px] text-center">
                 {zoom.toFixed(1)}x
               </span>
               <button
                 type="button"
                 onClick={() => applyZoom(zoom + 0.5)}
                 disabled={zoom >= 3.5}
-                className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 disabled:opacity-40 text-xs flex items-center gap-1 border border-stone-700 cursor-pointer"
+                aria-label="မြေပုံ ချဲ့မည်"
+                title="မြေပုံ ချဲ့မည်"
+                className="w-8 h-8 rounded-lg bg-[#27221b] hover:bg-[#352d24] disabled:opacity-40 text-stone-200 flex items-center justify-center border border-[#463c2f] cursor-pointer transition"
               >
-                <ZoomIn size={13} />
+                <ZoomIn size={14} />
               </button>
               <button
                 type="button"
@@ -237,17 +245,18 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
                   setZoom(1);
                   setPan({ x: 0, y: 0 });
                 }}
-                className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-xs flex items-center gap-1 border border-stone-700 cursor-pointer"
-                title="Reset Zoom"
+                className="w-8 h-8 rounded-lg bg-[#27221b] hover:bg-[#352d24] text-stone-200 flex items-center justify-center border border-[#463c2f] cursor-pointer transition"
+                title="မြေပုံချုံ့/ချဲ့ ပြန်စမည်"
+                aria-label="မြေပုံချုံ့/ချဲ့ ပြန်စမည်"
               >
-                <RotateCcw size={13} />
+                <RotateCcw size={14} />
               </button>
             </div>
           </div>
 
           {/* Interactive Zoomable / Pannable Map Viewport */}
           <div
-            className="relative w-64 h-64 sm:w-[360px] sm:h-[360px] rounded-xl border-2 border-stone-700/90 bg-stone-950 overflow-hidden shadow-2xl touch-none select-none"
+            className="relative w-64 h-64 sm:w-[350px] sm:h-[350px] rounded-xl border-2 border-[#4d4234] bg-[#12100d] overflow-hidden shadow-2xl touch-none select-none shrink-0"
             onWheel={(e) => {
               e.preventDefault();
               applyZoom(zoom + (e.deltaY < 0 ? 0.35 : -0.35));
@@ -287,33 +296,33 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
               <div
                 style={{ left: `${(30 / MAP_SIZE) * 100}%`, top: `${(29 / MAP_SIZE) * 100}%` }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 text-[11px] pointer-events-none drop-shadow"
-                title="မြို့လယ်ရေပန်း (Town Plaza)"
+                title="မြို့လယ်ရေပန်း"
               >
                 ⛲
               </div>
               <div
                 style={{ left: `${(23 / MAP_SIZE) * 100}%`, top: `${(27 / MAP_SIZE) * 100}%` }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] pointer-events-none"
-                title="ဘားနဘီ ကုန်စုံဆိုင် (Shop)"
+                title="ဘားနဘီ ကုန်စုံဆိုင်"
               >
                 🏪
               </div>
               <div
                 style={{ left: `${(34 / MAP_SIZE) * 100}%`, top: `${(25 / MAP_SIZE) * 100}%` }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] pointer-events-none"
-                title="လက်မှုလုပ်ငန်းခုံ (Workbench)"
+                title="လက်မှုလုပ်ငန်းခုံ"
               >
                 🔨
               </div>
               <div
                 style={{ left: `${(49 / MAP_SIZE) * 100}%`, top: `${(74 / MAP_SIZE) * 100}%` }}
                 className="absolute -translate-x-1/2 -translate-y-1/2 text-[10px] pointer-events-none"
-                title="ရွာရေတွင်း (Farm District)"
+                title="ရွာရေတွင်း"
               >
                 🌾
               </div>
 
-              {/* Zone Readable Overlays */}
+              {/* Zone Overlays */}
               <span
                 style={{ left: '16%', top: '12%' }}
                 className="absolute -translate-x-1/2 text-[8px] font-bold text-lime-200 bg-stone-950/75 px-1 rounded pointer-events-none"
@@ -359,20 +368,20 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
           </div>
 
           {/* Compact Legend */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px] text-stone-300 w-full max-w-xl">
-            <div className="flex items-center gap-1.5 p-1.5 bg-stone-950/50 rounded border border-stone-800">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-stone-200 w-full max-w-xl">
+            <div className={`flex items-center gap-1.5 p-2 ${UI_THEME.subCard}`}>
               <span className="w-3 h-3 rounded-sm bg-[#d4a373] shrink-0" />
               <span className="truncate">လမ်းမ / တံတား</span>
             </div>
-            <div className="flex items-center gap-1.5 p-1.5 bg-stone-950/50 rounded border border-stone-800">
+            <div className={`flex items-center gap-1.5 p-2 ${UI_THEME.subCard}`}>
               <span className="w-3 h-3 rounded-sm bg-[#0284c7] shrink-0" />
               <span className="truncate">ရေကန် / မြစ် (🐟)</span>
             </div>
-            <div className="flex items-center gap-1.5 p-1.5 bg-stone-950/50 rounded border border-stone-800">
+            <div className={`flex items-center gap-1.5 p-2 ${UI_THEME.subCard}`}>
               <span className="w-3 h-3 rounded-sm bg-[#f97316] shrink-0" />
               <span className="truncate">အိမ်ခြံ ({placedBuildings.length})</span>
             </div>
-            <div className="flex items-center gap-1.5 p-1.5 bg-stone-950/50 rounded border border-stone-800">
+            <div className={`flex items-center gap-1.5 p-2 ${UI_THEME.subCard}`}>
               <span className="text-red-400 font-bold shrink-0">▲</span>
               <span className="truncate">သင့်တည်နေရာ</span>
             </div>

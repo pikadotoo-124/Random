@@ -11,6 +11,7 @@ import {
   ChatMessage,
 } from '../../src/game/multiplayer/types';
 import { PlacedBuilding } from '../../src/game/types';
+import { ClothingSystem } from '../../src/game/systems/ClothingSystem';
 import { verifyFirebaseIdToken } from '../auth/tokenVerifier';
 
 // Ambient declarations for Cloudflare Workers / Durable Objects environment
@@ -181,6 +182,11 @@ export class GameRoomDO {
         }
 
         const gender = profile?.gender === 'female' ? 'female' : 'male';
+        const equippedClothing = ClothingSystem.normalizeEquippedClothing(
+          profile?.equippedClothing,
+          undefined,
+          gender
+        );
         const newPlayer: PlayerPresenceState = {
           playerId: verifiedUid,
           playerName,
@@ -189,6 +195,7 @@ export class GameRoomDO {
           positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
           facingDirection: 'down',
           movementState: 'idle',
+          equippedClothing,
           color: gender === 'female' ? '#10b981' : '#3b82f6',
           lastUpdate: Date.now(),
         };
@@ -236,12 +243,14 @@ export class GameRoomDO {
         const targetX = Math.max(0, Math.min(119, msg.payload.x));
         const targetY = Math.max(0, Math.min(119, msg.payload.y));
         const action = msg.payload.action || 'idle';
+        const actionTool = action === 'gathering' ? msg.payload.actionTool : undefined;
 
         player.positionX = targetX;
         player.positionY = targetY;
         player.facingDirection = msg.payload.direction;
         player.movementState = action === 'fishing' ? 'fishing' : msg.payload.isMoving ? 'walking' : 'idle';
         player.animationState = action === 'fishing' ? 'fishing' : action === 'gathering' ? 'gathering' : action === 'building' ? 'building' : 'none';
+        player.actionTool = actionTool;
         player.lastUpdate = Date.now();
 
         // Broadcast move update to other clients
@@ -254,9 +263,36 @@ export class GameRoomDO {
             direction: msg.payload.direction,
             isMoving: msg.payload.isMoving,
             action,
+            actionTool,
           },
         };
         this.broadcast(moveMsg, ws);
+        break;
+      }
+
+      case 'c:outfit_update': {
+        const playerId = this.sockets.get(ws);
+        if (!playerId) return;
+
+        const player = this.players.get(playerId);
+        if (!player) return;
+
+        const cleanOutfit = ClothingSystem.normalizeEquippedClothing(
+          msg.payload?.equippedClothing,
+          undefined,
+          player.gender
+        );
+        player.equippedClothing = cleanOutfit;
+        player.lastUpdate = Date.now();
+
+        const outfitMsg: ServerMessage = {
+          type: 's:player_outfit',
+          payload: {
+            playerId,
+            equippedClothing: cleanOutfit,
+          },
+        };
+        this.broadcast(outfitMsg, ws);
         break;
       }
 
@@ -273,7 +309,15 @@ export class GameRoomDO {
           return; // Already depleted, reject redundant gather
         }
 
-        const respawnDuration = nodeId.includes('tree') ? 25000 : nodeId.includes('rock') ? 30000 : 20000;
+        const respawnDuration = nodeId.includes('tree')
+          ? 23000
+          : nodeId.includes('rock')
+          ? 28000
+          : nodeId.includes('bush')
+          ? 18000
+          : nodeId.includes('animal')
+          ? 33000
+          : 20000;
         const respawnAt = now + respawnDuration;
         this.depletedResources.set(nodeId, respawnAt);
 
@@ -373,11 +417,6 @@ export class GameRoomDO {
           type: 's:chat',
           payload: chatMsg,
         });
-        break;
-      }
-
-      case 'c:ping': {
-        ws.send(JSON.stringify({ type: 's:pong' }));
         break;
       }
     }

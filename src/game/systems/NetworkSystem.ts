@@ -11,7 +11,8 @@ import {
   ServerMessage,
   WorldSyncState,
 } from '../multiplayer/types';
-import { PlacedBuilding } from '../types';
+import { ActionToolKind, EquippedClothingState, PlacedBuilding } from '../types';
+import { ClothingSystem } from './ClothingSystem';
 
 export interface RemotePlayer {
   id: string;
@@ -26,6 +27,8 @@ export interface RemotePlayer {
   direction: 'down' | 'left' | 'right' | 'up';
   isMoving: boolean;
   action?: 'gathering' | 'building' | 'fishing' | 'idle';
+  actionTool?: ActionToolKind;
+  equippedClothing?: EquippedClothingState;
   color: string;
 }
 
@@ -33,6 +36,7 @@ export type NetworkEventType =
   | 'status_changed'
   | 'player_joined'
   | 'player_moved'
+  | 'player_outfit'
   | 'player_left'
   | 'building_placed'
   | 'building_dismantled'
@@ -59,6 +63,7 @@ export class NetworkSystem {
   public remotePlayers = new Map<string, RemotePlayer>();
   public chatMessages: ChatMessage[] = [];
   public errorMessage: string | null = null;
+  public lastRoomState: WorldSyncState | null = null;
 
   private listeners = new Map<NetworkEventType, ((event: NetworkEvent) => void)[]>();
   private reconnectAttempts = 0;
@@ -66,6 +71,7 @@ export class NetworkSystem {
   private lastMoveSendTime = 0;
   private cachedAuthData: { idToken: string; profile: any } | null = null;
   private tokenRefresher?: () => Promise<string>;
+  private lastBroadcastOutfitSig: string | null = null;
 
   constructor(roomName = 'random-city-main', maxPlayers = 10) {
     this.roomName = roomName;
@@ -91,10 +97,26 @@ export class NetworkSystem {
    */
   public connect(
     idToken: string,
-    profile: { name: string; gender: 'male' | 'female'; positionX: number; positionY: number },
+    profile: {
+      name: string;
+      gender: 'male' | 'female';
+      positionX: number;
+      positionY: number;
+      equippedClothing?: EquippedClothingState;
+    },
     tokenRefresher?: () => Promise<string>
   ): void {
-    this.cachedAuthData = { idToken, profile };
+    const cleanOutfit = ClothingSystem.normalizeEquippedClothing(
+      profile.equippedClothing,
+      undefined,
+      profile.gender
+    );
+    const normalizedProfile = {
+      ...profile,
+      equippedClothing: cleanOutfit,
+    };
+    this.lastBroadcastOutfitSig = ClothingSystem.getOutfitSignature(cleanOutfit);
+    this.cachedAuthData = { idToken, profile: normalizedProfile };
     if (tokenRefresher) {
       this.tokenRefresher = tokenRefresher;
     }
@@ -125,7 +147,7 @@ export class NetworkSystem {
           type: 'c:auth_join',
           payload: {
             idToken,
-            profile,
+            profile: normalizedProfile,
           },
         };
         this.send(joinMsg);
@@ -202,6 +224,7 @@ export class NetworkSystem {
     switch (msg.type) {
       case 's:room_state': {
         const state: WorldSyncState = msg.payload;
+        this.lastRoomState = state;
         this.playerCount = state.playerCount;
         this.chatMessages = state.recentChat || [];
 
@@ -221,7 +244,20 @@ export class NetworkSystem {
               worldY: 0,
               direction: p.facingDirection,
               isMoving: p.movementState === 'walking',
-              action: p.movementState === 'fishing' ? 'fishing' : p.animationState === 'fishing' ? 'fishing' : 'idle',
+              action:
+                p.movementState === 'fishing' || p.animationState === 'fishing'
+                  ? 'fishing'
+                  : p.animationState === 'gathering'
+                  ? 'gathering'
+                  : p.animationState === 'building'
+                  ? 'building'
+                  : 'idle',
+              actionTool: p.actionTool,
+              equippedClothing: ClothingSystem.normalizeEquippedClothing(
+                p.equippedClothing,
+                undefined,
+                p.gender
+              ),
               color: p.color,
             });
           }
@@ -254,7 +290,20 @@ export class NetworkSystem {
             worldY: 0,
             direction: player.facingDirection,
             isMoving: player.movementState === 'walking',
-            action: player.movementState === 'fishing' ? 'fishing' : 'idle',
+            action:
+              player.movementState === 'fishing' || player.animationState === 'fishing'
+                ? 'fishing'
+                : player.animationState === 'gathering'
+                ? 'gathering'
+                : player.animationState === 'building'
+                ? 'building'
+                : 'idle',
+            actionTool: player.actionTool,
+            equippedClothing: ClothingSystem.normalizeEquippedClothing(
+              player.equippedClothing,
+              undefined,
+              player.gender
+            ),
             color: player.color,
           });
         }
@@ -272,7 +321,7 @@ export class NetworkSystem {
       }
 
       case 's:player_moved': {
-        const { playerId, x, y, direction, isMoving, action } = msg.payload;
+        const { playerId, x, y, direction, isMoving, action, actionTool } = msg.payload;
         if (playerId === this.localPlayerId) return;
 
         const peer = this.remotePlayers.get(playerId);
@@ -283,12 +332,33 @@ export class NetworkSystem {
           peer.isMoving = isMoving;
           if (action !== undefined) {
             peer.action = action;
+            peer.actionTool = action === 'gathering' ? actionTool : undefined;
           } else if (isMoving) {
             peer.action = 'idle';
+            peer.actionTool = undefined;
           }
         }
 
         this.emit('player_moved', msg.payload);
+        break;
+      }
+
+      case 's:player_outfit': {
+        const { playerId, equippedClothing } = msg.payload;
+        if (playerId === this.localPlayerId) return;
+
+        const peer = this.remotePlayers.get(playerId);
+        if (peer) {
+          peer.equippedClothing = ClothingSystem.normalizeEquippedClothing(
+            equippedClothing,
+            undefined,
+            peer.gender
+          );
+          this.emit('player_outfit', {
+            playerId,
+            equippedClothing: peer.equippedClothing,
+          });
+        }
         break;
       }
 
@@ -355,7 +425,8 @@ export class NetworkSystem {
     tileY: number,
     direction: 'down' | 'left' | 'right' | 'up',
     isMoving: boolean,
-    action: 'idle' | 'gathering' | 'building' | 'fishing' = 'idle'
+    action: 'idle' | 'gathering' | 'building' | 'fishing' = 'idle',
+    actionTool?: ActionToolKind
   ): void {
     const now = Date.now();
     if (now - this.lastMoveSendTime < 80) return; // ~12 updates per second
@@ -364,35 +435,64 @@ export class NetworkSystem {
     this.send({
       type: 'c:player_move',
       payload: {
-        x: Math.round(tileX * 10) / 10,
-        y: Math.round(tileY * 10) / 10,
+        x: Math.round(tileX * 100) / 100,
+        y: Math.round(tileY * 100) / 100,
         direction,
         isMoving,
         action,
+        actionTool,
       },
     });
   }
 
   /**
-   * Immediately broadcast an action state change (e.g. starting/stopping fishing)
+   * Immediately broadcast an action state change (e.g. starting/stopping fishing or gathering)
    */
   public broadcastActionState(
     tileX: number,
     tileY: number,
     direction: 'down' | 'left' | 'right' | 'up',
-    action: 'idle' | 'gathering' | 'building' | 'fishing'
+    action: 'idle' | 'gathering' | 'building' | 'fishing',
+    actionTool?: ActionToolKind
   ): void {
     this.lastMoveSendTime = Date.now();
     this.send({
       type: 'c:player_move',
       payload: {
-        x: Math.round(tileX * 10) / 10,
-        y: Math.round(tileY * 10) / 10,
+        x: Math.round(tileX * 100) / 100,
+        y: Math.round(tileY * 100) / 100,
         direction,
         isMoving: false,
         action,
+        actionTool,
       },
     });
+  }
+
+  /**
+   * Broadcast equipped outfit changes only when the outfit signature actually changes.
+   */
+  public broadcastOutfit(equippedClothing: EquippedClothingState | undefined | null): boolean {
+    const clean = ClothingSystem.normalizeEquippedClothing(
+      equippedClothing,
+      undefined,
+      this.cachedAuthData?.profile?.gender
+    );
+    if (this.cachedAuthData?.profile) {
+      this.cachedAuthData.profile.equippedClothing = clean;
+    }
+
+    const sig = ClothingSystem.getOutfitSignature(clean);
+    if (sig === this.lastBroadcastOutfitSig) {
+      return false;
+    }
+    this.lastBroadcastOutfitSig = sig;
+
+    this.send({
+      type: 'c:outfit_update',
+      payload: { equippedClothing: clean },
+    });
+    return true;
   }
 
   /**
@@ -472,15 +572,23 @@ export class NetworkSystem {
   }
 
   public disconnect(): void {
+    this.cachedAuthData = null;
+    this.tokenRefresher = undefined;
+    this.lastBroadcastOutfitSig = null;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.socket) {
+      this.socket.onopen = null;
+      this.socket.onmessage = null;
+      this.socket.onclose = null;
+      this.socket.onerror = null;
       this.socket.close();
       this.socket = null;
     }
     this.setStatus('disconnected');
     this.remotePlayers.clear();
+    this.lastRoomState = null;
   }
 }

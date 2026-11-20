@@ -6,8 +6,15 @@
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from './config';
 import { handleFirestoreError, OperationType } from './errorHandler';
-import { PlacedBuilding, PlayerProfile, PlayerStats, PlayerWorldChanges } from '../game/types';
+import {
+  EquippedClothingState,
+  PlacedBuilding,
+  PlayerProfile,
+  PlayerStats,
+  PlayerWorldChanges,
+} from '../game/types';
 import { BuildingSystem } from '../game/systems/BuildingSystem';
+import { ClothingSystem } from '../game/systems/ClothingSystem';
 import { CURRENT_SAVE_VERSION, SavedGameState, SaveSystem } from '../game/systems/SaveSystem';
 
 export interface UserProfileDoc {
@@ -27,6 +34,8 @@ export interface PlayerStateDoc {
   inventory: { item: string; quantity: number }[];
   equipment: {
     currentTool: string | null;
+    ownedClothing?: string[];
+    equippedClothing?: EquippedClothingState;
   };
   playerStats: PlayerStats;
   lastSavedAt: string;
@@ -159,6 +168,15 @@ export class CloudSaveService {
       const playerDoc = playerSnap.data() as PlayerStateDoc;
       const worldDoc = worldSnap.exists() ? (worldSnap.data() as WorldStateDoc) : null;
 
+      const ownedClothing = ClothingSystem.normalizeOwnedClothing(
+        playerDoc.equipment?.ownedClothing
+      );
+      const equippedClothing = ClothingSystem.normalizeEquippedClothing(
+        playerDoc.equipment?.equippedClothing,
+        ownedClothing,
+        profile.gender
+      );
+
       const playerProfile: PlayerProfile = {
         name: profile.playerName,
         gender: profile.gender,
@@ -167,6 +185,8 @@ export class CloudSaveService {
         clothesColor: profile.gender === 'male' ? '#3b82f6' : '#10b981',
         coins: playerDoc.gold ?? 25,
         currentTool: (playerDoc.equipment?.currentTool as any) ?? 'axe_basic',
+        ownedClothing,
+        equippedClothing,
       };
 
       // Rehydrate placedBuildings and restore storageBoxes snapshot if building.storage is missing
@@ -250,6 +270,13 @@ export class CloudSaveService {
       ...(state.playerWorldChanges || {}),
     };
 
+    const ownedClothing = ClothingSystem.normalizeOwnedClothing(state.player.ownedClothing);
+    const equippedClothing = ClothingSystem.normalizeEquippedClothing(
+      state.player.equippedClothing,
+      ownedClothing,
+      state.player.gender
+    );
+
     const playerDoc: PlayerStateDoc = {
       positionX: state.position.tileX,
       positionY: state.position.tileY,
@@ -258,6 +285,8 @@ export class CloudSaveService {
       inventory: state.inventory.slots.map((s) => ({ item: s.item, quantity: s.quantity })),
       equipment: {
         currentTool: state.player.currentTool || null,
+        ownedClothing,
+        equippedClothing,
       },
       playerStats: stats,
       lastSavedAt: now,

@@ -4,11 +4,12 @@
  */
 
 import React, { useState } from 'react';
-import { Package, X, ArrowLeftRight } from 'lucide-react';
+import { Package, X } from 'lucide-react';
 import { ITEMS } from '../game/constants';
 import { InventorySystem } from '../game/systems/InventorySystem';
 import { ItemId, PlacedBuilding } from '../game/types';
 import { SoundSynth } from '../game/utils/SoundSynth';
+import { UI_THEME } from './uiTheme';
 
 interface StorageBoxModalProps {
   building: PlacedBuilding;
@@ -60,17 +61,22 @@ export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl bg-stone-900 border border-stone-700 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden text-stone-200">
+    <div className={UI_THEME.backdrop} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`${UI_THEME.panel} max-w-2xl`}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800 bg-stone-950/40">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-950 border border-emerald-800 flex items-center justify-center text-emerald-400">
+        <div className={UI_THEME.header}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-950/70 border border-emerald-700/50 flex items-center justify-center text-emerald-300 shrink-0">
               <Package size={18} />
             </div>
-            <div>
-              <h2 className="text-base font-bold text-white tracking-tight">သစ်သားသိုလှောင်သေတ္တာ (Storage Chest)</h2>
-              <p className="text-xs text-stone-400">
+            <div className="min-w-0">
+              <h2 className="text-base font-bold text-white tracking-tight leading-snug truncate">
+                သစ်သားသိုလှောင်သေတ္တာ
+              </h2>
+              <p className="text-xs text-[#b7ad9d] leading-snug truncate">
                 ပိုလျှံသော ပစ္စည်းများ ထည့်သွင်းသိမ်းဆည်းခြင်းနှင့် ပြန်လည်ထုတ်ယူခြင်း
               </p>
             </div>
@@ -78,43 +84,45 @@ export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
 
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-stone-400 hover:text-white hover:bg-stone-800 transition cursor-pointer"
+            aria-label="ပိတ်မည်"
+            className={UI_THEME.closeBtn}
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* Content: 2 split columns (Chest contents on left, Player bag on right) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 p-6 gap-6 overflow-y-auto">
+        {/* Content: 2 split columns */}
+        <div className="grid grid-cols-1 md:grid-cols-2 p-4 sm:p-6 gap-4 sm:gap-5 overflow-y-auto">
           {/* Storage Box Inventory */}
-          <div className="bg-stone-950/60 border border-stone-800 rounded-xl p-4 flex flex-col justify-between">
+          <div className={`${UI_THEME.subCard} p-4 flex flex-col justify-between`}>
             <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
+              <div className="text-xs font-bold text-amber-300 mb-3 flex items-center gap-2">
                 <span>📦</span>
                 <span>သေတ္တာအတွင်းရှိ ပစ္စည်းများ ({building.storage.length} မျိုး)</span>
               </div>
 
               {building.storage.length === 0 ? (
-                <div className="text-stone-500 text-xs py-8 text-center italic">
+                <div className="text-[#8e8373] text-xs py-8 text-center leading-relaxed">
                   သေတ္တာထဲတွင် ပစ္စည်းမရှိသေးပါ။ မိမိအိတ်ထဲမှ ထည့်သွင်းသိမ်းဆည်းပါ။
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                   {building.storage.map((slot) => {
                     const def = ITEMS[slot.item];
                     return (
                       <div
                         key={slot.item}
-                        className="flex items-center justify-between p-2 rounded-lg bg-stone-900 border border-stone-800 text-xs"
+                        className="flex items-center justify-between p-2.5 rounded-xl bg-[#1b1713] border border-[#342d24] text-xs gap-2"
                       >
-                        <div className="flex items-center gap-2">
-                          <span>{def.icon}</span>
-                          <span className="font-semibold text-white">{def.name}</span>
-                          <span className="text-stone-400 font-mono">x{slot.quantity}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="shrink-0">{def.icon}</span>
+                          <span className="font-semibold text-white truncate">{def.name}</span>
+                          <span className="text-[#a99f8e] font-mono shrink-0">x{slot.quantity}</span>
                         </div>
                         <button
+                          type="button"
                           onClick={() => withdrawItem(slot.item)}
-                          className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 text-emerald-400 font-bold transition cursor-pointer text-[11px]"
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold transition cursor-pointer text-[11px] shrink-0"
                         >
                           ထုတ်ယူမည်
                         </button>
@@ -127,36 +135,43 @@ export const StorageBoxModal: React.FC<StorageBoxModalProps> = ({
           </div>
 
           {/* Player Bag Inventory */}
-          <div className="bg-stone-950/60 border border-stone-800 rounded-xl p-4 flex flex-col justify-between">
+          <div className={`${UI_THEME.subCard} p-4 flex flex-col justify-between`}>
             <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-stone-300 mb-3 flex items-center gap-2">
+              <div className="text-xs font-bold text-stone-200 mb-3 flex items-center gap-2">
                 <span>🎒</span>
                 <span>သင့်လွယ်အိတ် ({inventory.slots.length} မျိုး)</span>
               </div>
 
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {inventory.slots.map((slot, index) => {
-                  const def = ITEMS[slot.item];
-                  return (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between p-2 rounded-lg bg-stone-900 border border-stone-800 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span>{def.icon}</span>
-                        <span className="font-semibold text-white">{def.name}</span>
-                        <span className="text-stone-400 font-mono">x{slot.quantity}</span>
-                      </div>
-                      <button
-                        onClick={() => depositItem(slot.item)}
-                        className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 text-amber-300 font-bold transition cursor-pointer text-[11px]"
+              {inventory.slots.length === 0 ? (
+                <div className="text-[#8e8373] text-xs py-8 text-center leading-relaxed">
+                  သင့်လွယ်အိတ်ထဲတွင် ထည့်သွင်းရန် ပစ္စည်းမရှိသေးပါ။
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {inventory.slots.map((slot, index) => {
+                    const def = ITEMS[slot.item];
+                    return (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between p-2.5 rounded-xl bg-[#1b1713] border border-[#342d24] text-xs gap-2"
                       >
-                        ထည့်မည်
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="shrink-0">{def.icon}</span>
+                          <span className="font-semibold text-white truncate">{def.name}</span>
+                          <span className="text-[#a99f8e] font-mono shrink-0">x{slot.quantity}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => depositItem(slot.item)}
+                          className="px-2.5 py-1.5 rounded-lg bg-amber-500/18 hover:bg-amber-500/28 border border-amber-500/40 text-amber-200 font-bold transition cursor-pointer text-[11px] shrink-0"
+                        >
+                          ထည့်မည်
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

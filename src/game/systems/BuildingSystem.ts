@@ -28,6 +28,10 @@ export class BuildingSystem {
     }
   }
 
+  public static isNonSolidBuilding(type: BuildingType): boolean {
+    return type === 'campfire' || type === 'decor_flowerbed';
+  }
+
   public static normalizeRotation(rot?: number): FenceRotation {
     if (typeof rot !== 'number' || Number.isNaN(rot)) return 0;
     const mod = ((Math.round(rot) % 4) + 4) % 4;
@@ -184,7 +188,7 @@ export class BuildingSystem {
     this.buildings.push(building);
 
     // Update map collision for solid buildings
-    if (type !== 'campfire') {
+    if (!BuildingSystem.isNonSolidBuilding(type)) {
       for (let dy = 0; dy < height; dy++) {
         for (let dx = 0; dx < width; dx++) {
           mapSystem.setCollision(tileX + dx, tileY + dy, true);
@@ -245,7 +249,7 @@ export class BuildingSystem {
     }
 
     // Set new collision
-    if (building.type !== 'campfire') {
+    if (!BuildingSystem.isNonSolidBuilding(building.type)) {
       for (let dy = 0; dy < building.height; dy++) {
         for (let dx = 0; dx < building.width; dx++) {
           mapSystem.setCollision(newTx + dx, newTy + dy, true);
@@ -308,7 +312,7 @@ export class BuildingSystem {
       };
     });
     for (const b of this.buildings) {
-      if (b.type !== 'campfire') {
+      if (!BuildingSystem.isNonSolidBuilding(b.type)) {
         for (let dy = 0; dy < b.height; dy++) {
           for (let dx = 0; dx < b.width; dx++) {
             mapSystem.setCollision(b.tileX + dx, b.tileY + dy, true);

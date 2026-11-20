@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ITEMS } from '../constants';
+import { ITEMS, STARTER_TOOLS } from '../constants';
 import { InventorySlot, ItemId } from '../types';
 
 export class InventorySystem {
@@ -20,13 +20,21 @@ export class InventorySystem {
   }
 
   /**
-   * Initialize starter items: Basic Axe & Basic Pickaxe (Fishing Rod must be bought or crafted)
+   * Initialize starter items: Basic Axe, Basic Pickaxe, Basic Scythe (Fishing Rod must be bought or crafted)
    */
   public initStarterItems(): void {
-    this.slots = [
-      { item: 'axe_basic', quantity: 1 },
-      { item: 'pickaxe_basic', quantity: 1 },
-    ];
+    this.slots = STARTER_TOOLS.map((toolId) => ({ item: toolId, quantity: 1 }));
+  }
+
+  /**
+   * Guarantee all starter tools exist in inventory without duplicating existing entries
+   */
+  public ensureStarterTools(): void {
+    for (const toolId of STARTER_TOOLS) {
+      if (!this.hasItem(toolId, 1)) {
+        this.slots.push({ item: toolId, quantity: 1 });
+      }
+    }
   }
 
   /**
@@ -140,6 +148,7 @@ export class InventorySystem {
     if (data.slots && Array.isArray(data.slots)) {
       this.slots = data.slots;
     }
+    this.ensureStarterTools();
     if (typeof data.coins === 'number') {
       this.coins = data.coins;
     }

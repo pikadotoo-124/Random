@@ -5,6 +5,7 @@
 
 import { auth } from '../../firebase/config';
 import { CloudSaveService } from '../../firebase/cloudSaveService';
+import { STARTER_TOOLS, isStarterTool } from '../constants';
 import {
   InventorySlot,
   PlacedBuilding,
@@ -13,6 +14,7 @@ import {
   PlayerWorldChanges,
 } from '../types';
 import { BuildingSystem } from './BuildingSystem';
+import { ClothingSystem } from './ClothingSystem';
 
 export const CURRENT_SAVE_VERSION = 2;
 
@@ -118,11 +120,30 @@ export class SaveSystem {
         ? raw.player.coins
         : base.inventory.coins;
 
-    const slots: InventorySlot[] = Array.isArray(raw.inventory?.slots)
+    const rawSlots: InventorySlot[] = Array.isArray(raw.inventory?.slots)
       ? raw.inventory.slots
           .filter((s) => s && typeof s.item === 'string' && typeof s.quantity === 'number' && s.quantity > 0)
-          .map((s) => ({ item: s.item, quantity: s.quantity }))
+          .map((s) => ({
+            item: s.item,
+            quantity: isStarterTool(s.item) ? 1 : s.quantity,
+          }))
       : base.inventory.slots;
+
+    const slots: InventorySlot[] = [];
+    const seenStarterTools = new Set<string>();
+    for (const s of rawSlots) {
+      if (isStarterTool(s.item)) {
+        if (seenStarterTools.has(s.item)) continue;
+        seenStarterTools.add(s.item);
+      }
+      slots.push(s);
+    }
+    for (const toolId of STARTER_TOOLS) {
+      if (!seenStarterTools.has(toolId)) {
+        slots.unshift({ item: toolId, quantity: 1 });
+        seenStarterTools.add(toolId);
+      }
+    }
 
     const buildings: PlacedBuilding[] = Array.isArray(raw.buildings)
       ? raw.buildings
@@ -156,6 +177,15 @@ export class SaveSystem {
         : ['Central Plaza (Main City)'],
     };
 
+    const resolvedGender: 'male' | 'female' =
+      raw.player?.gender === 'female' ? 'female' : fallbackGender;
+    const ownedClothing = ClothingSystem.normalizeOwnedClothing(raw.player?.ownedClothing);
+    const equippedClothing = ClothingSystem.normalizeEquippedClothing(
+      raw.player?.equippedClothing,
+      ownedClothing,
+      resolvedGender
+    );
+
     return {
       version: CURRENT_SAVE_VERSION,
       lastSaved: typeof raw.lastSaved === 'number' && raw.lastSaved > 0 ? raw.lastSaved : Date.now(),
@@ -163,8 +193,11 @@ export class SaveSystem {
       player: {
         ...base.player,
         ...(raw.player || {}),
+        gender: resolvedGender,
         coins,
         currentTool: raw.player?.currentTool !== undefined ? raw.player.currentTool : base.player.currentTool,
+        ownedClothing,
+        equippedClothing,
       },
       position: {
         tileX: typeof raw.position?.tileX === 'number' ? raw.position.tileX : base.position.tileX,
@@ -428,12 +461,15 @@ export class SaveSystem {
         clothesColor: gender === 'female' ? '#10b981' : '#3b82f6',
         coins: 25,
         currentTool: 'axe_basic',
+        ownedClothing: [],
+        equippedClothing: {},
       },
       position: { tileX: 30, tileY: 30 },
       inventory: {
         slots: [
           { item: 'axe_basic', quantity: 1 },
           { item: 'pickaxe_basic', quantity: 1 },
+          { item: 'scythe_basic', quantity: 1 },
           { item: 'wood', quantity: 10 },
           { item: 'stone', quantity: 5 },
         ],

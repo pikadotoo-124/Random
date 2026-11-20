@@ -5,9 +5,15 @@
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
   }
-  
-  body, html {
+
+  body,
+  html {
     font-family: 'Plus Jakarta Sans', 'Noto Sans Myanmar', 'Padauk', system-ui, -apple-system, sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+    touch-action: none;
   }
 
   canvas {
@@ -16,18 +22,48 @@
   }
 }
 
-/* Custom crisp scrollbars */
+@keyframes rcPanelEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes rcToastEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rc-panel-enter {
+  animation: rcPanelEnter 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.rc-toast-enter {
+  animation: rcToastEnter 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Custom crisp timber scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(28, 25, 23, 0.6);
+  background: rgba(24, 21, 17, 0.72);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(120, 113, 108, 0.4);
-  border-radius: 3px;
+  background: rgba(120, 108, 92, 0.45);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(168, 162, 158, 0.6);
+  background: rgba(168, 152, 130, 0.65);
 }
