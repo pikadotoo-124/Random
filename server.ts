@@ -63,6 +63,9 @@ async function createServer() {
   const depletedResources = new Map<string, number>(); // nodeId -> respawnAt
   const placedBuildings: PlacedBuilding[] = [];
   const chatHistory: ChatMessage[] = [];
+  let officialResetEpoch: string | null = null;
+  let officialResetExecutedAt: string | null = null;
+  const PROJECT_OWNER_EMAIL = 'pikadotoo124@gmail.com';
 
   // WebSocket Server on /ws
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -203,6 +206,7 @@ async function createServer() {
               depletedResources: Object.fromEntries(depletedResources),
               placedBuildings: [...placedBuildings],
               recentChat: chatHistory.slice(-20),
+              officialResetEpoch,
             };
 
             ws.send(JSON.stringify({
@@ -403,12 +407,145 @@ async function createServer() {
   });
 
   // REST endpoints & Vite integration
+  app.use('/api/admin', express.json({ limit: '5mb' }));
+
+  const verifyLocalAdmin = async (
+    req: express.Request,
+    res: express.Response
+  ): Promise<{ uid: string; email: string } | null> => {
+    const authHeader = req.headers.authorization || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!match || !match[1]) {
+      res.status(401).json({ ok: false, error: 'Missing Authorization Bearer token.' });
+      return null;
+    }
+    const projectId = process.env.FIREBASE_PROJECT_ID || 'intrepid-cyclist-mbvhw';
+    const result = await verifyFirebaseIdToken(match[1].trim(), projectId);
+    if (!result.valid || !result.claims) {
+      res.status(401).json({ ok: false, error: result.error || 'Invalid Firebase ID token.' });
+      return null;
+    }
+    const email = (result.claims.email || '').toLowerCase().trim();
+    if (email !== PROJECT_OWNER_EMAIL || result.claims.email_verified !== true) {
+      res.status(403).json({
+        ok: false,
+        error: 'Forbidden: Only the verified Project Owner can access launch admin controls.',
+      });
+      return null;
+    }
+    return { uid: result.claims.uid, email };
+  };
+
   app.get('/api/health', (_req, res) => {
     res.json({
       status: 'ok',
       playersOnline: players.size,
       maxPlayers,
       room: roomName,
+    });
+  });
+
+  app.get('/api/launch-status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      officialResetEpoch,
+      officialResetExecutedAt,
+      buildingCount: placedBuildings.length,
+    });
+  });
+
+  app.get('/api/admin/backup-world', async (req, res) => {
+    const admin = await verifyLocalAdmin(req, res);
+    if (!admin) return;
+    const ownerCounts = new Map<string, { ownerId: string; ownerName: string; count: number }>();
+    for (const b of placedBuildings) {
+      const oid = b.ownerId || b.placedBy || 'unknown';
+      const existing = ownerCounts.get(oid);
+      if (existing) existing.count += 1;
+      else ownerCounts.set(oid, { ownerId: oid, ownerName: b.placedBy || oid, count: 1 });
+    }
+    res.json({
+      backupVersion: 1,
+      exportedAt: new Date().toISOString(),
+      projectId: process.env.FIREBASE_PROJECT_ID || 'intrepid-cyclist-mbvhw',
+      roomName,
+      officialResetEpoch,
+      officialResetExecutedAt,
+      buildingCount: placedBuildings.length,
+      uniqueOwnerCount: ownerCounts.size,
+      ownerSummary: Array.from(ownerCounts.values()),
+      placedBuildings,
+    });
+  });
+
+  app.post('/api/admin/restore-world', async (req, res) => {
+    const admin = await verifyLocalAdmin(req, res);
+    if (!admin) return;
+    const list = req.body?.placedBuildings;
+    if (!Array.isArray(list)) {
+      res.status(400).json({ ok: false, error: 'Backup payload must include placedBuildings array.' });
+      return;
+    }
+    for (const item of list) {
+      if (
+        !item ||
+        typeof item.id !== 'string' ||
+        typeof item.type !== 'string' ||
+        typeof item.tileX !== 'number' ||
+        typeof item.tileY !== 'number' ||
+        !Number.isFinite(item.tileX) ||
+        !Number.isFinite(item.tileY)
+      ) {
+        res.status(400).json({ ok: false, error: 'Invalid building entry detected in backup JSON.' });
+        return;
+      }
+    }
+    placedBuildings.splice(0, placedBuildings.length, ...list);
+    for (const b of placedBuildings) {
+      broadcast({ type: 's:building_placed', payload: { building: b } });
+    }
+    res.json({ ok: true, restoredCount: placedBuildings.length });
+  });
+
+  app.post('/api/admin/official-reset', async (req, res) => {
+    const admin = await verifyLocalAdmin(req, res);
+    if (!admin) return;
+    if (req.body?.confirmText !== 'RESET') {
+      res.status(400).json({ ok: false, error: 'Confirmation failed: confirmText must equal "RESET".' });
+      return;
+    }
+    if (req.body?.backupVerified !== true) {
+      res.status(400).json({ ok: false, error: 'Backup verification required before running Official Reset.' });
+      return;
+    }
+    if (officialResetEpoch && req.body?.forceNewEpoch !== true) {
+      res.json({
+        ok: true,
+        alreadyReset: true,
+        epoch: officialResetEpoch,
+        executedAt: officialResetExecutedAt,
+        clearedBuildingsCount: 0,
+      });
+      return;
+    }
+    const clearedBuildingsCount = placedBuildings.length;
+    placedBuildings.splice(0, placedBuildings.length);
+    officialResetEpoch = `official_launch_${Date.now()}`;
+    officialResetExecutedAt = new Date().toISOString();
+    broadcast({
+      type: 's:official_reset',
+      payload: {
+        epoch: officialResetEpoch,
+        message: 'Random City Official Launch Reset ပြီးစီးပါပြီ။ အစကနေ ပြန်လည်စတင်ပါမည်။',
+      },
+    });
+    res.json({
+      ok: true,
+      alreadyReset: false,
+      epoch: officialResetEpoch,
+      executedAt: officialResetExecutedAt,
+      clearedBuildingsCount,
     });
   });
 

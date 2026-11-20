@@ -268,11 +268,16 @@ export class SaveSystem {
     };
 
     const worldChangesRaw = raw.playerWorldChanges as any;
+    const resetEpoch =
+      typeof worldChangesRaw?.resetEpoch === 'string' && worldChangesRaw.resetEpoch.trim().length > 0
+        ? worldChangesRaw.resetEpoch.trim().slice(0, 64)
+        : undefined;
     const worldChanges: PlayerWorldChanges = {
       tutorialCompleted: Boolean(worldChangesRaw?.tutorialCompleted),
       discoveredZones: Array.isArray(worldChangesRaw?.discoveredZones)
         ? Array.from(new Set(worldChangesRaw.discoveredZones.filter((z: any) => typeof z === 'string')))
         : ['Central Plaza (Main City)'],
+      ...(resetEpoch ? { resetEpoch } : {}),
     };
 
     const ownedClothing = ClothingSystem.normalizeOwnedClothing(raw.player?.ownedClothing);
@@ -803,6 +808,28 @@ export class SaveSystem {
       buildings: [],
       playerStats: this.getDefaultStats(),
       playerWorldChanges: this.getDefaultWorldChanges(),
+    };
+  }
+
+  /**
+   * Build a clean Official Launch starter save stamped with the one-time resetEpoch
+   * so stale local/offline caches never re-overwrite the official reset.
+   */
+  public static createOfficialResetStarterState(
+    playerName: string,
+    gender: 'male' | 'female',
+    resetEpoch: string,
+    minLastSaved = 0
+  ): SavedGameState {
+    const starter = this.getDefaultState(playerName, gender);
+    const stampedTs = Math.max(Date.now(), minLastSaved + 1000);
+    return {
+      ...starter,
+      lastSaved: stampedTs,
+      playerWorldChanges: {
+        ...this.getDefaultWorldChanges(),
+        resetEpoch: resetEpoch.trim().slice(0, 64),
+      },
     };
   }
 }

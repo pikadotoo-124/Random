@@ -7,6 +7,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { User, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleProvider, testConnection } from './config';
 import { CloudSaveService, UserProfileDoc } from './cloudSaveService';
+import { fetchLaunchStatus } from './officialLaunchService';
 import { CloudSyncState, CURRENT_SAVE_VERSION, SaveSystem, SavedGameState } from '../game/systems/SaveSystem';
 
 interface AuthContextType {
@@ -25,6 +26,7 @@ interface AuthContextType {
   reloadGameState: () => Promise<void>;
   retryInitialLoad: () => Promise<void>;
   retryCloudSave: () => Promise<boolean>;
+  applyOfficialReset: (epoch: string) => Promise<void>;
   registerBeforeSignOutSave: (handler: (() => Promise<boolean>) | null) => void;
   isSignOutInProgress: () => boolean;
   clearAuthError: () => void;
@@ -101,9 +103,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setProfile(existingProfile);
         CloudSaveService.updateLastLogin(firebaseUser.uid);
 
-        // 2. Load cloud game data AND inspect UID-scoped pending offline queue
-        const cloudState = await CloudSaveService.loadGameState(firebaseUser.uid, existingProfile);
+        // 2. Check authoritative Official Launch Reset epoch BEFORE merging pending/local caches
+        const [cloudState, launchStatus] = await Promise.all([
+          CloudSaveService.loadGameState(firebaseUser.uid, existingProfile),
+          fetchLaunchStatus(undefined, 3500),
+        ]);
         if (!mountedRef.current) return;
+
+        const serverResetEpoch = launchStatus?.officialResetEpoch || null;
+        const playerResetEpoch = cloudState?.playerWorldChanges?.resetEpoch || null;
+
+        if (serverResetEpoch && playerResetEpoch !== serverResetEpoch) {
+          // One-Time Official Launch Reset: wipe stale localStorage/pending queue FIRST,
+          // then write clean starter state stamped with serverResetEpoch (minLastSaved guarantees clock skew safety).
+          SaveSystem.clearSave(firebaseUser.uid);
+          const resetState = SaveSystem.createOfficialResetStarterState(
+            existingProfile.playerName,
+            existingProfile.gender,
+            serverResetEpoch,
+            cloudState?.lastSaved || 0
+          );
+          setGameState(resetState);
+          await SaveSystem.saveGameWithCloud(
+            firebaseUser.uid,
+            resetState,
+            'Central Plaza (Main City)',
+            true
+          );
+          return;
+        }
 
         const pending = SaveSystem.getPendingSync(firebaseUser.uid);
         const localCache = SaveSystem.loadGame(firebaseUser.uid);
@@ -152,6 +180,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           // Fresh profile with no gameData yet: create initial save once
           const starter = SaveSystem.getDefaultState(existingProfile.playerName, existingProfile.gender);
+          if (serverResetEpoch) {
+            starter.playerWorldChanges = {
+              ...SaveSystem.getDefaultWorldChanges(),
+              ...(starter.playerWorldChanges || {}),
+              resetEpoch: serverResetEpoch,
+            };
+          }
           setGameState(starter);
           await SaveSystem.saveGameWithCloud(
             firebaseUser.uid,
@@ -309,6 +344,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setProfile(newProfile);
 
       const defaultState = SaveSystem.getDefaultState(trimmed, gender);
+      const launchStatus = await fetchLaunchStatus(undefined, 2500);
+      if (launchStatus?.officialResetEpoch) {
+        defaultState.playerWorldChanges = {
+          ...SaveSystem.getDefaultWorldChanges(),
+          ...(defaultState.playerWorldChanges || {}),
+          resetEpoch: launchStatus.officialResetEpoch,
+        };
+      }
       setGameState(defaultState);
 
       await SaveSystem.saveGameWithCloud(user.uid, defaultState, 'Central Plaza (Main City)', true);
@@ -368,6 +411,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return SaveSystem.retryLastSave(user.uid);
   }, [user]);
 
+  // Apply Official Launch Reset cleanly while online without leaving stale pending saves
+  const applyOfficialReset = useCallback(
+    async (epoch: string) => {
+      const activeUid = auth.currentUser?.uid || user?.uid;
+      if (!activeUid) return;
+      const pName = profile?.playerName || gameState?.player?.name || 'Settler';
+      const pGender = profile?.gender || gameState?.player?.gender || 'male';
+      SaveSystem.clearSave(activeUid);
+      const resetState = SaveSystem.createOfficialResetStarterState(
+        pName,
+        pGender,
+        epoch,
+        gameState?.lastSaved || 0
+      );
+      await SaveSystem.saveGameWithCloud(activeUid, resetState, 'Central Plaza (Main City)', true);
+      if (mountedRef.current) {
+        setGameState(resetState);
+      }
+    },
+    [user?.uid, profile, gameState]
+  );
+
   return (
     <AuthContext.Provider
       value={{
@@ -386,6 +451,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         reloadGameState,
         retryInitialLoad,
         retryCloudSave,
+        applyOfficialReset,
         registerBeforeSignOutSave,
         isSignOutInProgress,
         clearAuthError: () => setAuthError(null),

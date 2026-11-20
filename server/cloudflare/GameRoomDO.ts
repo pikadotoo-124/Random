@@ -42,6 +42,8 @@ export interface Env {
   FIREBASE_PROJECT_ID?: string;
 }
 
+const PROJECT_OWNER_EMAIL = 'pikadotoo124@gmail.com';
+
 /**
  * Cloudflare Durable Object class for Random City Room authoritative sync
  */
@@ -57,15 +59,21 @@ export class GameRoomDO {
   private depletedResources = new Map<string, number>(); // nodeId -> respawnAt
   private placedBuildings: PlacedBuilding[] = [];
   private chatHistory: ChatMessage[] = [];
+  private officialResetEpoch: string | null = null;
+  private officialResetExecutedAt: string | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
 
-    // Load persisted world buildings & resources if available
+    // Load persisted world buildings & official launch reset metadata if available
     this.state.blockConcurrencyWhile(async () => {
       const savedBuildings = (await this.state.storage.get<PlacedBuilding[]>('placedBuildings')) || [];
       this.placedBuildings = savedBuildings;
+      const savedEpoch = await this.state.storage.get<string | null>('officialResetEpoch');
+      this.officialResetEpoch = savedEpoch ?? null;
+      const savedExecutedAt = await this.state.storage.get<string | null>('officialResetExecutedAt');
+      this.officialResetExecutedAt = savedExecutedAt ?? null;
     });
 
     // Background interval for resource respawns
@@ -74,7 +82,226 @@ export class GameRoomDO {
     }, 2000);
   }
 
+  private jsonResponse(body: any, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  }
+
+  private async verifyAdminRequest(
+    request: Request
+  ): Promise<{ ok: true; uid: string; email: string } | { ok: false; response: Response }> {
+    const authHeader = request.headers.get('Authorization') || '';
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!match || !match[1]) {
+      return {
+        ok: false,
+        response: this.jsonResponse({ ok: false, error: 'Missing Authorization Bearer token.' }, 401),
+      };
+    }
+
+    const projectId = this.env.FIREBASE_PROJECT_ID || 'intrepid-cyclist-mbvhw';
+    const result = await verifyFirebaseIdToken(match[1].trim(), projectId);
+    if (!result.valid || !result.claims) {
+      return {
+        ok: false,
+        response: this.jsonResponse({ ok: false, error: result.error || 'Invalid Firebase ID token.' }, 401),
+      };
+    }
+
+    const email = (result.claims.email || '').toLowerCase().trim();
+    const emailVerified = result.claims.email_verified === true;
+    if (email !== PROJECT_OWNER_EMAIL || !emailVerified) {
+      return {
+        ok: false,
+        response: this.jsonResponse(
+          { ok: false, error: 'Forbidden: Only the verified Project Owner can access launch admin controls.' },
+          403
+        ),
+      };
+    }
+
+    return { ok: true, uid: result.claims.uid, email };
+  }
+
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname.startsWith('/api/')) {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          },
+        });
+      }
+
+      if (url.pathname === '/api/launch-status' && request.method === 'GET') {
+        return this.jsonResponse({
+          ok: true,
+          officialResetEpoch: this.officialResetEpoch,
+          officialResetExecutedAt: this.officialResetExecutedAt,
+          buildingCount: this.placedBuildings.length,
+        });
+      }
+
+      if (url.pathname === '/api/admin/backup-world' && request.method === 'GET') {
+        const authCheck = await this.verifyAdminRequest(request);
+        if (!authCheck.ok) return authCheck.response;
+
+        const ownerCounts = new Map<string, { ownerId: string; ownerName: string; count: number }>();
+        for (const b of this.placedBuildings) {
+          const oid = b.ownerId || b.placedBy || 'unknown';
+          const existing = ownerCounts.get(oid);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            ownerCounts.set(oid, {
+              ownerId: oid,
+              ownerName: b.placedBy || oid,
+              count: 1,
+            });
+          }
+        }
+
+        return this.jsonResponse({
+          backupVersion: 1,
+          exportedAt: new Date().toISOString(),
+          projectId: this.env.FIREBASE_PROJECT_ID || 'intrepid-cyclist-mbvhw',
+          roomName: this.roomName,
+          officialResetEpoch: this.officialResetEpoch,
+          officialResetExecutedAt: this.officialResetExecutedAt,
+          buildingCount: this.placedBuildings.length,
+          uniqueOwnerCount: ownerCounts.size,
+          ownerSummary: Array.from(ownerCounts.values()),
+          placedBuildings: this.placedBuildings,
+        });
+      }
+
+      if (url.pathname === '/api/admin/restore-world' && request.method === 'POST') {
+        const authCheck = await this.verifyAdminRequest(request);
+        if (!authCheck.ok) return authCheck.response;
+
+        let body: any = null;
+        try {
+          body = await request.json();
+        } catch {
+          return this.jsonResponse({ ok: false, error: 'Invalid JSON request body.' }, 400);
+        }
+
+        if (!body || !Array.isArray(body.placedBuildings)) {
+          return this.jsonResponse({ ok: false, error: 'Backup payload must include placedBuildings array.' }, 400);
+        }
+
+        const sanitized: PlacedBuilding[] = [];
+        for (const item of body.placedBuildings) {
+          if (
+            !item ||
+            typeof item.id !== 'string' ||
+            typeof item.type !== 'string' ||
+            typeof item.tileX !== 'number' ||
+            typeof item.tileY !== 'number' ||
+            !Number.isFinite(item.tileX) ||
+            !Number.isFinite(item.tileY)
+          ) {
+            return this.jsonResponse({ ok: false, error: 'Invalid building entry detected in backup JSON.' }, 400);
+          }
+          sanitized.push(item as PlacedBuilding);
+        }
+
+        this.placedBuildings = sanitized;
+        await this.state.storage.put('placedBuildings', this.placedBuildings);
+
+        for (const b of this.placedBuildings) {
+          this.broadcast({
+            type: 's:building_placed',
+            payload: { building: b },
+          });
+        }
+
+        return this.jsonResponse({
+          ok: true,
+          restoredCount: this.placedBuildings.length,
+        });
+      }
+
+      if (url.pathname === '/api/admin/official-reset' && request.method === 'POST') {
+        const authCheck = await this.verifyAdminRequest(request);
+        if (!authCheck.ok) return authCheck.response;
+
+        let body: any = null;
+        try {
+          body = await request.json();
+        } catch {
+          return this.jsonResponse({ ok: false, error: 'Invalid JSON request body.' }, 400);
+        }
+
+        if (!body || body.confirmText !== 'RESET') {
+          return this.jsonResponse(
+            { ok: false, error: 'Confirmation failed: confirmText must equal "RESET".' },
+            400
+          );
+        }
+
+        if (body.backupVerified !== true) {
+          return this.jsonResponse(
+            { ok: false, error: 'Backup verification required before running Official Reset.' },
+            400
+          );
+        }
+
+        if (this.officialResetEpoch && body.forceNewEpoch !== true) {
+          return this.jsonResponse({
+            ok: true,
+            alreadyReset: true,
+            epoch: this.officialResetEpoch,
+            executedAt: this.officialResetExecutedAt,
+            clearedBuildingsCount: 0,
+          });
+        }
+
+        const clearedBuildingsCount = this.placedBuildings.length;
+        const epoch = `official_launch_${Date.now()}`;
+        const executedAt = new Date().toISOString();
+
+        this.placedBuildings = [];
+        this.officialResetEpoch = epoch;
+        this.officialResetExecutedAt = executedAt;
+
+        await this.state.storage.put('placedBuildings', this.placedBuildings);
+        await this.state.storage.put('officialResetEpoch', epoch);
+        await this.state.storage.put('officialResetExecutedAt', executedAt);
+
+        this.broadcast({
+          type: 's:official_reset',
+          payload: {
+            epoch,
+            message: 'Random City Official Launch Reset ပြီးစီးပါပြီ။ အစကနေ ပြန်လည်စတင်ပါမည်။',
+          },
+        });
+
+        return this.jsonResponse({
+          ok: true,
+          alreadyReset: false,
+          epoch,
+          executedAt,
+          clearedBuildingsCount,
+        });
+      }
+
+      return this.jsonResponse({ ok: false, error: 'API endpoint not found.' }, 404);
+    }
+
     const upgradeHeader = request.headers.get('Upgrade');
     if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket upgrade', { status: 426 });
@@ -217,6 +444,7 @@ export class GameRoomDO {
           depletedResources: Object.fromEntries(this.depletedResources),
           placedBuildings: [...this.placedBuildings],
           recentChat: this.chatHistory.slice(-20),
+          officialResetEpoch: this.officialResetEpoch,
         };
 
         const stateMsg: ServerMessage = {

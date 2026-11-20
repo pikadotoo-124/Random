@@ -58,10 +58,12 @@ function GamePlay() {
     gameState,
     cloudSyncStatus,
     retryCloudSave,
+    applyOfficialReset,
     registerBeforeSignOutSave,
     isSignOutInProgress,
   } = useAuth();
   const gameManagerRef = useRef<GameManager | null>(null);
+  const officialResetInProgressRef = useRef<boolean>(false);
 
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile>(() => {
     if (gameState?.player) return gameState.player;
@@ -227,6 +229,18 @@ function GamePlay() {
       }
     });
 
+    const triggerOfficialResetReload = async (epoch: string) => {
+      if (!epoch || officialResetInProgressRef.current) return;
+      officialResetInProgressRef.current = true;
+      try {
+        await applyOfficialReset(epoch);
+      } catch (err) {
+        console.warn('[OfficialLaunch] Clean reset sync fallback:', err);
+        SaveSystem.clearSave(user.uid);
+      }
+      window.location.reload();
+    };
+
     // Multiplayer Network Event Listeners
     const unsubs = [
       gm.networkSystem.on('status_changed', (evt) => {
@@ -243,6 +257,18 @@ function GamePlay() {
         const syncState = evt.payload;
         if (typeof syncState?.playerCount === 'number') {
           setOnlineCount(syncState.playerCount);
+        }
+        if (
+          syncState?.officialResetEpoch &&
+          gameState?.playerWorldChanges?.resetEpoch !== syncState.officialResetEpoch
+        ) {
+          void triggerOfficialResetReload(syncState.officialResetEpoch);
+        }
+      }),
+      gm.networkSystem.on('official_reset', (evt) => {
+        const epoch = evt.payload?.epoch;
+        if (typeof epoch === 'string' && epoch) {
+          void triggerOfficialResetReload(epoch);
         }
       }),
       gm.networkSystem.on('player_joined', (evt) => {
@@ -339,35 +365,47 @@ function GamePlay() {
       };
 
       gm.worldScene.onMovementCheckpoint = (immediate) => {
-        gm.saveMovementCheckpoint(immediate);
+        if (!officialResetInProgressRef.current) {
+          gm.saveMovementCheckpoint(immediate);
+        }
       };
 
       gm.worldScene.onStateChanged = () => {
-        gm.saveCurrentState(false);
+        if (!officialResetInProgressRef.current) {
+          gm.saveCurrentState(false);
+        }
       };
     }
 
     // Periodic safety flush every 20 seconds (only flushes if local pending changes remain)
     const autoSaveTimer = setInterval(() => {
-      if (SaveSystem.hasPendingSync(user.uid)) {
+      if (!officialResetInProgressRef.current && SaveSystem.hasPendingSync(user.uid)) {
         gm.saveCurrentState(true);
       }
     }, 20000);
 
     // Reliable flush on page hide / tab switch / unload
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
+      if (
+        document.visibilityState === 'hidden' &&
+        !officialResetInProgressRef.current &&
+        !isSignOutInProgress()
+      ) {
         gm.flushPendingLocalOnly();
         gm.saveCurrentState(true);
       }
     };
     const handlePageHide = () => {
-      gm.flushPendingLocalOnly();
-      gm.saveCurrentState(true);
+      if (!officialResetInProgressRef.current && !isSignOutInProgress()) {
+        gm.flushPendingLocalOnly();
+        gm.saveCurrentState(true);
+      }
     };
     const handleBeforeUnload = () => {
-      gm.flushPendingLocalOnly();
-      gm.saveCurrentState(true);
+      if (!officialResetInProgressRef.current && !isSignOutInProgress()) {
+        gm.flushPendingLocalOnly();
+        gm.saveCurrentState(true);
+      }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -382,7 +420,11 @@ function GamePlay() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       registerBeforeSignOutSave(null);
       unsubs.forEach((unsub) => unsub());
-      if (!isSignOutInProgress() && auth.currentUser?.uid === user.uid) {
+      if (
+        !isSignOutInProgress() &&
+        !officialResetInProgressRef.current &&
+        auth.currentUser?.uid === user.uid
+      ) {
         gm.flushPendingLocalOnly();
         gm.saveCurrentState(true);
       }

@@ -414,6 +414,7 @@ export class GameManager {
       playerWorldChanges: {
         tutorialCompleted: this.playerWorldChanges.tutorialCompleted,
         discoveredZones: [...this.playerWorldChanges.discoveredZones],
+        ...(this.playerWorldChanges.resetEpoch ? { resetEpoch: this.playerWorldChanges.resetEpoch } : {}),
       },
     };
 

@@ -262,6 +262,7 @@ export interface PlayerStats {
 export interface PlayerWorldChanges {
   tutorialCompleted: boolean;
   discoveredZones: string[];
+  resetEpoch?: string;
 }
 
 export interface ZoneDefinition {

@@ -21,10 +21,25 @@ import {
   Sun,
   Wind,
   AlertTriangle,
+  Download,
+  Upload,
+  ChevronDown,
+  ChevronUp,
+  Lock,
 } from 'lucide-react';
 import { SoundSynth } from '../game/utils/SoundSynth';
 import { SaveSystem } from '../game/systems/SaveSystem';
 import { useAuth } from '../firebase/AuthContext';
+import {
+  downloadPersonalSaveBackup,
+  downloadSharedWorldBackup,
+  fetchLaunchStatus,
+  isProjectOwnerEmail,
+  LaunchStatusResponse,
+  parseAndValidateSharedWorldBackup,
+  restoreSharedWorldBackup,
+  triggerOneTimeOfficialReset,
+} from '../firebase/officialLaunchService';
 import { PlayerProfile } from '../game/types';
 import { UI_THEME } from './uiTheme';
 
@@ -47,7 +62,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   weatherEffectsEnabled = true,
   onToggleWeatherEffects,
 }) => {
-  const { user, signOutUser, updateName, cloudSyncStatus, retryCloudSave } = useAuth();
+  const { user, gameState, signOutUser, updateName, cloudSyncStatus, retryCloudSave } = useAuth();
   const [sound, setSound] = useState(SoundSynth.enabled);
   const [ambientSound, setAmbientSound] = useState(SoundSynth.ambientEnabled);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null);
@@ -56,6 +71,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(playerProfile.name);
   const [nameError, setNameError] = useState<string | null>(null);
+
+  // Project Owner-only Official Launch Backup & One-Time Reset state
+  const isOwner = isProjectOwnerEmail(user?.email);
+  const [launchPanelOpen, setLaunchPanelOpen] = useState(false);
+  const [launchStatus, setLaunchStatus] = useState<LaunchStatusResponse | null>(null);
+  const [launchBusy, setLaunchBusy] = useState<string | null>(null);
+  const [launchNotice, setLaunchNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [backupVerified, setBackupVerified] = useState(false);
+  const [verifiedBackupSummary, setVerifiedBackupSummary] = useState<string | null>(null);
+  const [loadedRestoreBuildings, setLoadedRestoreBuildings] = useState<any[] | null>(null);
+  const [ownerResetChecked, setOwnerResetChecked] = useState(false);
+  const [ownerResetText, setOwnerResetText] = useState('');
 
   const toggleSound = () => {
     SoundSynth.enabled = !sound;
@@ -105,6 +132,124 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       SoundSynth.playSuccess();
     } catch (err: any) {
       setNameError(err?.message || 'အမည်ပြောင်းလဲ၍ မရပါ။');
+    }
+  };
+
+  const refreshLaunchStatus = async () => {
+    const status = await fetchLaunchStatus();
+    setLaunchStatus(status);
+  };
+
+  const handleToggleLaunchPanel = () => {
+    const next = !launchPanelOpen;
+    setLaunchPanelOpen(next);
+    if (next) {
+      void refreshLaunchStatus();
+    }
+  };
+
+  const handleDownloadSharedBackup = async () => {
+    if (!user) return;
+    setLaunchBusy('shared_backup');
+    setLaunchNotice(null);
+    try {
+      const token = await user.getIdToken(true);
+      const backup = await downloadSharedWorldBackup(token);
+      setBackupVerified(true);
+      setVerifiedBackupSummary(
+        `Shared World Backup ဖိုင် Validate အောင်မြင်သည် (${backup.buildingCount} Buildings • Room: ${backup.roomName} • v${backup.backupVersion}) — သူငယ်ချင်းများ၏ Firestore Data မပါဝင်ပါ`
+      );
+      setLaunchNotice({
+        ok: true,
+        text: `Shared World Backup JSON (${backup.buildingCount} Buildings) စစ်ဆေးပြီး ဒေါင်းလုဒ်ချပြီးပါပြီ။`,
+      });
+    } catch (err: any) {
+      setBackupVerified(false);
+      setLaunchNotice({ ok: false, text: err?.message || 'Shared World Backup ရယူ၍ မရပါ။' });
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
+  const handleDownloadPersonalBackup = async () => {
+    if (!user) return;
+    setLaunchBusy('personal_backup');
+    setLaunchNotice(null);
+    try {
+      await downloadPersonalSaveBackup(user, gameState);
+      setLaunchNotice({
+        ok: true,
+        text: 'သင်၏ ကိုယ်ပိုင် Account Save JSON ဖိုင်ကို ဒေါင်းလုဒ်ချပြီးပါပြီ။',
+      });
+    } catch (err: any) {
+      setLaunchNotice({ ok: false, text: err?.message || 'Personal Backup ရယူ၍ မရပါ။' });
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
+  const handleSelectRestoreFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = parseAndValidateSharedWorldBackup(text);
+      setLoadedRestoreBuildings(parsed.placedBuildings);
+      setBackupVerified(true);
+      setVerifiedBackupSummary(`Backup ဖိုင် မှန်ကန်သည် (${parsed.buildingCount} Buildings ပါဝင်သည်)`);
+      setLaunchNotice({
+        ok: true,
+        text: `Backup ဖိုင် စစ်ဆေးအောင်မြင်သည် — Buildings ${parsed.buildingCount} ခု ပါဝင်ပါသည်။`,
+      });
+    } catch (err: any) {
+      setLoadedRestoreBuildings(null);
+      setLaunchNotice({ ok: false, text: err?.message || 'Backup ဖိုင် ဖတ်၍ မရပါ။' });
+    }
+  };
+
+  const handleRestoreSharedBackup = async () => {
+    if (!user || !loadedRestoreBuildings) return;
+    setLaunchBusy('restore');
+    setLaunchNotice(null);
+    try {
+      const token = await user.getIdToken(true);
+      const res = await restoreSharedWorldBackup(token, loadedRestoreBuildings);
+      await refreshLaunchStatus();
+      setLaunchNotice({
+        ok: true,
+        text: `Shared World Buildings ${res.restoredCount} ခုကို ပြန်လည် Restore လုပ်ပြီးပါပြီ။`,
+      });
+    } catch (err: any) {
+      setLaunchNotice({ ok: false, text: err?.message || 'Restore လုပ်ဆောင်၍ မရပါ။' });
+    } finally {
+      setLaunchBusy(null);
+    }
+  };
+
+  const handleExecuteOfficialReset = async () => {
+    if (!user || !backupVerified || !ownerResetChecked || ownerResetText.trim() !== 'RESET') return;
+    setLaunchBusy('official_reset');
+    setLaunchNotice(null);
+    try {
+      const token = await user.getIdToken(true);
+      const res = await triggerOneTimeOfficialReset(token, {
+        confirmText: 'RESET',
+        backupVerified: true,
+      });
+      await refreshLaunchStatus();
+      setLaunchNotice({
+        ok: true,
+        text: res.alreadyReset
+          ? `Official Launch Reset ပြုလုပ်ပြီးသားဖြစ်ပါသည် (Epoch: ${res.epoch})။`
+          : `Official Launch Reset အောင်မြင်စွာ ပြီးစီးပါပြီ (${res.clearedBuildingsCount} Shared Buildings ရှင်းလင်းပြီး • Epoch: ${res.epoch})။`,
+      });
+      setOwnerResetChecked(false);
+      setOwnerResetText('');
+    } catch (err: any) {
+      setLaunchNotice({ ok: false, text: err?.message || 'Official Launch Reset မအောင်မြင်ပါ။' });
+    } finally {
+      setLaunchBusy(null);
     }
   };
 
@@ -456,6 +601,219 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <code className="text-stone-200 font-mono">users/{'{uid}'}</code> တွင် Firestore Security Rules ဖြင့် လုံခြုံစွာ သိမ်းဆည်းထားပါသည်။
             </p>
           </div>
+
+          {/* Owner-Only Official Launch Backup & One-Time Reset Panel (Hidden from all non-owner accounts) */}
+          {isOwner && (
+            <div className={`p-3.5 ${UI_THEME.subCard} border-amber-500/35 space-y-3`}>
+              <button
+                type="button"
+                onClick={handleToggleLaunchPanel}
+                className="w-full flex items-center justify-between gap-2 text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Lock size={15} className="text-amber-400 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-amber-200 truncate">
+                      Official Launch Backup & One-Time Reset (Owner Only)
+                    </div>
+                    <div className="text-[11px] text-[#a99f8e] truncate">
+                      Project Owner ({user?.email}) အတွက်သာ မြင်ရသော Launch ပြင်ဆင်မှု
+                    </div>
+                  </div>
+                </div>
+                {launchPanelOpen ? (
+                  <ChevronUp size={16} className="text-amber-300 shrink-0" />
+                ) : (
+                  <ChevronDown size={16} className="text-amber-300 shrink-0" />
+                )}
+              </button>
+
+              {launchPanelOpen && (
+                <div className="pt-2 border-t border-[#3a3126] space-y-3 text-xs">
+                  <div className="p-2.5 rounded-xl bg-[#1a1611] border border-[#362e24] space-y-1 text-[11px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[#a99f8e]">Official Launch Reset အခြေအနေ:</span>
+                      <span
+                        className={`font-bold ${
+                          launchStatus?.officialResetEpoch ? 'text-emerald-300' : 'text-amber-300'
+                        }`}
+                      >
+                        {launchStatus === null
+                          ? 'စစ်ဆေးနေသည်...'
+                          : launchStatus.officialResetEpoch
+                          ? 'ပြီးစီးပြီး'
+                          : 'မလုပ်ဆောင်ရသေးပါ'}
+                      </span>
+                    </div>
+                    {launchStatus?.officialResetEpoch && (
+                      <div className="text-[10px] text-stone-400 font-mono break-all">
+                        Epoch: {launchStatus.officialResetEpoch}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[#a99f8e]">လက်ရှိ Shared Buildings:</span>
+                      <span className="font-bold text-stone-200">
+                        {launchStatus ? `${launchStatus.buildingCount} ခု` : '—'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Step 1: Backup */}
+                  <div className="space-y-2">
+                    <div className="font-bold text-stone-200">၁။ Backup အရင်ဒေါင်းလုဒ်ချပါ</div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <button
+                        type="button"
+                        disabled={launchBusy !== null}
+                        onClick={handleDownloadSharedBackup}
+                        className="flex-1 py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/45 text-amber-200 font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <Download size={14} />
+                        <span>
+                          {launchBusy === 'shared_backup'
+                            ? 'Backup ယူနေသည်...'
+                            : 'Shared World Backup (.json)'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={launchBusy !== null}
+                        onClick={handleDownloadPersonalBackup}
+                        className="flex-1 py-2 px-3 rounded-xl bg-[#27221b] hover:bg-[#342d24] border border-[#453c30] text-stone-200 font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <Download size={14} />
+                        <span>ကိုယ်ပိုင် Save Backup (.json)</span>
+                      </button>
+                    </div>
+                    {verifiedBackupSummary && (
+                      <div className="text-[11px] text-emerald-300 font-medium leading-relaxed">
+                        ✓ {verifiedBackupSummary}
+                      </div>
+                    )}
+                    <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-600/35 text-[11px] text-amber-100/90 leading-relaxed space-y-1">
+                      <div className="font-bold text-amber-300">
+                        သတိပြုရန် — သူငယ်ချင်းများ၏ Firestore Data Backup:
+                      </div>
+                      <p>
+                        အထက်ပါ ခလုတ်များသည် <strong>Shared Buildings (Cloudflare DO)</strong> နှင့်{' '}
+                        <strong>Owner ကိုယ်ပိုင် Save</strong> ကိုသာ Backup ယူပေးနိုင်ပါသည်။{' '}
+                        <code className="font-mono text-amber-200">firestore.rules</code>{' '}
+                        လုံခြုံရေးကန့်သတ်ချက်ကြောင့် အခြားသူငယ်ချင်းများ၏{' '}
+                        <code className="font-mono text-amber-200">users/{'{uid}'}</code>{' '}
+                        Firestore Data များကို ဤ UI မှ တိုက်ရိုက် Backup မယူနိုင်ပါ။ သူငယ်ချင်းအားလုံး၏ Data ကိုပါ Backup လိုအပ်ပါက Reset မလုပ်မီ{' '}
+                        <strong>Firebase Console → Firestore Database → Import/Export</strong> မှတစ်ဆင့် Export ယူထားပါ။
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Step 2: Verify or Restore */}
+                  <div className="space-y-2">
+                    <div className="font-bold text-stone-200">
+                      ၂။ Backup JSON စစ်ဆေးခြင်း / ပြန်တင်ခြင်း (Restore)
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="px-3 py-1.5 rounded-xl bg-[#241f19] hover:bg-[#312a22] border border-[#453c30] text-stone-200 font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                        <Upload size={14} />
+                        <span>Backup .json ဖိုင်ရွေးမည်</span>
+                        <input
+                          type="file"
+                          accept=".json,application/json"
+                          onChange={handleSelectRestoreFile}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {loadedRestoreBuildings && (
+                        <button
+                          type="button"
+                          disabled={launchBusy !== null}
+                          onClick={handleRestoreSharedBackup}
+                          className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/45 text-sky-200 font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          {launchBusy === 'restore'
+                            ? 'Restore လုပ်နေသည်...'
+                            : `Shared Buildings ${loadedRestoreBuildings.length} ခု Restore လုပ်မည်`}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step 3: Locked One-Time Official Reset */}
+                  <div className="p-3 rounded-xl bg-rose-950/25 border border-rose-700/45 space-y-2.5">
+                    <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                      <AlertTriangle size={14} className="shrink-0" />
+                      <span>၃။ One-Time Official Launch Reset</span>
+                    </div>
+
+                    {launchStatus?.officialResetEpoch ? (
+                      <div className="p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-600/40 text-[11px] text-emerald-200 leading-relaxed">
+                        Official Launch Reset တစ်ကြိမ် ပြီးစီးပြီးဖြစ်ပါသည် (Epoch:{' '}
+                        <span className="font-mono">{launchStatus.officialResetEpoch}</span>)။ ကစားသမားများ၏ Official Progress မပျက်စီးစေရန် ထပ်မံ Reset လုပ်ခွင့်ကို Lock ချထားပါသည်။
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-[11px] text-stone-300 leading-relaxed">
+                          Shared World Backup ဖိုင် ပြည့်စုံစွာ Validate အောင်မြင်ပြီးမှသာ Reset ခလုတ် ပွင့်ပါမည်။ Google Login / Player UID များ မပျက်စီးပါ — ကစားသမားအားလုံး၏ Gold, Inventory, Position, Clothing နှင့် Shared Buildings များသာ အစမှ ပြန်စပါမည်။
+                        </p>
+
+                        <label className="flex items-start gap-2 text-[11px] text-stone-200 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={ownerResetChecked}
+                            disabled={!backupVerified || launchBusy !== null}
+                            onChange={(e) => setOwnerResetChecked(e.target.checked)}
+                            className="mt-0.5 accent-rose-500"
+                          />
+                          <span>
+                            Shared World Backup ယူပြီးဖြစ်ကြောင်း (နှင့် လိုအပ်ပါက Firebase Console မှ Firestore Backup ယူပြီးဖြစ်ကြောင်း) အတည်ပြုပြီး Player အားလုံးကို တစ်ကြိမ်တည်း Official Reset လုပ်မည်ဖြစ်ကြောင်း သဘောတူပါသည်။
+                          </span>
+                        </label>
+
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="text"
+                            value={ownerResetText}
+                            disabled={!backupVerified || launchBusy !== null}
+                            onChange={(e) => setOwnerResetText(e.target.value)}
+                            placeholder='RESET ဟု ရိုက်ထည့်ပါ'
+                            className="flex-1 px-3 py-2 rounded-xl bg-[#181410] border border-[#4a3937] text-xs text-white font-mono placeholder:text-stone-500 focus:outline-none focus:border-rose-400 disabled:opacity-50"
+                          />
+                          <button
+                            type="button"
+                            disabled={
+                              !backupVerified ||
+                              !ownerResetChecked ||
+                              ownerResetText.trim() !== 'RESET' ||
+                              launchBusy !== null
+                            }
+                            onClick={handleExecuteOfficialReset}
+                            className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-rose-950/50 disabled:text-rose-400/50 text-white font-bold text-xs cursor-pointer disabled:cursor-not-allowed transition"
+                          >
+                            {launchBusy === 'official_reset'
+                              ? 'Reset လုပ်နေသည်...'
+                              : 'One-Time Official Reset စတင်မည်'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {launchNotice && (
+                    <div
+                      className={`p-2.5 rounded-xl border text-[11px] font-medium leading-snug ${
+                        launchNotice.ok
+                          ? 'bg-emerald-950/75 border-emerald-700/75 text-emerald-200'
+                          : 'bg-rose-950/75 border-rose-700/75 text-rose-200'
+                      }`}
+                    >
+                      {launchNotice.text}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

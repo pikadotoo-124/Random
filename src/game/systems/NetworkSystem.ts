@@ -45,6 +45,7 @@ export type NetworkEventType =
   | 'chat_message'
   | 'room_state'
   | 'world_sync'
+  | 'official_reset'
   | 'auth_error';
 
 export interface NetworkEvent {
@@ -90,6 +91,18 @@ export class NetworkSystem {
     if (typeof window === 'undefined') return 'ws://localhost:3000/ws';
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}/ws`;
+  }
+
+  public getServerHttpBaseUrl(): string {
+    const envWsUrl = (import.meta as any).env?.VITE_WS_URL;
+    if (envWsUrl && typeof envWsUrl === 'string' && envWsUrl.trim()) {
+      return envWsUrl
+        .trim()
+        .replace(/^wss:/i, 'https:')
+        .replace(/^ws:/i, 'http:')
+        .replace(/\/ws\/?$/i, '');
+    }
+    return '';
   }
 
   /**
@@ -387,6 +400,11 @@ export class NetworkSystem {
         this.chatMessages.push(msg.payload);
         if (this.chatMessages.length > 50) this.chatMessages.shift();
         this.emit('chat_message', msg.payload);
+        break;
+      }
+
+      case 's:official_reset': {
+        this.emit('official_reset', msg.payload);
         break;
       }
 

@@ -36,6 +36,7 @@ export interface WorldSyncState {
   depletedResources: Record<string, number>; // nodeId -> respawnTimestamp
   placedBuildings: PlacedBuilding[];
   recentChat: ChatMessage[];
+  officialResetEpoch?: string | null;
 }
 
 export type ConnectionStatus =
@@ -183,6 +184,13 @@ export type ServerMessage =
       payload: {
         playerId: string;
         equippedClothing: EquippedClothingState;
+      };
+    }
+  | {
+      type: 's:official_reset';
+      payload: {
+        epoch: string;
+        message: string;
       };
     }
   | {

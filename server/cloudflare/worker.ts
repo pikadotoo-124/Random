@@ -11,9 +11,13 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade endpoint for Random City multiplayer room
-    if (url.pathname === '/ws' || url.pathname === '/ws/') {
-      // Single authoritative room for random-city-main
+    // WebSocket upgrade & Official Launch API endpoints routed to authoritative GameRoomDO
+    if (
+      url.pathname === '/ws' ||
+      url.pathname === '/ws/' ||
+      url.pathname === '/api/launch-status' ||
+      url.pathname.startsWith('/api/admin/')
+    ) {
       const id = env.GAME_ROOM.idFromName('random-city-main');
       const roomObject = env.GAME_ROOM.get(id);
       return roomObject.fetch(request);
