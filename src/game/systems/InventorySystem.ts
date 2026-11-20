@@ -132,11 +132,11 @@ export class InventorySystem {
   }
 
   /**
-   * Serialize for save game
+   * Serialize for save game (deep-cloned snapshot so queued saves cannot be mutated)
    */
   public serialize(): { slots: InventorySlot[]; coins: number } {
     return {
-      slots: [...this.slots],
+      slots: this.slots.map((s) => ({ item: s.item, quantity: s.quantity })),
       coins: this.coins,
     };
   }
@@ -146,11 +146,13 @@ export class InventorySystem {
    */
   public deserialize(data: { slots: InventorySlot[]; coins: number }): void {
     if (data.slots && Array.isArray(data.slots)) {
-      this.slots = data.slots;
+      this.slots = data.slots
+        .filter((s) => s && typeof s.item === 'string' && typeof s.quantity === 'number' && s.quantity > 0)
+        .map((s) => ({ item: s.item, quantity: s.quantity }));
     }
     this.ensureStarterTools();
-    if (typeof data.coins === 'number') {
-      this.coins = data.coins;
+    if (typeof data.coins === 'number' && Number.isFinite(data.coins)) {
+      this.coins = Math.max(0, data.coins);
     }
     this.notifyUpdate();
   }

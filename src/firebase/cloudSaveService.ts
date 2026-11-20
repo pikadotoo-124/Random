@@ -34,6 +34,7 @@ export interface PlayerStateDoc {
   inventory: { item: string; quantity: number }[];
   equipment: {
     currentTool: string | null;
+    facingDirection?: 'down' | 'left' | 'right' | 'up';
     ownedClothing?: string[];
     equippedClothing?: EquippedClothingState;
   };
@@ -161,11 +162,27 @@ export class CloudSaveService {
         getDoc(doc(db, 'users', uid, 'gameData', 'worldState')),
       ]);
 
-      if (!playerSnap.exists()) {
+      if (!playerSnap.exists() && !worldSnap.exists()) {
         return null;
       }
 
-      const playerDoc = playerSnap.data() as PlayerStateDoc;
+      const fallbackDefaults = SaveSystem.getDefaultState(profile.playerName, profile.gender);
+      const playerDoc: Partial<PlayerStateDoc> = playerSnap.exists()
+        ? (playerSnap.data() as PlayerStateDoc)
+        : {
+            positionX: fallbackDefaults.position.tileX,
+            positionY: fallbackDefaults.position.tileY,
+            currentZone: fallbackDefaults.currentZone,
+            gold: fallbackDefaults.inventory.coins,
+            inventory: fallbackDefaults.inventory.slots,
+            equipment: {
+              currentTool: fallbackDefaults.player.currentTool || 'axe_basic',
+              facingDirection: 'down',
+              ownedClothing: [],
+              equippedClothing: {},
+            },
+            playerStats: fallbackDefaults.playerStats,
+          };
       const worldDoc = worldSnap.exists() ? (worldSnap.data() as WorldStateDoc) : null;
 
       const ownedClothing = ClothingSystem.normalizeOwnedClothing(
@@ -176,6 +193,20 @@ export class CloudSaveService {
         ownedClothing,
         profile.gender
       );
+      const facingDirection = SaveSystem.normalizeDirection(playerDoc.equipment?.facingDirection);
+
+      const safePosX =
+        typeof playerDoc.positionX === 'number' && Number.isFinite(playerDoc.positionX)
+          ? Math.max(0, Math.min(119, playerDoc.positionX))
+          : 30;
+      const safePosY =
+        typeof playerDoc.positionY === 'number' && Number.isFinite(playerDoc.positionY)
+          ? Math.max(0, Math.min(119, playerDoc.positionY))
+          : 30;
+      const safeGold =
+        typeof playerDoc.gold === 'number' && Number.isFinite(playerDoc.gold)
+          ? Math.max(0, playerDoc.gold)
+          : 25;
 
       const playerProfile: PlayerProfile = {
         name: profile.playerName,
@@ -183,8 +214,9 @@ export class CloudSaveService {
         skinTone: profile.gender === 'male' ? '#d97706' : '#f59e0b',
         hairColor: profile.gender === 'male' ? '#292524' : '#78350f',
         clothesColor: profile.gender === 'male' ? '#3b82f6' : '#10b981',
-        coins: playerDoc.gold ?? 25,
+        coins: safeGold,
         currentTool: (playerDoc.equipment?.currentTool as any) ?? 'axe_basic',
+        facingDirection,
         ownedClothing,
         equippedClothing,
       };
@@ -227,12 +259,13 @@ export class CloudSaveService {
         currentZone: playerDoc.currentZone || 'Central Plaza (Main City)',
         player: playerProfile,
         position: {
-          tileX: playerDoc.positionX ?? 30,
-          tileY: playerDoc.positionY ?? 30,
+          tileX: safePosX,
+          tileY: safePosY,
+          facingDirection,
         },
         inventory: {
           slots: (playerDoc.inventory as any) || [],
-          coins: playerDoc.gold ?? 25,
+          coins: safeGold,
         },
         buildings: hydratedBuildings,
         playerStats: {
@@ -258,7 +291,11 @@ export class CloudSaveService {
   ): Promise<boolean> {
     const playerStatePath = `users/${uid}/gameData/playerState`;
     const worldStatePath = `users/${uid}/gameData/worldState`;
-    const now = new Date(state.lastSaved || Date.now()).toISOString();
+    const safeSavedMs =
+      typeof state.lastSaved === 'number' && Number.isFinite(state.lastSaved) && state.lastSaved > 0
+        ? state.lastSaved
+        : Date.now();
+    const now = new Date(safeSavedMs).toISOString();
 
     const stats: PlayerStats = {
       ...SaveSystem.getDefaultStats(),
@@ -276,15 +313,35 @@ export class CloudSaveService {
       ownedClothing,
       state.player.gender
     );
+    const facingDirection = SaveSystem.normalizeDirection(
+      state.position?.facingDirection ?? state.player?.facingDirection
+    );
+
+    const safePosX =
+      typeof state.position?.tileX === 'number' && Number.isFinite(state.position.tileX)
+        ? Math.max(0, Math.min(119, Math.round(state.position.tileX * 100) / 100))
+        : 30;
+    const safePosY =
+      typeof state.position?.tileY === 'number' && Number.isFinite(state.position.tileY)
+        ? Math.max(0, Math.min(119, Math.round(state.position.tileY * 100) / 100))
+        : 30;
+    const safeGold =
+      typeof state.inventory?.coins === 'number' && Number.isFinite(state.inventory.coins)
+        ? Math.max(0, Math.round(state.inventory.coins))
+        : 0;
 
     const playerDoc: PlayerStateDoc = {
-      positionX: state.position.tileX,
-      positionY: state.position.tileY,
-      currentZone: state.currentZone || currentZone,
-      gold: state.inventory.coins,
-      inventory: state.inventory.slots.map((s) => ({ item: s.item, quantity: s.quantity })),
+      positionX: safePosX,
+      positionY: safePosY,
+      currentZone: (state.currentZone || currentZone).slice(0, 128),
+      gold: safeGold,
+      inventory: (state.inventory.slots || [])
+        .filter((s) => s && typeof s.item === 'string' && typeof s.quantity === 'number' && s.quantity > 0)
+        .slice(0, 100)
+        .map((s) => ({ item: s.item, quantity: s.quantity })),
       equipment: {
         currentTool: state.player.currentTool || null,
+        facingDirection,
         ownedClothing,
         equippedClothing,
       },
@@ -292,7 +349,7 @@ export class CloudSaveService {
       lastSavedAt: now,
     };
 
-    const serializedBuildings: PlacedBuilding[] = state.buildings.map((b) => {
+    const serializedBuildings: PlacedBuilding[] = state.buildings.slice(0, 500).map((b) => {
       const fp = BuildingSystem.getFootprint(b.type);
       return {
         id: b.id,
@@ -311,6 +368,7 @@ export class CloudSaveService {
 
     const storageBoxes: StoredChestSnapshot[] = serializedBuildings
       .filter((b) => b.type === 'storage_box')
+      .slice(0, 200)
       .map((b) => ({
         id: b.id,
         tileX: b.tileX,

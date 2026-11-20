@@ -618,6 +618,9 @@ export class WorldScene extends Phaser.Scene {
 
   // Movement sync & ambient animation trackers
   private netPositionAccumMs = 0;
+  private moveSaveAccumMs = 0;
+  private lastValidWalkableX = 30;
+  private lastValidWalkableY = 30;
   private wasMovingLastFrame = false;
   private playerAnimCycle = 0;
   private playerLastStep = 0;
@@ -667,6 +670,7 @@ export class WorldScene extends Phaser.Scene {
   public onMerchantGuideChange?: (guide: MerchantGuideInfo | null) => void;
   public onOpenUIModal?: (modal: 'inventory' | 'crafting' | 'shop' | 'clothing_shop' | 'building' | 'map' | 'storage', data?: any) => void;
   public onStateChanged?: () => void;
+  public onMovementCheckpoint?: (immediate: boolean) => void;
   public onResourceGathered?: () => void;
   public onBuildingBuilt?: (isMove: boolean) => void;
   public onPlacementStatusChange?: (status: {
@@ -728,7 +732,7 @@ export class WorldScene extends Phaser.Scene {
     networkSystem?: NetworkSystem;
     atmosphereSystem?: WorldAtmosphereSystem;
     playerProfile?: PlayerProfile;
-    initialPosition?: { tileX: number; tileY: number };
+    initialPosition?: { tileX: number; tileY: number; facingDirection?: 'down' | 'left' | 'right' | 'up' };
   }): void {
     if (!data) return;
     if (data.mapSystem) this.mapSystem = data.mapSystem;
@@ -743,6 +747,11 @@ export class WorldScene extends Phaser.Scene {
     if (data.initialPosition) {
       this.playerTileX = data.initialPosition.tileX;
       this.playerTileY = data.initialPosition.tileY;
+      this.lastValidWalkableX = data.initialPosition.tileX;
+      this.lastValidWalkableY = data.initialPosition.tileY;
+      if (data.initialPosition.facingDirection) {
+        this.playerDirection = data.initialPosition.facingDirection;
+      }
     }
   }
 
@@ -755,9 +764,10 @@ export class WorldScene extends Phaser.Scene {
     networkSystem?: NetworkSystem;
     atmosphereSystem?: WorldAtmosphereSystem;
     playerProfile?: PlayerProfile;
-    initialPosition?: { tileX: number; tileY: number };
+    initialPosition?: { tileX: number; tileY: number; facingDirection?: 'down' | 'left' | 'right' | 'up' };
   }): void {
     this.isSceneReady = false;
+    this.moveSaveAccumMs = 0;
     this.tileSprites.clear();
     this.groundChunks = [];
     this.bridgeApproachLookup.clear();
@@ -2234,26 +2244,65 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private createPlayer(): void {
-    // Safety walkability check so saved player coordinates never spawn inside a town structure
-    const startIntX = Math.round(this.playerTileX);
-    const startIntY = Math.round(this.playerTileY);
-    if (!this.mapSystem.isWalkable(startIntX, startIntY)) {
-      let found = false;
-      for (let radius = 1; radius <= 6 && !found; radius++) {
-        for (let dy = -radius; dy <= radius && !found; dy++) {
-          for (let dx = -radius; dx <= radius && !found; dx++) {
-            const cx = startIntX + dx;
-            const cy = startIntY + dy;
-            if (this.mapSystem.isWalkable(cx, cy)) {
-              this.playerTileX = cx;
-              this.playerTileY = cy;
-              found = true;
-            }
-          }
-        }
-      }
+  /**
+   * Return validated, bounded, walkable coordinates + facingDirection for persistent save
+   */
+  public getSafeSavePosition(): {
+    tileX: number;
+    tileY: number;
+    facingDirection: 'down' | 'left' | 'right' | 'up';
+  } {
+    const rawX = Number.isFinite(this.playerTileX) ? this.playerTileX : this.lastValidWalkableX;
+    const rawY = Number.isFinite(this.playerTileY) ? this.playerTileY : this.lastValidWalkableY;
+    const clampedX = Math.max(0, Math.min(this.mapSystem.width - 1, Math.round(rawX * 100) / 100));
+    const clampedY = Math.max(0, Math.min(this.mapSystem.height - 1, Math.round(rawY * 100) / 100));
+
+    if (this.isPositionWalkable(clampedX, clampedY)) {
+      return {
+        tileX: clampedX,
+        tileY: clampedY,
+        facingDirection: this.playerDirection,
+      };
     }
+
+    const intX = Math.round(clampedX);
+    const intY = Math.round(clampedY);
+    if (this.mapSystem.isWalkable(intX, intY)) {
+      return {
+        tileX: intX,
+        tileY: intY,
+        facingDirection: this.playerDirection,
+      };
+    }
+
+    if (this.isPositionWalkable(this.lastValidWalkableX, this.lastValidWalkableY)) {
+      return {
+        tileX: Math.round(this.lastValidWalkableX * 100) / 100,
+        tileY: Math.round(this.lastValidWalkableY * 100) / 100,
+        facingDirection: this.playerDirection,
+      };
+    }
+
+    const fallback = this.mapSystem.findNearestWalkableTile(intX, intY);
+    return {
+      tileX: fallback.tileX,
+      tileY: fallback.tileY,
+      facingDirection: this.playerDirection,
+    };
+  }
+
+  private createPlayer(): void {
+    // Safety walkability check so saved player coordinates never spawn inside water, cliffs, trees, or structures
+    const safeSpawn = this.mapSystem.findNearestWalkableTile(this.playerTileX, this.playerTileY);
+    if (safeSpawn.snapped) {
+      this.playerTileX = safeSpawn.tileX;
+      this.playerTileY = safeSpawn.tileY;
+    } else {
+      this.playerTileX = Math.max(0, Math.min(this.mapSystem.width - 1, this.playerTileX));
+      this.playerTileY = Math.max(0, Math.min(this.mapSystem.height - 1, this.playerTileY));
+    }
+    this.lastValidWalkableX = this.playerTileX;
+    this.lastValidWalkableY = this.playerTileY;
 
     const { x, y } = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
 
@@ -2264,7 +2313,8 @@ export class WorldScene extends Phaser.Scene {
     this.playerShadow.setAlpha(0.5).setScale(0.96, 0.72);
 
     const textureKey = this.playerProfile.gender === 'female' ? 'player_female' : 'player_male';
-    this.playerSprite = this.add.sprite(x, y + 16, textureKey, 0);
+    const initialFrame = this.getDirectionRowOffset(this.playerDirection);
+    this.playerSprite = this.add.sprite(x, y + 16, textureKey, initialFrame);
     this.playerSprite.setOrigin(0.5, 0.90);
     this.playerSprite.setScale(0.5); // 2x crisp 64x88 spritesheet rendered at exact 32x44 world size
     this.playerSprite.setDepth((this.playerTileX + this.playerTileY) * 100 + 52);
@@ -2579,23 +2629,25 @@ export class WorldScene extends Phaser.Scene {
             ...building,
             storage: prev.storage || building.storage,
           };
-          if (building.type !== 'campfire') {
+          if (!BuildingSystem.isNonSolidBuilding(building.type)) {
             for (let dy = 0; dy < building.height; dy++) {
               for (let dx = 0; dx < building.width; dx++) {
                 this.mapSystem.setCollision(building.tileX + dx, building.tileY + dy, true);
               }
             }
+            this.nudgePlayerIfInsideBuilding(building.tileX, building.tileY, building.width, building.height);
           }
           this.renderPlacedBuildings();
         }
       } else {
         this.buildingSystem.buildings.push(building);
-        if (building.type !== 'campfire') {
+        if (!BuildingSystem.isNonSolidBuilding(building.type)) {
           for (let dy = 0; dy < building.height; dy++) {
             for (let dx = 0; dx < building.width; dx++) {
               this.mapSystem.setCollision(building.tileX + dx, building.tileY + dy, true);
             }
           }
+          this.nudgePlayerIfInsideBuilding(building.tileX, building.tileY, building.width, building.height);
         }
         this.renderPlacedBuildings();
         const isMine = this.buildingSystem.isPersonalBuilding(
@@ -2646,6 +2698,7 @@ export class WorldScene extends Phaser.Scene {
 
       if (state.placedBuildings) {
         let changedBld = false;
+        let hydratedMineFromServer = false;
         for (const rawB of state.placedBuildings) {
           const fp = BuildingSystem.getFootprint(rawB.type);
           const b: PlacedBuilding = {
@@ -2656,18 +2709,31 @@ export class WorldScene extends Phaser.Scene {
           };
           if (!this.buildingSystem.buildings.some((existing) => existing.id === b.id)) {
             this.buildingSystem.buildings.push(b);
-            if (b.type !== 'campfire') {
+            if (!BuildingSystem.isNonSolidBuilding(b.type)) {
               for (let dy = 0; dy < b.height; dy++) {
                 for (let dx = 0; dx < b.width; dx++) {
                   this.mapSystem.setCollision(b.tileX + dx, b.tileY + dy, true);
                 }
               }
+              this.nudgePlayerIfInsideBuilding(b.tileX, b.tileY, b.width, b.height);
+            }
+            if (
+              this.buildingSystem.isPersonalBuilding(
+                b,
+                this.networkSystem.localPlayerId || undefined,
+                this.playerProfile.name
+              )
+            ) {
+              hydratedMineFromServer = true;
             }
             changedBld = true;
           }
         }
         if (changedBld) {
           this.renderPlacedBuildings();
+          if (hydratedMineFromServer) {
+            this.onStateChanged?.();
+          }
         }
       }
 
@@ -2945,6 +3011,10 @@ export class WorldScene extends Phaser.Scene {
     this.scale.on('resize', this.handleViewportResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off('resize', this.handleViewportResize, this);
+      for (const layerSprite of Object.values(this.playerClothingLayerSlots)) {
+        layerSprite?.destroy();
+      }
+      this.playerClothingLayerSlots = {};
     });
   }
 
@@ -4172,6 +4242,8 @@ export class WorldScene extends Phaser.Scene {
     this.gatherStrikeCount = 0;
     this.gatherProgress = 0;
 
+    const { x: pScreenX, y: pScreenY } = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
+    this.playerSprite.setPosition(pScreenX, pScreenY + 16);
     this.playerSprite.setAngle(0);
     this.playerSprite.setScale(0.5, 0.5);
     this.playerSprite.setFrame(this.getDirectionRowOffset(this.playerDirection));
@@ -4389,6 +4461,8 @@ export class WorldScene extends Phaser.Scene {
     this.gatherStrikeCount = 0;
     this.gatherProgress = 0;
 
+    const { x: pScreenX, y: pScreenY } = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
+    this.playerSprite.setPosition(pScreenX, pScreenY + 16);
     this.playerSprite.setAngle(0);
     this.playerSprite.setScale(0.5, 0.5);
     this.playerSprite.setFrame(this.getDirectionRowOffset(this.playerDirection));
@@ -4789,6 +4863,18 @@ export class WorldScene extends Phaser.Scene {
         this.netPositionAccumMs = 0;
         this.networkSystem.broadcastPosition(this.playerTileX, this.playerTileY, this.playerDirection, true);
       }
+
+      if (this.isPositionWalkable(this.playerTileX, this.playerTileY)) {
+        this.lastValidWalkableX = this.playerTileX;
+        this.lastValidWalkableY = this.playerTileY;
+      }
+
+      // Throttled sustained-movement position save (every ~3.5s) without resetting inventory debounces
+      this.moveSaveAccumMs += delta;
+      if (this.moveSaveAccumMs >= 3500) {
+        this.moveSaveAccumMs = 0;
+        this.onMovementCheckpoint?.(false);
+      }
       this.wasMovingLastFrame = true;
     } else {
       // Smooth walk-to-idle step recovery before gentle planted breathing [0 <-> 3]
@@ -4805,12 +4891,15 @@ export class WorldScene extends Phaser.Scene {
       if (this.wasMovingLastFrame) {
         this.wasMovingLastFrame = false;
         this.netPositionAccumMs = 0;
+        this.moveSaveAccumMs = 0;
         this.networkSystem.broadcastActionState(
           this.playerTileX,
           this.playerTileY,
           this.playerDirection,
           this.fishingState ? 'fishing' : 'idle'
         );
+        // Save updated position & direction cleanly when player comes to a stop
+        this.onMovementCheckpoint?.(true);
       }
     }
 
@@ -5075,8 +5164,9 @@ export class WorldScene extends Phaser.Scene {
       if (zoneChanged && this.onZoneEntered) {
         this.onZoneEntered(currentZone);
       }
-      if (!isInitial && this.onStateChanged) {
-        this.onStateChanged();
+      if (zoneChanged && this.onMovementCheckpoint) {
+        this.moveSaveAccumMs = 0;
+        this.onMovementCheckpoint(true);
       }
     }
   }

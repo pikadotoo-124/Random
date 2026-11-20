@@ -484,6 +484,43 @@ export class MapSystem {
   }
 
   /**
+   * Clamp coordinates to map bounds and find the nearest safe walkable dry/bridge tile
+   */
+  public findNearestWalkableTile(
+    rawX: number,
+    rawY: number,
+    maxRadius = 24
+  ): { tileX: number; tileY: number; snapped: boolean } {
+    const safeX = Number.isFinite(rawX) ? Math.max(0, Math.min(this.width - 1, Math.round(rawX))) : 30;
+    const safeY = Number.isFinite(rawY) ? Math.max(0, Math.min(this.height - 1, Math.round(rawY))) : 30;
+
+    if (this.isWalkable(safeX, safeY)) {
+      return { tileX: safeX, tileY: safeY, snapped: false };
+    }
+
+    for (let radius = 1; radius <= maxRadius; radius++) {
+      let bestTile: { tileX: number; tileY: number; dist: number } | null = null;
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+          const cx = safeX + dx;
+          const cy = safeY + dy;
+          if (!this.isWalkable(cx, cy)) continue;
+          const dist = Math.hypot(cx - rawX, cy - rawY);
+          if (!bestTile || dist < bestTile.dist) {
+            bestTile = { tileX: cx, tileY: cy, dist };
+          }
+        }
+      }
+      if (bestTile) {
+        return { tileX: bestTile.tileX, tileY: bestTile.tileY, snapped: true };
+      }
+    }
+
+    return { tileX: 30, tileY: 30, snapped: true };
+  }
+
+  /**
    * Mark collision for solid objects or buildings
    */
   public setCollision(tx: number, ty: number, solid: boolean): void {

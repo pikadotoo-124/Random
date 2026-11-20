@@ -4,7 +4,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Shirt, Trash2, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronLeft, ChevronRight, RotateCcw, Shirt, Trash2, X } from 'lucide-react';
 import {
   CLOTHING_SLOT_INFO,
   ITEMS,
@@ -30,6 +30,7 @@ interface InventoryModalProps {
   equippedClothing?: EquippedClothingState;
   onEquipClothing?: (itemId: string) => ClothingEquipResult;
   onUnequipClothing?: (slot: ClothingEquipmentSlot) => ClothingEquipResult;
+  onUnequipAllClothing?: () => ClothingEquipResult;
 }
 
 const WARDROBE_SLOTS: readonly ClothingEquipmentSlot[] = [
@@ -41,6 +42,13 @@ const WARDROBE_SLOTS: readonly ClothingEquipmentSlot[] = [
   'accessory',
 ];
 
+const DIRECTION_LABELS: Record<0 | 1 | 2 | 3, string> = {
+  0: 'အရှေ့ (Front)',
+  1: 'ဘယ်ဘက် (Left)',
+  2: 'ညာဘက် (Right)',
+  3: 'အနောက် (Back)',
+};
+
 export const InventoryModal: React.FC<InventoryModalProps> = ({
   inventory,
   onClose,
@@ -50,6 +58,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
   equippedClothing = {},
   onEquipClothing,
   onUnequipClothing,
+  onUnequipAllClothing,
 }) => {
   const [activeTab, setActiveTab] = useState<'backpack' | 'wardrobe'>('backpack');
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(
@@ -62,6 +71,12 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
   const [wardrobeFeedback, setWardrobeFeedback] = useState<{ ok: boolean; text: string } | null>(
     null
   );
+
+  const equippedCount = useMemo(
+    () => Object.values(equippedClothing).filter((val) => typeof val === 'string' && val.length > 0).length,
+    [equippedClothing]
+  );
+  const suitHidesTshirtActive = Boolean(equippedClothing.suit && equippedClothing.tshirt);
 
   const slots = inventory.slots;
   const totalSlots = inventory.maxSlots;
@@ -301,9 +316,39 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-12 p-4 sm:p-5 gap-4 overflow-y-auto">
-            {/* Left: Equipped Slots + Owned Clothing List */}
-            <div className="md:col-span-7 space-y-3">
+          <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 p-3 sm:p-5 gap-3 sm:gap-4 overflow-hidden">
+            {/* Left (Bottom on narrow mobile): Equipped Slots + Owned Clothing List */}
+            <div className="md:col-span-7 flex-1 min-h-0 overflow-y-auto space-y-3 order-last md:order-first pr-0.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-[#b7ad9d]">
+                  လက်ရှိ ဝတ်ဆင်ထားသော အကွက်များ ({equippedCount}/6)
+                </span>
+                {equippedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onUnequipAllClothing) {
+                        const res = onUnequipAllClothing();
+                        setWardrobeFeedback({ ok: res.ok, text: res.messageMy });
+                      } else if (onUnequipClothing) {
+                        for (const s of WARDROBE_SLOTS) {
+                          if (equippedClothing[s]) onUnequipClothing(s);
+                        }
+                        setWardrobeFeedback({
+                          ok: true,
+                          text: 'ဝတ်စုံအားလုံးကို ချွတ်၍ မူလပုံစံသို့ ပြန်လည်ပြောင်းလဲပြီးပါပြီ',
+                        });
+                      }
+                      SoundSynth.playRustle();
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-[#251f19] hover:bg-rose-950/50 border border-[#44392d] hover:border-rose-500/40 text-rose-200 flex items-center gap-1 transition cursor-pointer"
+                  >
+                    <RotateCcw size={12} />
+                    <span>အားလုံးချွတ်</span>
+                  </button>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {WARDROBE_SLOTS.map((slot) => {
                   const eqId = equippedClothing[slot];
@@ -312,7 +357,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                   return (
                     <div
                       key={slot}
-                      className={`p-2 rounded-xl border flex items-center justify-between gap-2 ${
+                      className={`p-2 rounded-xl border flex items-center justify-between gap-1.5 ${
                         eqItem
                           ? 'bg-emerald-950/25 border-emerald-500/35'
                           : 'bg-[#171410] border-[#2e2820]'
@@ -334,7 +379,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                             setWardrobeFeedback({ ok: res.ok, text: res.messageMy });
                             SoundSynth.playRustle();
                           }}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/35 text-rose-200 hover:bg-rose-500/25 shrink-0 cursor-pointer"
+                          className="text-[10px] px-2 py-1 rounded bg-rose-500/15 border border-rose-500/35 text-rose-200 hover:bg-rose-500/25 shrink-0 cursor-pointer"
                         >
                           ချွတ်
                         </button>
@@ -343,6 +388,12 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                   );
                 })}
               </div>
+
+              {suitHidesTshirtActive && (
+                <div className="px-3 py-1.5 rounded-lg bg-amber-950/35 border border-amber-500/25 text-[11px] text-amber-200 leading-snug">
+                  ℹ️ ဝတ်စုံအပြည့် (Suit) ဝတ်ဆင်ထားချိန်တွင် တီရှပ်အလွှာကို ဖုံးအုပ်ပြသပါမည်။ Suit ချွတ်ပါက တီရှပ်ပြန်ပေါ်လာပါမည်။
+                </div>
+              )}
 
               {ownedItems.length === 0 ? (
                 <div className={`${UI_THEME.subCard} p-6 text-center space-y-2`}>
@@ -355,10 +406,11 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 pb-1">
                   {ownedItems.map((item) => {
                     const isEquipped = equippedClothing[item.equipmentSlot] === item.itemId;
                     const isSelected = selectedGarment?.itemId === item.itemId;
+                    const compatible = ClothingSystem.isGenderCompatible(item, playerGender);
                     return (
                       <button
                         key={item.itemId}
@@ -367,9 +419,11 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           setSelectedClothingId(item.itemId);
                           setWardrobeFeedback(null);
                         }}
-                        className={`p-2 rounded-xl border flex flex-col items-center gap-1.5 transition cursor-pointer ${
+                        className={`p-2 rounded-xl border flex flex-col items-center gap-1 transition cursor-pointer ${
                           isSelected
                             ? 'border-rose-400 bg-rose-500/15 ring-2 ring-rose-400/25'
+                            : isEquipped
+                            ? 'border-emerald-500/45 bg-emerald-950/18 hover:border-emerald-400/70'
                             : 'border-[#3d3428] bg-[#211c16] hover:border-[#5e5140]'
                         }`}
                       >
@@ -381,11 +435,15 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <span className="text-[10px] font-bold text-stone-100 truncate w-full text-center">
                           {item.displayNameMy || item.displayName}
                         </span>
-                        {isEquipped && (
+                        {isEquipped ? (
                           <span className="text-[9px] font-bold px-1.5 rounded bg-emerald-500/20 text-emerald-300">
                             ဝတ်ထား
                           </span>
-                        )}
+                        ) : !compatible ? (
+                          <span className="text-[9px] font-semibold px-1.5 rounded bg-stone-800 text-stone-300">
+                            {item.applicableGender === 'female' ? 'Female' : 'Male'}
+                          </span>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -393,47 +451,55 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
               )}
             </div>
 
-            {/* Right: Live Character Outfit Preview & Equip Controls */}
-            <div className={`${UI_THEME.subCard} md:col-span-5 p-4 flex flex-col justify-between gap-3`}>
-              <div className="flex flex-col items-center gap-2">
-                <div className="w-24 h-32 rounded-xl bg-gradient-to-b from-[#28221b] to-[#17130f] border border-[#443a2e] flex items-center justify-center">
+            {/* Right (Top on narrow mobile): Live Character Outfit Preview & Equip Controls */}
+            <div className={`${UI_THEME.subCard} md:col-span-5 p-3 sm:p-4 flex flex-col justify-between gap-2.5 sm:gap-3 shrink-0 order-first md:order-last`}>
+              <div className="flex md:flex-col items-center gap-3 md:gap-2">
+                <div className="w-20 h-28 sm:w-24 sm:h-32 rounded-xl bg-gradient-to-b from-[#28221b] to-[#17130f] border border-[#443a2e] flex items-center justify-center shrink-0">
                   <CharacterOutfitPreviewCanvas
                     gender={playerGender}
                     equipped={equippedClothing}
                     direction={previewDir}
+                    className="w-20 h-28 sm:w-24 sm:h-32"
                   />
                 </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    aria-label="ဘယ်ဘက်လှည့်မည်"
-                    onClick={() => setPreviewDir((d) => (((d + 3) % 4) as 0 | 1 | 2 | 3))}
-                    className="p-1.5 rounded-lg bg-[#231e18] border border-[#3d3428] text-stone-300 hover:text-white cursor-pointer"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span className="text-[11px] font-semibold text-stone-300">
-                    {playerGender === 'female' ? 'Female Outfit' : 'Male Outfit'}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="ညာဘက်လှည့်မည်"
-                    onClick={() => setPreviewDir((d) => (((d + 1) % 4) as 0 | 1 | 2 | 3))}
-                    className="p-1.5 rounded-lg bg-[#231e18] border border-[#3d3428] text-stone-300 hover:text-white cursor-pointer"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
+                <div className="flex-1 md:w-full space-y-1.5">
+                  <div className="text-center text-[11px] font-semibold text-stone-300">
+                    {playerGender === 'female' ? '👩 Female Outfit' : '👨 Male Outfit'}
+                  </div>
+                  <div className="flex items-center justify-between bg-[#1b1713] border border-[#342d24] rounded-lg px-1 py-0.5">
+                    <button
+                      type="button"
+                      aria-label="ဘယ်ဘက်လှည့်မည်"
+                      onClick={() => setPreviewDir((d) => (((d + 3) % 4) as 0 | 1 | 2 | 3))}
+                      className="w-8 h-8 flex items-center justify-center rounded-lg text-stone-300 hover:text-white cursor-pointer"
+                    >
+                      <ChevronLeft size={15} />
+                    </button>
+                    <span className="text-[11px] font-medium text-stone-200 truncate px-1">
+                      {DIRECTION_LABELS[previewDir]}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="ညာဘက်လှည့်မည်"
+                      onClick={() => setPreviewDir((d) => (((d + 1) % 4) as 0 | 1 | 2 | 3))}
+                      className="w-8 h-8 flex items-center justify-center rounded-lg text-stone-300 hover:text-white cursor-pointer"
+                    >
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {selectedGarment && (
-                <div className="space-y-2 border-t border-[#322c23] pt-3">
-                  <div className="text-xs font-bold text-white">
-                    {selectedGarment.displayNameMy || selectedGarment.displayName}
-                  </div>
-                  <div className="text-[11px] text-[#b7ad9d]">
-                    {CLOTHING_SLOT_INFO[selectedGarment.equipmentSlot].icon}{' '}
-                    {CLOTHING_SLOT_INFO[selectedGarment.equipmentSlot].labelMy}
+                <div className="space-y-2 border-t border-[#322c23] pt-2.5 sm:pt-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-white truncate">
+                      {selectedGarment.displayNameMy || selectedGarment.displayName}
+                    </div>
+                    <div className="text-[11px] text-[#b7ad9d] shrink-0">
+                      {CLOTHING_SLOT_INFO[selectedGarment.equipmentSlot].icon}{' '}
+                      {CLOTHING_SLOT_INFO[selectedGarment.equipmentSlot].labelMy}
+                    </div>
                   </div>
 
                   {wardrobeFeedback && (
@@ -449,7 +515,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                   )}
 
                   {!ClothingSystem.isGenderCompatible(selectedGarment, playerGender) ? (
-                    <div className="py-2 px-3 rounded-xl text-[11px] text-center bg-[#231e18] border border-[#3d3428] text-stone-400">
+                    <div className="py-2.5 px-3 min-h-[44px] flex items-center justify-center rounded-xl text-[11px] text-center bg-[#231e18] border border-[#3d3428] text-stone-400">
                       Character Gender နှင့် မကိုက်ညီပါ
                     </div>
                   ) : equippedClothing[selectedGarment.equipmentSlot] === selectedGarment.itemId ? (
@@ -461,7 +527,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         setWardrobeFeedback({ ok: res.ok, text: res.messageMy });
                         SoundSynth.playRustle();
                       }}
-                      className="w-full py-2 px-3 rounded-xl text-xs font-bold bg-[#2b241d] hover:bg-[#382e25] text-rose-200 border border-rose-500/40 transition cursor-pointer"
+                      className="w-full py-2.5 px-3 min-h-[44px] rounded-xl text-xs font-bold bg-[#2b241d] hover:bg-[#382e25] text-rose-200 border border-rose-500/40 transition cursor-pointer"
                     >
                       ချွတ်မည် (Unequip)
                     </button>
@@ -475,7 +541,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         if (res.ok) SoundSynth.playSuccess();
                         else SoundSynth.playRustle();
                       }}
-                      className={`w-full py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 ${UI_THEME.primaryGreenBtn}`}
+                      className={`w-full py-2.5 px-3 min-h-[44px] rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 ${UI_THEME.primaryGreenBtn}`}
                     >
                       <Check size={14} />
                       <span>ဝတ်ဆင်မည် (Equip)</span>

@@ -56,6 +56,7 @@ export type ClientMessage =
           gender: 'male' | 'female';
           positionX: number;
           positionY: number;
+          facingDirection?: 'down' | 'left' | 'right' | 'up';
           equippedClothing?: EquippedClothingState;
         };
       };

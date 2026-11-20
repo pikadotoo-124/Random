@@ -75,9 +75,12 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
     const status = cloudSyncStatus.status;
     if (status === 'saving') {
       return (
-        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/25 font-medium flex items-center gap-1 shrink-0">
+        <span
+          title="Cloud Firestore သို့ သိမ်းဆည်းနေသည်..."
+          className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/25 font-medium flex items-center gap-1 shrink-0"
+        >
           <span>☁️</span>
-          <span className="hidden sm:inline">သိမ်းနေသည်...</span>
+          <span>သိမ်းနေ...</span>
         </span>
       );
     }
@@ -86,10 +89,14 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
         <button
           type="button"
           onClick={onRetryCloudSave}
-          title="အော့ဖ်လိုင်းဖြစ်နေ၍ စက်ထဲတွင် ယာယီသိမ်းထားသည် — ပြန်စမ်းရန်နှိပ်ပါ"
-          className="text-[10px] px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-300 border border-orange-500/30 font-medium flex items-center gap-1 cursor-pointer hover:bg-orange-500/25 shrink-0"
+          title={
+            cloudSyncStatus.errorMessage ||
+            'အော့ဖ်လိုင်းဖြစ်နေ၍ စက်ထဲတွင် ယာယီသိမ်းထားသည် — ပြန်စမ်းရန်နှိပ်ပါ'
+          }
+          className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-300 border border-orange-500/30 font-medium flex items-center gap-1 cursor-pointer hover:bg-orange-500/25 shrink-0"
         >
           <span>⏳</span>
+          <span className="sm:hidden">Local</span>
           <span className="hidden sm:inline">Local သိမ်းထားသည်</span>
         </button>
       );
@@ -99,8 +106,11 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
         <button
           type="button"
           onClick={onRetryCloudSave}
-          title="Cloud သိမ်းဆည်းမှု မအောင်မြင်ပါ — ထပ်မံကြိုးစားရန်နှိပ်ပါ"
-          className="text-[10px] px-1.5 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/35 font-medium flex items-center gap-1 cursor-pointer hover:bg-rose-500/35 shrink-0"
+          title={
+            cloudSyncStatus.errorMessage ||
+            'Cloud သိမ်းဆည်းမှု မအောင်မြင်ပါ — ထပ်မံကြိုးစားရန်နှိပ်ပါ'
+          }
+          className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/35 font-medium flex items-center gap-1 cursor-pointer hover:bg-rose-500/35 shrink-0"
         >
           <RefreshCw size={10} />
           <span>ပြန်သိမ်းမည်</span>
@@ -108,8 +118,12 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
       );
     }
     return (
-      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 font-medium flex items-center gap-1 shrink-0">
+      <span
+        title="Cloud Firestore တွင် နောက်ဆုံးအခြေအနေ သိမ်းဆည်းပြီးပါပြီ"
+        className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 font-medium flex items-center gap-1 shrink-0"
+      >
         <span>☁️</span>
+        <span className="sm:hidden">သိမ်းပြီး</span>
         <span className="hidden sm:inline">Cloud သိမ်းပြီး</span>
       </span>
     );

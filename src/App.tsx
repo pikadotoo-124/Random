@@ -23,6 +23,7 @@ import { TopNavHUD } from './components/TopNavHUD';
 import { WorldMapModal } from './components/WorldMapModal';
 import { UI_THEME } from './components/uiTheme';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
+import { auth } from './firebase/config';
 import { GameManager } from './game/GameManager';
 import { ChatMessage, ConnectionStatus } from './game/multiplayer/types';
 import type { FishingHudState } from './game/scenes/WorldScene';
@@ -51,7 +52,15 @@ function detectTouchViewport(): boolean {
  * GamePlay component mounted only after authentication, profile, and cloud gameState are hydrated
  */
 function GamePlay() {
-  const { user, profile, gameState, cloudSyncStatus, retryCloudSave, registerBeforeSignOutSave } = useAuth();
+  const {
+    user,
+    profile,
+    gameState,
+    cloudSyncStatus,
+    retryCloudSave,
+    registerBeforeSignOutSave,
+    isSignOutInProgress,
+  } = useAuth();
   const gameManagerRef = useRef<GameManager | null>(null);
 
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile>(() => {
@@ -166,9 +175,7 @@ function GamePlay() {
     setPlayerProfile({ ...gm.playerProfile });
 
     // Register authoritative pre-signout cloud flush BEFORE Phaser cleanup
-    registerBeforeSignOutSave(async () => {
-      await gm.saveCurrentState(true);
-    });
+    registerBeforeSignOutSave(() => gm.flushBeforeSignOut());
 
     setIsWorldReady(false);
     gm.onSceneReady = () => {
@@ -210,8 +217,9 @@ function GamePlay() {
           {
             name: gm.playerProfile.name,
             gender: gm.playerProfile.gender,
-            positionX: gameState.position.tileX,
-            positionY: gameState.position.tileY,
+            positionX: gm.initialPosition.tileX,
+            positionY: gm.initialPosition.tileY,
+            facingDirection: gm.initialPosition.facingDirection,
             equippedClothing: gm.playerProfile.equippedClothing,
           },
           () => tokenGetter(true)
@@ -330,14 +338,20 @@ function GamePlay() {
         }
       };
 
+      gm.worldScene.onMovementCheckpoint = (immediate) => {
+        gm.saveMovementCheckpoint(immediate);
+      };
+
       gm.worldScene.onStateChanged = () => {
         gm.saveCurrentState(false);
       };
     }
 
-    // Periodic safety auto-save every 20 seconds
+    // Periodic safety flush every 20 seconds (only flushes if local pending changes remain)
     const autoSaveTimer = setInterval(() => {
-      gm.saveCurrentState(false);
+      if (SaveSystem.hasPendingSync(user.uid)) {
+        gm.saveCurrentState(true);
+      }
     }, 20000);
 
     // Reliable flush on page hide / tab switch / unload
@@ -368,8 +382,10 @@ function GamePlay() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       registerBeforeSignOutSave(null);
       unsubs.forEach((unsub) => unsub());
-      gm.flushPendingLocalOnly();
-      gm.saveCurrentState(true);
+      if (!isSignOutInProgress() && auth.currentUser?.uid === user.uid) {
+        gm.flushPendingLocalOnly();
+        gm.saveCurrentState(true);
+      }
       gm.destroy();
       gameManagerRef.current = null;
       setIsWorldReady(false);
@@ -527,8 +543,11 @@ function GamePlay() {
         connectionStatus={connectionStatus}
         cloudSyncStatus={cloudSyncStatus}
         onRetryCloudSave={() => {
-          gameManagerRef.current?.saveCurrentState(true);
-          retryCloudSave();
+          if (gameManagerRef.current) {
+            gameManagerRef.current.saveCurrentState(true);
+          } else {
+            retryCloudSave();
+          }
         }}
         isChatOpen={isChatOpen}
         unreadChatCount={unreadChatCount}
@@ -583,6 +602,7 @@ function GamePlay() {
                           gender: playerProfile.gender,
                           positionX: playerCoords.x,
                           positionY: playerCoords.y,
+                          facingDirection: gameManagerRef.current?.playerProfile.facingDirection || 'down',
                           equippedClothing: gameManagerRef.current?.playerProfile.equippedClothing,
                         },
                         () => user.getIdToken(true)
@@ -638,6 +658,7 @@ function GamePlay() {
           onUnequipClothing={(slot: ClothingEquipmentSlot) =>
             gameManagerRef.current!.unequipClothing(slot)
           }
+          onUnequipAllClothing={() => gameManagerRef.current!.unequipAllClothing()}
         />
       )}
 
@@ -685,6 +706,7 @@ function GamePlay() {
             onUnequip={(slot: ClothingEquipmentSlot) =>
               gameManagerRef.current!.unequipClothing(slot)
             }
+            onUnequipAll={() => gameManagerRef.current!.unequipAllClothing()}
             onClose={() => setActiveModal(null)}
           />
         )}
@@ -734,7 +756,10 @@ function GamePlay() {
           playerProfile={playerProfile}
           onClose={() => setActiveModal(null)}
           onSave={() => {
-            gameManagerRef.current?.saveCurrentState(true);
+            if (gameManagerRef.current) {
+              return gameManagerRef.current.saveCurrentState(true);
+            }
+            return retryCloudSave();
           }}
           onReset={handleResetGame}
           onNameUpdated={handleNameUpdated}
@@ -793,10 +818,19 @@ function GamePlay() {
  * Root Application Container with strict Cloud Hydration Gate
  */
 function RootContainer() {
-  const { user, profile, gameState, loading, createProfileAndStart } = useAuth();
+  const {
+    user,
+    profile,
+    gameState,
+    loading,
+    cloudLoadError,
+    retryInitialLoad,
+    signOutUser,
+    createProfileAndStart,
+  } = useAuth();
 
   // 1. Wait for Auth AND Cloud Save hydration before mounting Character Select or GamePlay
-  if (loading || (user && profile && !gameState)) {
+  if (loading || (user && profile && !gameState && !cloudLoadError)) {
     return (
       <div className="w-screen h-[100dvh] flex flex-col items-center justify-center bg-[#14120f] text-stone-200 gap-3 select-none px-4 text-center">
         <Loader2 size={36} className="animate-spin text-amber-400" />
@@ -812,7 +846,40 @@ function RootContainer() {
     return <LoginScreen />;
   }
 
-  // 3. Authenticated but New User: Display Character Selection
+  // 2B. Safe Load Guard: Cloud fetch failed without local fallback — NEVER reset user into CharacterSelectModal!
+  if (cloudLoadError && !gameState) {
+    return (
+      <div className="w-screen h-[100dvh] flex items-center justify-center bg-[#14120f] px-4 select-none">
+        <div className={`${UI_THEME.panel} max-w-md w-full p-6 space-y-4 text-center`}>
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-2xl">
+            ☁️
+          </div>
+          <h2 className="text-base sm:text-lg font-bold text-white">
+            Cloud Save ဖတ်ယူ၍ မရနိုင်သေးပါ
+          </h2>
+          <p className="text-xs text-stone-300 leading-relaxed">{cloudLoadError}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => retryInitialLoad()}
+              className={`px-4 py-2 min-h-[40px] text-xs font-bold rounded-xl ${UI_THEME.primaryAmberBtn}`}
+            >
+              ထပ်မံကြိုးစားမည်
+            </button>
+            <button
+              type="button"
+              onClick={() => signOutUser()}
+              className="px-4 py-2 min-h-[40px] text-xs font-semibold rounded-xl bg-[#27221b] border border-[#453c30] text-stone-200 hover:bg-[#342d24] transition cursor-pointer"
+            >
+              အကောင့်ထွက်မည်
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Authenticated but Verified New User: Display Character Selection
   if (!profile) {
     return (
       <CharacterSelectModal

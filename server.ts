@@ -173,13 +173,18 @@ async function createServer() {
               undefined,
               gender
             );
+            const rawDir = profile?.facingDirection;
+            const facingDirection: 'down' | 'left' | 'right' | 'up' =
+              rawDir === 'up' || rawDir === 'left' || rawDir === 'right' || rawDir === 'down'
+                ? rawDir
+                : 'down';
             const newPlayer: PlayerPresenceState = {
               playerId: verifiedUid,
               playerName,
               gender,
               positionX: Math.max(0, Math.min(119, profile?.positionX ?? 30)),
               positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
-              facingDirection: 'down',
+              facingDirection,
               movementState: 'idle',
               equippedClothing,
               color: gender === 'female' ? '#10b981' : '#3b82f6',
@@ -225,12 +230,14 @@ async function createServer() {
             const targetX = Math.max(0, Math.min(119, msg.payload.x));
             const targetY = Math.max(0, Math.min(119, msg.payload.y));
             const action = msg.payload.action || 'idle';
+            const actionTool = action === 'gathering' ? msg.payload.actionTool : undefined;
 
             player.positionX = targetX;
             player.positionY = targetY;
             player.facingDirection = msg.payload.direction;
             player.movementState = action === 'fishing' ? 'fishing' : msg.payload.isMoving ? 'walking' : 'idle';
             player.animationState = action === 'fishing' ? 'fishing' : action === 'gathering' ? 'gathering' : action === 'building' ? 'building' : 'none';
+            player.actionTool = actionTool;
             player.lastUpdate = Date.now();
 
             broadcast({
@@ -242,6 +249,7 @@ async function createServer() {
                 direction: msg.payload.direction,
                 isMoving: msg.payload.isMoving,
                 action,
+                actionTool,
               },
             }, ws);
             break;

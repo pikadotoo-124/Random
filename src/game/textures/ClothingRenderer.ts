@@ -257,8 +257,8 @@ export class ClothingRenderer {
           ctx.fillRect(m.torsoX + 0.6, ty + 4.0, m.torsoW - 1.2, 1.2);
         }
 
-        // Short sleeves
-        drawTorsoSleeves(ctx, m, mainCol, accentCol, 3.6);
+        // Short sleeves (4.1px cleanly covers base shirt sleeve 23.1..27.1 / 23.7..27.7 without touching skin hand)
+        drawTorsoSleeves(ctx, m, mainCol, accentCol, 4.1);
         break;
       }
 
@@ -385,8 +385,8 @@ export class ClothingRenderer {
         ctx.fillStyle = '#ffe4e6';
         ctx.fillRect(15.0, ty + 7.2, 2.0, 2.0);
 
-        // Puffed short boutique sleeves
-        drawTorsoSleeves(ctx, m, dressCol, dressHl, 3.6);
+        // Puffed short boutique sleeves (4.1px cleanly covers base shirt sleeve while leaving skin hand exposed)
+        drawTorsoSleeves(ctx, m, dressCol, dressHl, 4.1);
         break;
       }
 
@@ -835,7 +835,7 @@ export class ClothingRenderer {
     switch (item?.equipmentSlot) {
       case 'hat':
         cropX = 4;
-        cropY = 0;
+        cropY = -3;
         cropSize = 24;
         break;
       case 'shoes':

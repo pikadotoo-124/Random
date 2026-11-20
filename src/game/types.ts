@@ -235,6 +235,8 @@ export interface EquippedClothingState {
   accessory?: string | null;
 }
 
+export type FacingDirection = 'down' | 'left' | 'right' | 'up';
+
 export interface PlayerProfile {
   name: string;
   gender: 'male' | 'female';
@@ -243,6 +245,7 @@ export interface PlayerProfile {
   clothesColor: string;
   coins: number;
   currentTool: ItemId | null;
+  facingDirection?: FacingDirection;
   ownedClothing?: string[];
   equippedClothing?: EquippedClothingState;
 }

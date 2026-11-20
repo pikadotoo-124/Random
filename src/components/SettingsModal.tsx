@@ -23,6 +23,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { SoundSynth } from '../game/utils/SoundSynth';
+import { SaveSystem } from '../game/systems/SaveSystem';
 import { useAuth } from '../firebase/AuthContext';
 import { PlayerProfile } from '../game/types';
 import { UI_THEME } from './uiTheme';
@@ -30,7 +31,7 @@ import { UI_THEME } from './uiTheme';
 interface SettingsModalProps {
   playerProfile: PlayerProfile;
   onClose: () => void;
-  onSave: () => void;
+  onSave: () => Promise<boolean> | boolean | void;
   onReset: () => void;
   onNameUpdated: (newName: string) => void;
   weatherEffectsEnabled?: boolean;
@@ -74,12 +75,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSaveClick = async () => {
-    onSave();
-    const ok = await retryCloudSave();
+    const result = await onSave();
+    const ok = typeof result === 'boolean' ? result : await retryCloudSave();
+    const freshSync = SaveSystem.getSyncStatus();
     setSaveStatus({
       ok,
       text: ok
         ? 'ကစားထားသော အချက်အလက်များကို Cloud Firestore နှင့် စက်ထဲတွင် အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!'
+        : freshSync.status === 'error' && freshSync.errorMessage
+        ? `Cloud သိမ်းဆည်းမှု မအောင်မြင်သေးပါ (${freshSync.errorMessage}) — စက်ထဲတွင် ယာယီသိမ်းထားပါသည်။`
         : 'Cloud ချိတ်ဆက်မှု မရသေးသဖြင့် စက်ထဲတွင် ယာယီသိမ်းထားပါသည်။ အင်တာနက်ရလျှင် အလိုအလျောက် Sync လုပ်ပါမည်။',
     });
     setTimeout(() => setSaveStatus(null), 4000);

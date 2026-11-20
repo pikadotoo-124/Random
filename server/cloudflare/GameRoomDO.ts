@@ -187,13 +187,18 @@ export class GameRoomDO {
           undefined,
           gender
         );
+        const rawDir = profile?.facingDirection;
+        const facingDirection: 'down' | 'left' | 'right' | 'up' =
+          rawDir === 'up' || rawDir === 'left' || rawDir === 'right' || rawDir === 'down'
+            ? rawDir
+            : 'down';
         const newPlayer: PlayerPresenceState = {
           playerId: verifiedUid,
           playerName,
           gender,
           positionX: Math.max(0, Math.min(119, profile?.positionX ?? 30)),
           positionY: Math.max(0, Math.min(119, profile?.positionY ?? 30)),
-          facingDirection: 'down',
+          facingDirection,
           movementState: 'idle',
           equippedClothing,
           color: gender === 'female' ? '#10b981' : '#3b82f6',

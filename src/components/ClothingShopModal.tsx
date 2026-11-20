@@ -4,7 +4,7 @@
  */
 
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Shirt, ShoppingBag, Sparkles, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, RotateCcw, Shirt, ShoppingBag, Sparkles, X } from 'lucide-react';
 import {
   AUNTY_GYI_CATALOG,
   CLOTHING_CATEGORIES,
@@ -37,6 +37,7 @@ interface ClothingShopModalProps {
   onBuy: (itemId: string) => ClothingPurchaseResult;
   onEquip: (itemId: string) => ClothingEquipResult;
   onUnequip: (slot: ClothingEquipmentSlot) => ClothingEquipResult;
+  onUnequipAll?: () => ClothingEquipResult;
   onClose: () => void;
 }
 
@@ -55,6 +56,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
   onBuy,
   onEquip,
   onUnequip,
+  onUnequipAll,
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<'shop' | 'wardrobe'>('shop');
@@ -98,16 +100,25 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
     const base: EquippedClothingState = { ...equippedClothing };
     if (previewTryOn && selectedItem && ClothingSystem.isGenderCompatible(selectedItem, gender)) {
       base[selectedItem.equipmentSlot] = selectedItem.itemId;
-      // Previewing a T-Shirt temporarily lifts suit overlay in preview so the tee can be seen clearly
-      if (selectedItem.equipmentSlot === 'tshirt' && !isSelectedOwned) {
+      // Previewing any T-Shirt (owned or unowned) temporarily lifts Suit overlay so the tee is visible
+      if (selectedItem.equipmentSlot === 'tshirt') {
         delete base.suit;
       }
     }
     return base;
-  }, [equippedClothing, previewTryOn, selectedItem, gender, isSelectedOwned]);
+  }, [equippedClothing, previewTryOn, selectedItem, gender]);
+
+  const equippedCount = useMemo(
+    () => Object.values(equippedClothing).filter((val) => typeof val === 'string' && val.length > 0).length,
+    [equippedClothing]
+  );
+
+  const isPreviewingTshirtOverSuit = Boolean(
+    previewTryOn && selectedItem?.equipmentSlot === 'tshirt' && equippedClothing.suit
+  );
 
   const suitHidesTshirtActive = Boolean(
-    equippedClothing.suit && equippedClothing.tshirt && (!previewTryOn || selectedItem?.equipmentSlot !== 'tshirt')
+    equippedClothing.suit && equippedClothing.tshirt && !isPreviewingTshirtOverSuit
   );
 
   const handleBuyClick = (item: ClothingItemDefinition) => {
@@ -143,6 +154,25 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
   const handleUnequipClick = (slot: ClothingEquipmentSlot) => {
     const res = onUnequip(slot);
     setFeedback({ ok: res.ok, text: res.messageMy });
+    SoundSynth.playRustle();
+  };
+
+  const handleUnequipAllClick = () => {
+    if (equippedCount === 0) return;
+    if (onUnequipAll) {
+      const res = onUnequipAll();
+      setFeedback({ ok: res.ok, text: res.messageMy });
+    } else {
+      for (const slot of Object.keys(equippedClothing) as ClothingEquipmentSlot[]) {
+        if (equippedClothing[slot]) {
+          onUnequip(slot);
+        }
+      }
+      setFeedback({
+        ok: true,
+        text: 'ဝတ်စုံအားလုံးကို ချွတ်၍ မူလပုံစံသို့ ပြန်လည်ပြောင်းလဲပြီးပါပြီ',
+      });
+    }
     SoundSynth.playRustle();
   };
 
@@ -197,13 +227,13 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
         </div>
 
         {/* Top Shop / Wardrobe Tabs + Categories */}
-        <div className="px-4 sm:px-6 pt-3 pb-2.5 border-b border-[#322c23] bg-[#16130f] space-y-2.5 shrink-0">
+        <div className="px-4 sm:px-6 pt-2.5 pb-2 border-b border-[#322c23] bg-[#16130f] space-y-2 shrink-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex bg-[#120f0c] p-1 rounded-xl border border-[#322c23] gap-1">
               <button
                 type="button"
                 onClick={() => setActiveTab('shop')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
                   activeTab === 'shop'
                     ? 'bg-rose-600 text-white shadow-sm'
                     : 'text-[#b7ad9d] hover:text-white hover:bg-[#231e18]'
@@ -215,7 +245,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('wardrobe')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                className={`px-3.5 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
                   activeTab === 'wardrobe'
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-[#b7ad9d] hover:text-white hover:bg-[#231e18]'
@@ -226,19 +256,32 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
               </button>
             </div>
 
-            <div className="text-[11px] font-medium text-[#b7ad9d]">
-              Character:{' '}
-              <span className="text-stone-100 font-bold">
-                {gender === 'female' ? '👩 Female' : '👨 Male'}
-              </span>
+            <div className="flex items-center gap-2">
+              {equippedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleUnequipAllClick}
+                  className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-[#251f19] hover:bg-rose-950/50 border border-[#44392d] hover:border-rose-500/40 text-rose-200 flex items-center gap-1 transition cursor-pointer"
+                  title="ဝတ်ထားသမျှ အဝတ်အစားအားလုံး ချွတ်မည်"
+                >
+                  <RotateCcw size={12} />
+                  <span>အားလုံးချွတ်</span>
+                </button>
+              )}
+              <div className="text-[11px] font-medium text-[#b7ad9d]">
+                Character:{' '}
+                <span className="text-stone-100 font-bold">
+                  {gender === 'female' ? '👩 Female' : '👨 Male'}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
             <button
               type="button"
               onClick={() => setActiveCategory('all')}
-              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border transition cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border transition cursor-pointer shrink-0 ${
                 activeCategory === 'all'
                   ? 'bg-amber-500/18 border-amber-400/50 text-amber-200'
                   : 'bg-[#1e1a15] border-[#383026] text-[#b7ad9d] hover:text-white'
@@ -251,7 +294,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                 key={cat.id}
                 type="button"
                 onClick={() => setActiveCategory(cat.id)}
-                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border flex items-center gap-1 transition cursor-pointer ${
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border flex items-center gap-1 transition cursor-pointer shrink-0 ${
                   activeCategory === cat.id
                     ? 'bg-rose-500/20 border-rose-400/55 text-rose-200'
                     : 'bg-[#1e1a15] border-[#383026] text-[#b7ad9d] hover:text-white'
@@ -264,10 +307,10 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
           </div>
         </div>
 
-        {/* Main Body */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 sm:p-5 overflow-y-auto flex-1">
+        {/* Main Body: independent scroll panes on md+ (tablets/landscape/desktop) & compact Preview-first split on portrait mobile */}
+        <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 gap-3 sm:gap-4 p-3 sm:p-5 overflow-hidden">
           {/* Item Catalog Grid */}
-          <div className="lg:col-span-7 space-y-2.5">
+          <div className="md:col-span-7 flex-1 min-h-0 overflow-y-auto pr-0.5 order-last md:order-first">
             {filteredItems.length === 0 ? (
               <div className={`${UI_THEME.subCard} p-6 text-center space-y-2.5`}>
                 <div className="text-3xl">👗</div>
@@ -280,18 +323,19 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setActiveTab('shop')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold ${UI_THEME.primaryAmberBtn}`}
+                  className={`px-4 py-2 min-h-[40px] rounded-xl text-xs font-bold ${UI_THEME.primaryAmberBtn}`}
                 >
                   ဆိုင်ခန်းသို့ သွားမည်
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-2.5 pb-1">
                 {filteredItems.map((item) => {
                   const isOwned = ownedSet.has(item.itemId);
                   const isEquipped = equippedClothing[item.equipmentSlot] === item.itemId;
                   const isSelected = selectedItem?.itemId === item.itemId;
                   const compatible = ClothingSystem.isGenderCompatible(item, gender);
+                  const canAfford = coins >= item.goldPrice;
 
                   return (
                     <button
@@ -301,17 +345,19 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                         setSelectedItemId(item.itemId);
                         setFeedback(null);
                       }}
-                      className={`text-left rounded-xl border p-2.5 flex flex-col gap-2 transition cursor-pointer ${
+                      className={`text-left rounded-xl border p-2.5 flex flex-col gap-1.5 transition cursor-pointer ${
                         isSelected
                           ? 'border-rose-400 bg-rose-500/14 ring-2 ring-rose-400/25'
+                          : isEquipped
+                          ? 'border-emerald-500/45 bg-emerald-950/18 hover:border-emerald-400/70'
                           : 'border-[#3a3228] bg-[#211c16] hover:border-[#5b4e3e] hover:bg-[#27211a]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-1.5">
-                        <div className="w-12 h-12 rounded-lg bg-[#15120e] border border-[#342c22] flex items-center justify-center shrink-0">
+                        <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg bg-[#15120e] border border-[#342c22] flex items-center justify-center shrink-0">
                           <ClothingItemPreviewCanvas itemId={item.itemId} gender={gender} />
                         </div>
-                        <div className="flex flex-col items-end gap-1">
+                        <div className="flex flex-col items-end gap-1 min-w-0">
                           {isEquipped ? (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300">
                               ဝတ်ထား
@@ -321,12 +367,23 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                               ပိုင်ဆိုင်ပြီး
                             </span>
                           ) : (
-                            <span className="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded bg-[#14110e] border border-[#3d3428] text-amber-300">
+                            <span
+                              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                canAfford
+                                  ? 'bg-[#14110e] border-[#3d3428] text-amber-300'
+                                  : 'bg-rose-950/35 border-rose-500/35 text-rose-300'
+                              }`}
+                            >
                               🪙 {item.goldPrice}
                             </span>
                           )}
+                          {!isOwned && !canAfford && (
+                            <span className="text-[9px] font-semibold text-rose-300/90 leading-none">
+                              ရွှေမလောက်
+                            </span>
+                          )}
                           {!compatible && (
-                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-stone-800 text-stone-400">
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-stone-800 text-stone-300">
                               {item.applicableGender === 'female' ? 'Female' : 'Male'}
                             </span>
                           )}
@@ -348,30 +405,31 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
             )}
           </div>
 
-          {/* Right Panel: Live Preview + Item Detail & Actions */}
-          <div className="lg:col-span-5 flex flex-col gap-3">
+          {/* Right Panel (Top on portrait mobile): Live Preview + Item Detail & Actions */}
+          <div className="md:col-span-5 flex flex-col gap-2.5 sm:gap-3 shrink-0 md:min-h-0 md:overflow-y-auto order-first md:order-last">
             {/* Live Character Outfit Preview Card */}
-            <div className={`${UI_THEME.subCard} p-3.5 flex items-center gap-3.5 border-rose-500/25`}>
-              <div className="relative w-24 h-32 rounded-xl bg-gradient-to-b from-[#28221b] to-[#17130f] border border-[#443a2e] flex items-center justify-center shrink-0">
+            <div className={`${UI_THEME.subCard} p-2.5 sm:p-3.5 flex items-center gap-3 border-rose-500/25`}>
+              <div className="relative w-20 h-28 sm:w-24 sm:h-32 rounded-xl bg-gradient-to-b from-[#28221b] to-[#17130f] border border-[#443a2e] flex items-center justify-center shrink-0">
                 <CharacterOutfitPreviewCanvas
                   gender={gender}
                   equipped={previewOutfit}
                   direction={previewDir}
+                  className="w-20 h-28 sm:w-24 sm:h-32"
                 />
               </div>
 
-              <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex-1 min-w-0 space-y-1.5 sm:space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-rose-200">
+                  <span className="text-xs font-bold text-rose-200 truncate">
                     ဝတ်စုံအစမ်းကြည့်ရှုရန်
                   </span>
                   <button
                     type="button"
                     onClick={() => setPreviewTryOn((v) => !v)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                    className={`px-2 py-1 rounded text-[10px] font-bold border cursor-pointer shrink-0 ${
                       previewTryOn
                         ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                        : 'bg-[#26211b] border-[#3d3428] text-stone-400'
+                        : 'bg-[#26211b] border-[#3d3428] text-stone-300'
                     }`}
                   >
                     {previewTryOn ? 'Try-On: ON' : 'Equipped'}
@@ -379,25 +437,25 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                 </div>
 
                 {/* 4-direction rotation controls */}
-                <div className="flex items-center justify-between bg-[#1b1713] border border-[#342d24] rounded-lg px-2 py-1">
+                <div className="flex items-center justify-between bg-[#1b1713] border border-[#342d24] rounded-lg px-1 py-0.5">
                   <button
                     type="button"
                     aria-label="ဘယ်ဘက်လှည့်မည်"
                     onClick={() => setPreviewDir((d) => (((d + 3) % 4) as 0 | 1 | 2 | 3))}
-                    className="p-1 text-[#b7ad9d] hover:text-white cursor-pointer"
+                    className="w-8 h-8 flex items-center justify-center text-[#b7ad9d] hover:text-white cursor-pointer"
                   >
-                    <ChevronLeft size={14} />
+                    <ChevronLeft size={15} />
                   </button>
-                  <span className="text-[11px] font-medium text-stone-200">
+                  <span className="text-[11px] font-medium text-stone-200 truncate px-1">
                     {DIRECTION_LABELS[previewDir]}
                   </span>
                   <button
                     type="button"
                     aria-label="ညာဘက်လှည့်မည်"
                     onClick={() => setPreviewDir((d) => (((d + 1) % 4) as 0 | 1 | 2 | 3))}
-                    className="p-1 text-[#b7ad9d] hover:text-white cursor-pointer"
+                    className="w-8 h-8 flex items-center justify-center text-[#b7ad9d] hover:text-white cursor-pointer"
                   >
-                    <ChevronRight size={14} />
+                    <ChevronRight size={15} />
                   </button>
                 </div>
 
@@ -419,7 +477,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                               ? `${eqItem.displayNameMy || eqItem.displayName} (နှိပ်၍ချွတ်မည်)`
                               : `${slotMeta.labelMy}: မဝတ်ထားပါ`
                           }
-                          className={`px-1.5 py-0.5 rounded text-[10px] border transition ${
+                          className={`px-1.5 py-1 rounded text-[10px] border transition ${
                             eqItem
                               ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-200 hover:bg-rose-500/20 hover:border-rose-400/50 cursor-pointer'
                               : 'bg-[#191612] border-[#2e2820] text-[#6d6253] cursor-default'
@@ -434,6 +492,12 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
               </div>
             </div>
 
+            {isPreviewingTshirtOverSuit && (
+              <div className="px-3 py-1.5 rounded-lg bg-sky-950/35 border border-sky-500/30 text-[11px] text-sky-200 leading-snug">
+                👀 တီရှပ်ကို အစမ်းကြည့်နိုင်ရန် Suit အလွှာကို ယာယီဖယ်ပြထားပါသည်။
+              </div>
+            )}
+
             {suitHidesTshirtActive && (
               <div className="px-3 py-1.5 rounded-lg bg-amber-950/35 border border-amber-500/25 text-[11px] text-amber-200 leading-snug">
                 ℹ️ ဝတ်စုံအပြည့် (Suit) ဝတ်ဆင်ထားချိန်တွင် တီရှပ်အလွှာကို ဖုံးအုပ်ပြသပါမည်။ Suit ချွတ်ပါက တီရှပ်ပြန်ပေါ်လာပါမည်။
@@ -442,18 +506,22 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
 
             {/* Selected Item Detail Card */}
             {selectedItem && (
-              <div className={`${UI_THEME.subCard} p-4 space-y-3 flex-1 flex flex-col justify-between`}>
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between gap-3 border-b border-[#322c23] pb-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-12 h-12 rounded-xl bg-[#252019] border border-[#463c2f] flex items-center justify-center shrink-0">
-                        <ClothingItemPreviewCanvas itemId={selectedItem.itemId} gender={gender} />
+              <div className={`${UI_THEME.subCard} p-3 sm:p-4 space-y-2.5 sm:space-y-3 md:flex-1 flex flex-col justify-between`}>
+                <div className="space-y-2 sm:space-y-2.5">
+                  <div className="flex items-start justify-between gap-2.5 border-b border-[#322c23] pb-2 sm:pb-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-[#252019] border border-[#463c2f] flex items-center justify-center shrink-0">
+                        <ClothingItemPreviewCanvas
+                          itemId={selectedItem.itemId}
+                          gender={gender}
+                          className="w-9 h-9 sm:w-11 sm:h-11"
+                        />
                       </div>
                       <div className="min-w-0">
-                        <h3 className="text-sm font-bold text-white leading-snug">
+                        <h3 className="text-sm font-bold text-white leading-snug truncate">
                           {selectedItem.displayNameMy || selectedItem.displayName}
                         </h3>
-                        <p className="text-[11px] text-[#a99e8e]">{selectedItem.displayName}</p>
+                        <p className="text-[11px] text-[#a99e8e] truncate">{selectedItem.displayName}</p>
                       </div>
                     </div>
 
@@ -467,13 +535,13 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                     </div>
                   </div>
 
-                  <p className="text-xs text-[#cfc6b7] leading-relaxed">
+                  <p className="hidden sm:block text-xs text-[#cfc6b7] leading-relaxed">
                     {selectedItem.description}
                   </p>
 
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                     <span className="px-2 py-0.5 rounded-md bg-[#241f19] border border-[#3d3428] text-stone-300">
-                      Slot: {CLOTHING_SLOT_INFO[selectedItem.equipmentSlot].icon}{' '}
+                      {CLOTHING_SLOT_INFO[selectedItem.equipmentSlot].icon}{' '}
                       {CLOTHING_SLOT_INFO[selectedItem.equipmentSlot].label}
                     </span>
                     <span
@@ -497,10 +565,10 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2">
+                <div className="space-y-2 pt-1">
                   {feedback && (
                     <div
-                      className={`px-3 py-2 rounded-xl text-xs font-medium border leading-snug ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium border leading-snug ${
                         feedback.ok
                           ? 'bg-emerald-950/45 border-emerald-500/35 text-emerald-200'
                           : 'bg-rose-950/45 border-rose-500/35 text-rose-200'
@@ -536,7 +604,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                       </button>
                     </div>
                   ) : !isSelectedCompatible ? (
-                    <div className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-center bg-[#231e18] border border-[#3d3428] text-stone-400">
+                    <div className="w-full py-2.5 px-4 min-h-[44px] flex items-center justify-center rounded-xl text-xs font-semibold text-center bg-[#231e18] border border-[#3d3428] text-stone-400">
                       {selectedItem.applicableGender === 'female'
                         ? 'Female Character များသာ ဝတ်ဆင်နိုင်ပါသည်'
                         : 'Male Character များသာ ဝတ်ဆင်နိုင်ပါသည်'}

@@ -7,6 +7,7 @@ import { auth } from '../../firebase/config';
 import { CloudSaveService } from '../../firebase/cloudSaveService';
 import { STARTER_TOOLS, isStarterTool } from '../constants';
 import {
+  FacingDirection,
   InventorySlot,
   PlacedBuilding,
   PlayerProfile,
@@ -31,7 +32,11 @@ export interface SavedGameState {
   lastSaved: number;
   currentZone?: string;
   player: PlayerProfile;
-  position: { tileX: number; tileY: number };
+  position: {
+    tileX: number;
+    tileY: number;
+    facingDirection?: FacingDirection;
+  };
   inventory: { slots: InventorySlot[]; coins: number };
   buildings: PlacedBuilding[];
   playerStats?: PlayerStats;
@@ -39,13 +44,90 @@ export interface SavedGameState {
 }
 
 const STORAGE_KEY_DEFAULT = 'random_city_save_v1';
+const DEBOUNCE_SAVE_MS = 450;
+const MAX_AUTO_RETRIES = 5;
+const RETRY_BASE_DELAY_MS = 2500;
+const RETRY_MAX_DELAY_MS = 30000;
 
 type SyncListener = (state: CloudSyncState) => void;
 
+type CloudWriteAdapter = (
+  uid: string,
+  state: SavedGameState,
+  currentZone: string
+) => Promise<boolean>;
+
+interface QueuedSavePayload {
+  state: SavedGameState;
+  currentZone: string;
+  resolvers: Array<(ok: boolean) => void>;
+}
+
+interface UidSaveQueue {
+  inFlight: Promise<boolean> | null;
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  retryAttempt: number;
+  queued: QueuedSavePayload | null;
+  lastMonotonicTs: number;
+}
+
 export class SaveSystem {
-  private static debouncedTimer: any = null;
+  private static uidQueues = new Map<string, UidSaveQueue>();
   private static syncListeners: Set<SyncListener> = new Set();
   private static currentSyncState: CloudSyncState = { status: 'idle' };
+
+  // Testable hooks (default strictly to Firebase Auth & Firestore in production)
+  private static cloudWriterOverride: CloudWriteAdapter | null = null;
+  private static authUidCheckOverride: ((uid: string) => boolean) | null = null;
+  private static onlineCheckOverride: (() => boolean) | null = null;
+
+  public static setCloudAdaptersForTest(adapters: {
+    writer?: CloudWriteAdapter | null;
+    isAuthorized?: ((uid: string) => boolean) | null;
+    isOnline?: (() => boolean) | null;
+  } | null): void {
+    if (!adapters) {
+      this.cloudWriterOverride = null;
+      this.authUidCheckOverride = null;
+      this.onlineCheckOverride = null;
+      return;
+    }
+    if (adapters.writer !== undefined) this.cloudWriterOverride = adapters.writer;
+    if (adapters.isAuthorized !== undefined) this.authUidCheckOverride = adapters.isAuthorized;
+    if (adapters.isOnline !== undefined) this.onlineCheckOverride = adapters.isOnline;
+  }
+
+  public static normalizeDirection(dir?: unknown): FacingDirection {
+    if (dir === 'up' || dir === 'down' || dir === 'left' || dir === 'right') {
+      return dir;
+    }
+    return 'down';
+  }
+
+  private static getQueue(uid: string): UidSaveQueue {
+    let q = this.uidQueues.get(uid);
+    if (!q) {
+      q = {
+        inFlight: null,
+        debounceTimer: null,
+        retryTimer: null,
+        retryAttempt: 0,
+        queued: null,
+        lastMonotonicTs: 0,
+      };
+      this.uidQueues.set(uid, q);
+    }
+    return q;
+  }
+
+  private static nextMonotonicTimestamp(uid: string, candidate?: number): number {
+    const q = this.getQueue(uid);
+    const base = typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0 ? candidate : Date.now();
+    const next = Math.max(Date.now(), base, q.lastMonotonicTs + 1);
+    q.lastMonotonicTs = next;
+    return next;
+  }
 
   public static subscribeSyncStatus(listener: SyncListener): () => void {
     this.syncListeners.add(listener);
@@ -108,26 +190,40 @@ export class SaveSystem {
       return this.getDefaultState(fallbackName, fallbackGender);
     }
 
+    const resolvedGender: 'male' | 'female' =
+      raw.player?.gender === 'female'
+        ? 'female'
+        : raw.player?.gender === 'male'
+        ? 'male'
+        : fallbackGender;
+
     const base = this.getDefaultState(
       raw.player?.name || fallbackName,
-      raw.player?.gender === 'female' ? 'female' : fallbackGender
+      resolvedGender
     );
 
     const coins =
-      typeof raw.inventory?.coins === 'number'
-        ? raw.inventory.coins
-        : typeof raw.player?.coins === 'number'
-        ? raw.player.coins
+      typeof raw.inventory?.coins === 'number' && Number.isFinite(raw.inventory.coins)
+        ? Math.max(0, Math.round(raw.inventory.coins))
+        : typeof raw.player?.coins === 'number' && Number.isFinite(raw.player.coins)
+        ? Math.max(0, Math.round(raw.player.coins))
         : base.inventory.coins;
 
     const rawSlots: InventorySlot[] = Array.isArray(raw.inventory?.slots)
       ? raw.inventory.slots
-          .filter((s) => s && typeof s.item === 'string' && typeof s.quantity === 'number' && s.quantity > 0)
+          .filter(
+            (s) =>
+              s &&
+              typeof s.item === 'string' &&
+              typeof s.quantity === 'number' &&
+              Number.isFinite(s.quantity) &&
+              Math.floor(s.quantity) > 0
+          )
           .map((s) => ({
             item: s.item,
-            quantity: isStarterTool(s.item) ? 1 : s.quantity,
+            quantity: isStarterTool(s.item) ? 1 : Math.floor(s.quantity),
           }))
-      : base.inventory.slots;
+      : base.inventory.slots.map((s) => ({ ...s }));
 
     const slots: InventorySlot[] = [];
     const seenStarterTools = new Set<string>();
@@ -156,7 +252,9 @@ export class SaveSystem {
               height: b.height || fp.height,
               rotation: b.type === 'fence_wood' ? BuildingSystem.normalizeRotation(b.rotation) : 0,
               storage: Array.isArray(b.storage)
-                ? b.storage.filter((s) => s && s.item && s.quantity > 0).map((s) => ({ ...s }))
+                ? b.storage
+                    .filter((s) => s && s.item && typeof s.quantity === 'number' && Math.floor(s.quantity) > 0)
+                    .map((s) => ({ item: s.item, quantity: Math.floor(s.quantity) }))
                 : b.type === 'storage_box'
                 ? []
                 : undefined,
@@ -177,14 +275,24 @@ export class SaveSystem {
         : ['Central Plaza (Main City)'],
     };
 
-    const resolvedGender: 'male' | 'female' =
-      raw.player?.gender === 'female' ? 'female' : fallbackGender;
     const ownedClothing = ClothingSystem.normalizeOwnedClothing(raw.player?.ownedClothing);
     const equippedClothing = ClothingSystem.normalizeEquippedClothing(
       raw.player?.equippedClothing,
       ownedClothing,
       resolvedGender
     );
+    const facingDirection = this.normalizeDirection(
+      raw.position?.facingDirection ?? raw.player?.facingDirection
+    );
+
+    const safeTileX =
+      typeof raw.position?.tileX === 'number' && Number.isFinite(raw.position.tileX)
+        ? Math.max(0, Math.min(119, Math.round(raw.position.tileX * 100) / 100))
+        : base.position.tileX;
+    const safeTileY =
+      typeof raw.position?.tileY === 'number' && Number.isFinite(raw.position.tileY)
+        ? Math.max(0, Math.min(119, Math.round(raw.position.tileY * 100) / 100))
+        : base.position.tileY;
 
     return {
       version: CURRENT_SAVE_VERSION,
@@ -196,12 +304,14 @@ export class SaveSystem {
         gender: resolvedGender,
         coins,
         currentTool: raw.player?.currentTool !== undefined ? raw.player.currentTool : base.player.currentTool,
+        facingDirection,
         ownedClothing,
         equippedClothing,
       },
       position: {
-        tileX: typeof raw.position?.tileX === 'number' ? raw.position.tileX : base.position.tileX,
-        tileY: typeof raw.position?.tileY === 'number' ? raw.position.tileY : base.position.tileY,
+        tileX: safeTileX,
+        tileY: safeTileY,
+        facingDirection,
       },
       inventory: {
         slots,
@@ -225,7 +335,6 @@ export class SaveSystem {
       const migrated = this.migrateGameState(state, state.player?.name, state.player?.gender);
       const key = this.getStorageKey(uid);
       localStorage.setItem(key, JSON.stringify(migrated));
-      // Only update guest default key when unauthenticated so authenticated users never collide
       if (!uid) {
         localStorage.setItem(STORAGE_KEY_DEFAULT, JSON.stringify(migrated));
       }
@@ -243,7 +352,8 @@ export class SaveSystem {
       const data = localStorage.getItem(key);
       if (!data) return null;
       const parsed = JSON.parse(data) as Partial<SavedGameState>;
-      return this.migrateGameState(parsed);
+      const fallbackGender = parsed?.player?.gender === 'female' ? 'female' : 'male';
+      return this.migrateGameState(parsed, parsed?.player?.name, fallbackGender);
     } catch (e) {
       console.error('[SaveSystem Error] Failed to load game state from localStorage:', e);
       return null;
@@ -251,6 +361,9 @@ export class SaveSystem {
   }
 
   public static clearSave(uid?: string): void {
+    if (uid) {
+      this.cancelPendingTimers(uid);
+    }
     if (typeof localStorage === 'undefined') return;
     const key = this.getStorageKey(uid);
     localStorage.removeItem(key);
@@ -269,9 +382,10 @@ export class SaveSystem {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || parsed.uid !== uid || !parsed.state) return null;
+      const fallbackGender = parsed.state?.player?.gender === 'female' ? 'female' : 'male';
       return {
         uid,
-        state: this.migrateGameState(parsed.state),
+        state: this.migrateGameState(parsed.state, parsed.state?.player?.name, fallbackGender),
         currentZone: parsed.currentZone || parsed.state.currentZone || 'Central Plaza (Main City)',
         time: parsed.time || parsed.state.lastSaved || Date.now(),
       };
@@ -291,10 +405,50 @@ export class SaveSystem {
 
   private static isCloudAuthorized(uid?: string | null): uid is string {
     if (!uid) return false;
+    if (this.authUidCheckOverride) {
+      return this.authUidCheckOverride(uid);
+    }
     try {
       return auth.currentUser?.uid === uid;
     } catch {
       return false;
+    }
+  }
+
+  private static isNetworkOnline(): boolean {
+    if (this.onlineCheckOverride) {
+      return this.onlineCheckOverride();
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    return true;
+  }
+
+  private static cancelPendingTimers(uid: string): void {
+    const q = this.uidQueues.get(uid);
+    if (!q) return;
+    if (q.debounceTimer) {
+      clearTimeout(q.debounceTimer);
+      q.debounceTimer = null;
+    }
+    if (q.retryTimer) {
+      clearTimeout(q.retryTimer);
+      q.retryTimer = null;
+    }
+  }
+
+  /**
+   * Release timers/queued callbacks when switching/signing out an account (does NOT delete localStorage)
+   */
+  public static cleanupUidSession(uid?: string): void {
+    if (!uid) return;
+    const q = this.uidQueues.get(uid);
+    if (!q) return;
+    this.cancelPendingTimers(uid);
+    if (q.queued) {
+      for (const r of q.queued.resolvers) r(false);
+      q.queued = null;
     }
   }
 
@@ -305,10 +459,15 @@ export class SaveSystem {
     uid: string | null | undefined,
     state: SavedGameState,
     currentZone = 'Central Plaza (Main City)'
-  ): void {
-    const normalized = this.migrateGameState({ ...state, currentZone });
+  ): SavedGameState {
+    const ts = uid ? this.nextMonotonicTimestamp(uid, state.lastSaved) : state.lastSaved || Date.now();
+    const normalized = this.migrateGameState(
+      { ...state, lastSaved: ts, currentZone },
+      state.player?.name,
+      state.player?.gender
+    );
     this.saveGame(normalized, uid || undefined);
-    if (!uid || typeof localStorage === 'undefined') return;
+    if (!uid || typeof localStorage === 'undefined') return normalized;
     try {
       localStorage.setItem(
         this.getPendingSyncKey(uid),
@@ -317,10 +476,162 @@ export class SaveSystem {
     } catch (e) {
       console.error('[SaveSystem Error] Failed to queue pending cloud sync:', e);
     }
+    return normalized;
+  }
+
+  private static formatCloudError(err: any): string {
+    const rawMsg = err?.message || String(err || 'Cloud save failed');
+    try {
+      const parsed = JSON.parse(rawMsg);
+      if (parsed && typeof parsed.error === 'string') {
+        return parsed.error;
+      }
+    } catch {
+      // Plain error message
+    }
+    return rawMsg;
+  }
+
+  private static scheduleAutoRetry(uid: string): void {
+    const q = this.getQueue(uid);
+    if (q.retryTimer || q.retryAttempt >= MAX_AUTO_RETRIES) return;
+    if (!this.isCloudAuthorized(uid) || !this.hasPendingSync(uid)) return;
+
+    const delay = Math.min(
+      RETRY_BASE_DELAY_MS * Math.pow(2, q.retryAttempt),
+      RETRY_MAX_DELAY_MS
+    );
+    q.retryAttempt += 1;
+
+    q.retryTimer = setTimeout(() => {
+      q.retryTimer = null;
+      if (!this.isCloudAuthorized(uid) || !this.isNetworkOnline()) return;
+      this.syncPendingCloudChanges(uid);
+    }, delay);
   }
 
   /**
-   * Save game state locally immediately and debounce (or flush) cloud save to Firebase Firestore.
+   * Strictly serialized single-writer queue loop per UID.
+   * Ensures older snapshots can NEVER overwrite newer ones in Firestore.
+   */
+  private static drainQueue(uid: string): Promise<boolean> {
+    const q = this.getQueue(uid);
+    if (q.inFlight) {
+      return q.inFlight;
+    }
+
+    let finishedSync = false;
+    const run = async (): Promise<boolean> => {
+      let lastOutcome = true;
+
+      try {
+        while (q.queued) {
+          const batch = q.queued;
+          q.queued = null;
+
+          if (!this.isCloudAuthorized(uid)) {
+            this.setSyncStatus({
+              status: 'pending_offline',
+              lastSyncedAt: this.currentSyncState.lastSyncedAt,
+              errorMessage: 'Auth session inactive; queued locally.',
+            });
+            for (const resolve of batch.resolvers) resolve(false);
+            lastOutcome = false;
+            continue;
+          }
+
+          if (!this.isNetworkOnline()) {
+            this.setSyncStatus({
+              status: 'pending_offline',
+              lastSyncedAt: this.currentSyncState.lastSyncedAt,
+              errorMessage: 'Offline — queued locally for automatic sync.',
+            });
+            for (const resolve of batch.resolvers) resolve(false);
+            lastOutcome = false;
+            continue;
+          }
+
+          this.setSyncStatus({
+            status: 'saving',
+            lastSyncedAt: this.currentSyncState.lastSyncedAt,
+          });
+
+          try {
+            const writer: CloudWriteAdapter =
+              this.cloudWriterOverride ||
+              ((targetUid, targetState, zone) =>
+                CloudSaveService.saveGameState(targetUid, targetState, zone));
+
+            await writer(uid, batch.state, batch.currentZone);
+
+            // Check whether a newer mutation arrived while this write was in flight
+            const latestPending = this.getPendingSync(uid);
+            if (
+              !q.queued &&
+              (!latestPending || latestPending.state.lastSaved <= batch.state.lastSaved)
+            ) {
+              this.clearPendingSync(uid);
+            }
+
+            q.retryAttempt = 0;
+            if (q.retryTimer) {
+              clearTimeout(q.retryTimer);
+              q.retryTimer = null;
+            }
+
+            if (!q.queued) {
+              this.setSyncStatus({
+                status: 'saved',
+                lastSyncedAt: Date.now(),
+              });
+            }
+
+            for (const resolve of batch.resolvers) resolve(true);
+            lastOutcome = true;
+          } catch (err: any) {
+            const msg = this.formatCloudError(err);
+            console.error('[CloudSave Error] Sequential Firestore write failed; local queue preserved:', msg, err);
+
+            const isOfflineErr =
+              !this.isNetworkOnline() || /offline|network|unavailable|timeout/i.test(msg);
+
+            this.setSyncStatus({
+              status: isOfflineErr ? 'pending_offline' : 'error',
+              lastSyncedAt: this.currentSyncState.lastSyncedAt,
+              errorMessage: msg,
+            });
+
+            // Preserve snapshot on localStorage pending queue (it is already written, ensure latest survives)
+            if (!q.queued) {
+              this.scheduleAutoRetry(uid);
+            }
+
+            for (const resolve of batch.resolvers) resolve(false);
+            lastOutcome = false;
+          }
+        }
+      } finally {
+        finishedSync = true;
+        q.inFlight = null;
+        if (q.queued) {
+          void this.drainQueue(uid);
+        }
+      }
+
+      return lastOutcome;
+    };
+
+    const promise = run();
+    if (!finishedSync) {
+      q.inFlight = promise;
+    }
+    return promise;
+  }
+
+  /**
+   * Save game state locally immediately and coalesce/serialize cloud saves to Firestore.
+   * NOTE: Repeated non-immediate calls update the queued snapshot WITHOUT resetting/starving
+   * an already-armed debounce timer, guaranteeing sustained movement never cancels inventory saves!
    */
   public static saveGameWithCloud(
     uid: string | null | undefined,
@@ -328,111 +639,121 @@ export class SaveSystem {
     currentZone = 'Central Plaza (Main City)',
     immediate = false
   ): Promise<boolean> {
-    const normalized = this.migrateGameState({ ...state, currentZone });
-
     // 1. Instant UID-scoped local persistence & pending queue
-    this.queuePendingLocalSave(uid, normalized, currentZone);
+    const normalized = this.queuePendingLocalSave(uid, state, currentZone);
 
     if (!uid) return Promise.resolve(false);
 
-    if (this.debouncedTimer) {
-      clearTimeout(this.debouncedTimer);
-      this.debouncedTimer = null;
-    }
-
-    const executeCloudSave = async (): Promise<boolean> => {
-      if (!this.isCloudAuthorized(uid)) {
-        this.setSyncStatus({
-          status: 'pending_offline',
-          errorMessage: 'Auth session inactive; queued locally.',
-        });
-        return false;
-      }
-
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        this.setSyncStatus({
-          status: 'pending_offline',
-          errorMessage: 'Offline — queued locally for sync.',
-        });
-        return false;
-      }
-
-      this.setSyncStatus({
-        status: 'saving',
-        lastSyncedAt: this.currentSyncState.lastSyncedAt,
-      });
-
-      try {
-        await CloudSaveService.saveGameState(uid, normalized, currentZone);
-        // Only clear pending sync if no newer mutation overwrote it while the request was in flight
-        const latestPending = this.getPendingSync(uid);
-        if (!latestPending || latestPending.state.lastSaved <= normalized.lastSaved) {
-          this.clearPendingSync(uid);
-        }
-        this.setSyncStatus({
-          status: 'saved',
-          lastSyncedAt: Date.now(),
-        });
-        return true;
-      } catch (err: any) {
-        const msg = err?.message || 'Cloud save failed';
-        console.error('[CloudSave Error] Firestore write failed; local queue preserved:', err);
-        const isOfflineErr =
-          (typeof navigator !== 'undefined' && navigator.onLine === false) ||
-          /offline|network|unavailable/i.test(msg);
-        this.setSyncStatus({
-          status: isOfflineErr ? 'pending_offline' : 'error',
-          lastSyncedAt: this.currentSyncState.lastSyncedAt,
-          errorMessage: msg,
-        });
-        return false;
-      }
-    };
-
-    if (immediate) {
-      return executeCloudSave();
+    const q = this.getQueue(uid);
+    if (q.retryTimer) {
+      clearTimeout(q.retryTimer);
+      q.retryTimer = null;
     }
 
     return new Promise<boolean>((resolve) => {
-      this.debouncedTimer = setTimeout(() => {
-        this.debouncedTimer = null;
-        executeCloudSave().then(resolve);
-      }, 1200);
+      if (q.queued) {
+        q.queued.state = normalized;
+        q.queued.currentZone = currentZone;
+        q.queued.resolvers.push(resolve);
+      } else {
+        q.queued = {
+          state: normalized,
+          currentZone,
+          resolvers: [resolve],
+        };
+      }
+
+      if (immediate) {
+        if (q.debounceTimer) {
+          clearTimeout(q.debounceTimer);
+          q.debounceTimer = null;
+        }
+        this.drainQueue(uid);
+        return;
+      }
+
+      // Do NOT clear/delay an already-pending debounceTimer so continuous walking cannot starve saves
+      if (!q.debounceTimer) {
+        q.debounceTimer = setTimeout(() => {
+          q.debounceTimer = null;
+          this.drainQueue(uid);
+        }, DEBOUNCE_SAVE_MS);
+      }
     });
   }
 
   /**
-   * Flush any pending local changes for the authenticated UID to Firestore
+   * Flush any debounced/queued/in-flight saves for a UID and await full completion (safe for Sign Out).
+   */
+  public static async flushQueue(uid?: string): Promise<boolean> {
+    if (!uid) return false;
+    const q = this.getQueue(uid);
+    if (q.debounceTimer) {
+      clearTimeout(q.debounceTimer);
+      q.debounceTimer = null;
+    }
+    if (q.retryTimer) {
+      clearTimeout(q.retryTimer);
+      q.retryTimer = null;
+    }
+
+    if (q.queued || q.inFlight) {
+      const ok = await this.drainQueue(uid);
+      if (ok && !this.hasPendingSync(uid)) return true;
+    }
+
+    if (this.hasPendingSync(uid)) {
+      return this.syncPendingCloudChanges(uid);
+    }
+
+    return true;
+  }
+
+  /**
+   * Flush any pending local changes for the authenticated UID through the sequential queue
    */
   public static async syncPendingCloudChanges(uid?: string): Promise<boolean> {
     if (!uid || !this.isCloudAuthorized(uid)) return false;
 
     const pending = this.getPendingSync(uid);
-    if (!pending) return true;
-
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      this.setSyncStatus({ status: 'pending_offline', errorMessage: 'Offline' });
-      return false;
+    if (!pending) {
+      const q = this.getQueue(uid);
+      if (q.queued || q.inFlight) {
+        return this.drainQueue(uid);
+      }
+      return true;
     }
 
-    this.setSyncStatus({ status: 'saving', lastSyncedAt: this.currentSyncState.lastSyncedAt });
-    try {
-      await CloudSaveService.saveGameState(uid, pending.state, pending.currentZone);
-      const currentPending = this.getPendingSync(uid);
-      if (!currentPending || currentPending.state.lastSaved <= pending.state.lastSaved) {
-        this.clearPendingSync(uid);
-      }
-      this.setSyncStatus({ status: 'saved', lastSyncedAt: Date.now() });
-      return true;
-    } catch (err: any) {
-      console.error('[CloudSave Error] Failed to sync pending offline changes:', err);
+    if (!this.isNetworkOnline()) {
       this.setSyncStatus({
-        status: 'error',
+        status: 'pending_offline',
         lastSyncedAt: this.currentSyncState.lastSyncedAt,
-        errorMessage: err?.message || 'Cloud sync failed',
+        errorMessage: 'Offline — queued locally.',
       });
       return false;
     }
+
+    const q = this.getQueue(uid);
+    return new Promise<boolean>((resolve) => {
+      if (q.queued) {
+        if (pending.state.lastSaved > q.queued.state.lastSaved) {
+          q.queued.state = pending.state;
+          q.queued.currentZone = pending.currentZone;
+        }
+        q.queued.resolvers.push(resolve);
+      } else {
+        q.queued = {
+          state: pending.state,
+          currentZone: pending.currentZone,
+          resolvers: [resolve],
+        };
+      }
+      if (q.debounceTimer) {
+        clearTimeout(q.debounceTimer);
+        q.debounceTimer = null;
+      }
+      this.drainQueue(uid);
+    });
   }
 
   /**
@@ -440,8 +761,11 @@ export class SaveSystem {
    */
   public static async retryLastSave(uid?: string): Promise<boolean> {
     if (!uid) return false;
-    if (this.hasPendingSync(uid)) {
-      return this.syncPendingCloudChanges(uid);
+    const q = this.getQueue(uid);
+    q.retryAttempt = 0;
+
+    if (q.queued || q.inFlight || this.hasPendingSync(uid)) {
+      return this.flushQueue(uid);
     }
     const local = this.loadGame(uid);
     if (!local) return false;
@@ -461,10 +785,11 @@ export class SaveSystem {
         clothesColor: gender === 'female' ? '#10b981' : '#3b82f6',
         coins: 25,
         currentTool: 'axe_basic',
+        facingDirection: 'down',
         ownedClothing: [],
         equippedClothing: {},
       },
-      position: { tileX: 30, tileY: 30 },
+      position: { tileX: 30, tileY: 30, facingDirection: 'down' },
       inventory: {
         slots: [
           { item: 'axe_basic', quantity: 1 },

@@ -15,6 +15,7 @@ interface AuthContextType {
   gameState: SavedGameState | null;
   loading: boolean;
   authError: string | null;
+  cloudLoadError: string | null;
   isOffline: boolean;
   cloudSyncStatus: CloudSyncState;
   signInWithGoogle: () => Promise<void>;
@@ -22,8 +23,10 @@ interface AuthContextType {
   createProfileAndStart: (playerName: string, gender: 'male' | 'female') => Promise<void>;
   updateName: (newName: string) => Promise<void>;
   reloadGameState: () => Promise<void>;
+  retryInitialLoad: () => Promise<void>;
   retryCloudSave: () => Promise<boolean>;
-  registerBeforeSignOutSave: (handler: (() => Promise<void>) | null) => void;
+  registerBeforeSignOutSave: (handler: (() => Promise<boolean>) | null) => void;
+  isSignOutInProgress: () => boolean;
   clearAuthError: () => void;
 }
 
@@ -35,14 +38,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [gameState, setGameState] = useState<SavedGameState | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [cloudLoadError, setCloudLoadError] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(false);
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncState>(() => SaveSystem.getSyncStatus());
 
-  const beforeSignOutSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const beforeSignOutSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const signingOutRef = useRef<boolean>(false);
+  const mountedRef = useRef<boolean>(true);
 
-  const registerBeforeSignOutSave = useCallback((handler: (() => Promise<void>) | null) => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const registerBeforeSignOutSave = useCallback((handler: (() => Promise<boolean>) | null) => {
     beforeSignOutSaveRef.current = handler;
   }, []);
+
+  const isSignOutInProgress = useCallback(() => signingOutRef.current, []);
 
   // Subscribe to SaveSystem cloud sync status
   useEffect(() => {
@@ -69,114 +84,134 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  const hydrateUserSession = useCallback(async (firebaseUser: User) => {
+    if (!mountedRef.current) return;
+    setLoading(true);
+    setAuthError(null);
+    setCloudLoadError(null);
+    setProfile(null);
+    setGameState(null);
+
+    try {
+      // 1. Load user profile from users/{uid}
+      const existingProfile = await CloudSaveService.loadUserProfile(firebaseUser.uid);
+      if (!mountedRef.current) return;
+
+      if (existingProfile) {
+        setProfile(existingProfile);
+        CloudSaveService.updateLastLogin(firebaseUser.uid);
+
+        // 2. Load cloud game data AND inspect UID-scoped pending offline queue
+        const cloudState = await CloudSaveService.loadGameState(firebaseUser.uid, existingProfile);
+        if (!mountedRef.current) return;
+
+        const pending = SaveSystem.getPendingSync(firebaseUser.uid);
+        const localCache = SaveSystem.loadGame(firebaseUser.uid);
+
+        if (pending && (!cloudState || pending.state.lastSaved > cloudState.lastSaved)) {
+          // Pending offline/local changes are newer than Firestore: hydrate & flush sequentially!
+          const upgraded = SaveSystem.migrateGameState(
+            {
+              ...pending.state,
+              buildings:
+                pending.state.buildings.length > 0 || !cloudState?.buildings?.length
+                  ? pending.state.buildings
+                  : cloudState.buildings,
+            },
+            existingProfile.playerName,
+            existingProfile.gender
+          );
+          setGameState(upgraded);
+          SaveSystem.queuePendingLocalSave(
+            firebaseUser.uid,
+            upgraded,
+            upgraded.currentZone || 'Central Plaza (Main City)'
+          );
+          await SaveSystem.syncPendingCloudChanges(firebaseUser.uid);
+        } else if (cloudState) {
+          // Cloud is authoritative and up-to-date
+          setGameState(cloudState);
+          SaveSystem.saveGame(cloudState, firebaseUser.uid);
+          if (pending && pending.state.lastSaved <= cloudState.lastSaved) {
+            SaveSystem.clearPendingSync(firebaseUser.uid);
+          }
+        } else if (localCache) {
+          // Profile exists but cloud gameData wasn't written yet: restore local & upload
+          const upgraded = SaveSystem.migrateGameState(
+            localCache,
+            existingProfile.playerName,
+            existingProfile.gender
+          );
+          setGameState(upgraded);
+          await SaveSystem.saveGameWithCloud(
+            firebaseUser.uid,
+            upgraded,
+            upgraded.currentZone || 'Central Plaza (Main City)',
+            true
+          );
+        } else {
+          // Fresh profile with no gameData yet: create initial save once
+          const starter = SaveSystem.getDefaultState(existingProfile.playerName, existingProfile.gender);
+          setGameState(starter);
+          await SaveSystem.saveGameWithCloud(
+            firebaseUser.uid,
+            starter,
+            starter.currentZone || 'Central Plaza (Main City)',
+            true
+          );
+        }
+      } else {
+        // Verified no profile exists yet: new user -> Character Selection
+        setProfile(null);
+        setGameState(null);
+      }
+    } catch (err: any) {
+      console.error('[CloudSave Error] Error fetching player profile/save from Firestore:', err);
+      const local = SaveSystem.loadGame(firebaseUser.uid);
+      const pending = SaveSystem.getPendingSync(firebaseUser.uid);
+      const fallback = pending?.state || local;
+
+      if (fallback && mountedRef.current) {
+        setProfile({
+          uid: firebaseUser.uid,
+          playerName: fallback.player.name,
+          gender: fallback.player.gender,
+          createdAt: new Date(fallback.lastSaved).toISOString(),
+          lastLoginAt: new Date().toISOString(),
+          gameVersion: CURRENT_SAVE_VERSION,
+        });
+        setGameState(fallback);
+        setAuthError(
+          'Cloud ချိတ်ဆက်မှု ယာယီနှောင့်နှေးနေသဖြင့် စက်ထဲရှိ နောက်ဆုံးအချက်အလက်ကို ဖွင့်ပေးထားပါသည်။'
+        );
+      } else if (mountedRef.current) {
+        // CRITICAL: Never silently drop a returning user into CharacterSelectModal / starter defaults on network error!
+        setCloudLoadError(
+          'Cloud Save အချက်အလက်များကို ရယူ၍ မရနိုင်သေးပါ။ မူလအချက်အလက်များ မပျောက်ဆုံးစေရန် ထပ်မံချိတ်ဆက်ပေးပါ။'
+        );
+      }
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
+  }, []);
+
   // Initial connection test & auth listener
   useEffect(() => {
-    let isMounted = true;
-
     testConnection().then((ok) => {
-      if (isMounted) setIsOffline(!ok);
+      if (mountedRef.current) setIsOffline(!ok);
     });
 
     const unsubscribe = onAuthStateChanged(
       auth,
       async (firebaseUser) => {
-        if (!isMounted) return;
+        if (!mountedRef.current) return;
         setAuthError(null);
+        setCloudLoadError(null);
         setUser(firebaseUser);
 
         if (firebaseUser) {
-          setLoading(true);
-          // Reset prior user state before hydrating newly signed-in user
-          setProfile(null);
-          setGameState(null);
-
-          try {
-            // 1. Load user profile from users/{uid}
-            const existingProfile = await CloudSaveService.loadUserProfile(firebaseUser.uid);
-            if (!isMounted) return;
-
-            if (existingProfile) {
-              setProfile(existingProfile);
-              CloudSaveService.updateLastLogin(firebaseUser.uid);
-
-              // 2. Load cloud game data AND inspect UID-scoped pending offline queue
-              const cloudState = await CloudSaveService.loadGameState(firebaseUser.uid, existingProfile);
-              if (!isMounted) return;
-
-              const pending = SaveSystem.getPendingSync(firebaseUser.uid);
-              const localCache = SaveSystem.loadGame(firebaseUser.uid);
-
-              if (pending && (!cloudState || pending.state.lastSaved > cloudState.lastSaved)) {
-                // Pending offline/local changes are newer than Firestore: hydrate with them & flush to cloud!
-                const upgraded = SaveSystem.migrateGameState(
-                  pending.state,
-                  existingProfile.playerName,
-                  existingProfile.gender
-                );
-                setGameState(upgraded);
-                SaveSystem.saveGame(upgraded, firebaseUser.uid);
-                await SaveSystem.syncPendingCloudChanges(firebaseUser.uid);
-              } else if (cloudState) {
-                // Cloud is up-to-date or authoritative
-                setGameState(cloudState);
-                SaveSystem.saveGame(cloudState, firebaseUser.uid);
-                if (pending && pending.state.lastSaved <= cloudState.lastSaved) {
-                  SaveSystem.clearPendingSync(firebaseUser.uid);
-                }
-              } else if (localCache) {
-                // Profile exists but cloud gameData wasn't written yet: restore local & upload
-                const upgraded = SaveSystem.migrateGameState(
-                  localCache,
-                  existingProfile.playerName,
-                  existingProfile.gender
-                );
-                setGameState(upgraded);
-                await SaveSystem.saveGameWithCloud(
-                  firebaseUser.uid,
-                  upgraded,
-                  upgraded.currentZone || 'Central Plaza (Main City)',
-                  true
-                );
-              } else {
-                // Fresh profile with no gameData yet: create initial save once
-                const starter = SaveSystem.getDefaultState(existingProfile.playerName, existingProfile.gender);
-                setGameState(starter);
-                await SaveSystem.saveGameWithCloud(
-                  firebaseUser.uid,
-                  starter,
-                  starter.currentZone || 'Central Plaza (Main City)',
-                  true
-                );
-              }
-            } else {
-              // New user! Needs character selection
-              setProfile(null);
-              setGameState(null);
-            }
-          } catch (err: any) {
-            console.error('[CloudSave Error] Error fetching player profile/save from Firestore:', err);
-            const local = SaveSystem.loadGame(firebaseUser.uid);
-            const pending = SaveSystem.getPendingSync(firebaseUser.uid);
-            const fallback = pending?.state || local;
-            if (fallback && isMounted) {
-              setProfile({
-                uid: firebaseUser.uid,
-                playerName: fallback.player.name,
-                gender: fallback.player.gender,
-                createdAt: new Date(fallback.lastSaved).toISOString(),
-                lastLoginAt: new Date().toISOString(),
-                gameVersion: CURRENT_SAVE_VERSION,
-              });
-              setGameState(fallback);
-              setAuthError('Cloud ချိတ်ဆက်မှု ယာယီနှောင့်နှေးနေသဖြင့် စက်ထဲရှိ နောက်ဆုံးအချက်အလက်ကို ဖွင့်ပေးထားပါသည်။');
-            } else if (isMounted) {
-              setAuthError('Cloud ချိတ်ဆက်မှု မအောင်မြင်ပါ။ အင်တာနက်စစ်ဆေးပြီး ထပ်မံကြိုးစားပါ။');
-            }
-          } finally {
-            if (isMounted) setLoading(false);
-          }
+          await hydrateUserSession(firebaseUser);
         } else {
-          // Logged out
           setProfile(null);
           setGameState(null);
           setLoading(false);
@@ -184,7 +219,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       },
       (err) => {
         console.error('Auth state listener error:', err);
-        if (isMounted) {
+        if (mountedRef.current) {
           setAuthError('Authentication service connection error. Please try again.');
           setLoading(false);
         }
@@ -192,15 +227,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
 
     return () => {
-      isMounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [hydrateUserSession]);
+
+  const retryInitialLoad = useCallback(async () => {
+    if (!auth.currentUser) return;
+    await hydrateUserSession(auth.currentUser);
+  }, [hydrateUserSession]);
 
   // Sign In with Google Popup
   const signInWithGoogle = async () => {
     setLoading(true);
     setAuthError(null);
+    setCloudLoadError(null);
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
@@ -216,25 +256,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Sign Out: MUST flush live game state to Firestore BEFORE revoking auth session!
+  // Sign Out: MUST flush & drain sequential Cloud Save Queue BEFORE revoking auth token!
   const signOutUser = async () => {
+    const activeUid = auth.currentUser?.uid;
+    signingOutRef.current = true;
     setLoading(true);
     try {
       if (beforeSignOutSaveRef.current) {
         try {
-          await beforeSignOutSaveRef.current();
+          const savedOk = await beforeSignOutSaveRef.current();
+          if (!savedOk) {
+            console.warn('[CloudSave Warning] Pre-logout cloud save did not complete cleanly; pending local copy preserved.');
+          }
         } catch (flushErr) {
           console.error('[CloudSave Error] Flush before sign-out failed:', flushErr);
         }
       }
+      if (activeUid) {
+        await SaveSystem.flushQueue(activeUid);
+        SaveSystem.cleanupUidSession(activeUid);
+      }
       await signOut(auth);
       setProfile(null);
       setGameState(null);
+      setCloudLoadError(null);
     } catch (err: any) {
       console.error('Sign out error:', err);
       setAuthError('Could not sign out. Please try again.');
     } finally {
-      setLoading(false);
+      signingOutRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -251,6 +302,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setLoading(true);
     setAuthError(null);
+    setCloudLoadError(null);
 
     try {
       const newProfile = await CloudSaveService.createUserProfile(user.uid, trimmed, gender);
@@ -324,6 +376,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         gameState,
         loading,
         authError,
+        cloudLoadError,
         isOffline,
         cloudSyncStatus,
         signInWithGoogle,
@@ -331,8 +384,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createProfileAndStart,
         updateName,
         reloadGameState,
+        retryInitialLoad,
         retryCloudSave,
         registerBeforeSignOutSave,
+        isSignOutInProgress,
         clearAuthError: () => setAuthError(null),
       }}
     >

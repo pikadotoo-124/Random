@@ -258,4 +258,13 @@ export class ClothingSystem {
       equippedClothing: { ...nextEquipped },
     };
   }
+
+  public static unequipAll(playerProfile: PlayerProfile): ClothingEquipResult {
+    playerProfile.equippedClothing = {};
+    return {
+      ok: true,
+      messageMy: 'ဝတ်စုံအားလုံးကို ချွတ်၍ မူလပုံစံသို့ ပြန်လည်ပြောင်းလဲပြီးပါပြီ',
+      equippedClothing: {},
+    };
+  }
 }

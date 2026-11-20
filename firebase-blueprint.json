@@ -64,7 +64,7 @@
         },
         "equipment": {
           "type": "object",
-          "description": "Currently active tool, ownedClothing array, and equippedClothing outfit map"
+          "description": "Currently active tool, facingDirection, ownedClothing array, and equippedClothing outfit map"
         },
         "playerStats": {
           "type": "object",

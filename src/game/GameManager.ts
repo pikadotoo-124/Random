@@ -21,6 +21,7 @@ import { WorldAtmosphereSystem } from './systems/WorldAtmosphereSystem';
 import {
   BuildingType,
   ClothingEquipmentSlot,
+  FacingDirection,
   PlayerProfile,
   PlayerStats,
   PlayerWorldChanges,
@@ -39,7 +40,7 @@ export class GameManager {
   public networkSystem: NetworkSystem;
   public atmosphereSystem: WorldAtmosphereSystem;
   public playerProfile: PlayerProfile;
-  public initialPosition: { tileX: number; tileY: number };
+  public initialPosition: { tileX: number; tileY: number; facingDirection: FacingDirection };
   public playerStats: PlayerStats;
   public playerWorldChanges: PlayerWorldChanges;
   public hasHydrated = false;
@@ -49,6 +50,7 @@ export class GameManager {
 
   private pendingJoystickVector = { x: 0, y: 0 };
   private pendingUiOverlayOpen = false;
+  private lastMovementCheckpointAt = 0;
 
   constructor(profile?: PlayerProfile, userId?: string, initialState?: SavedGameState) {
     this.userId = userId;
@@ -60,11 +62,15 @@ export class GameManager {
     this.networkSystem = new NetworkSystem();
     this.atmosphereSystem = new WorldAtmosphereSystem();
 
+    // Populate natural resource nodes before validating initial spawn walkability
+    this.resourceSystem.generateResources(this.mapSystem);
+
     const saved = initialState
       ? SaveSystem.migrateGameState(initialState, profile?.name, profile?.gender)
-      : SaveSystem.loadGame(userId);
+      : !userId
+      ? SaveSystem.loadGame(undefined)
+      : null;
 
-    this.initialPosition = saved?.position || { tileX: 30, tileY: 30 };
     if (saved) {
       const resolvedGender = (profile?.gender || saved.player.gender) === 'female' ? 'female' : 'male';
       const ownedClothing = ClothingSystem.normalizeOwnedClothing(
@@ -75,12 +81,16 @@ export class GameManager {
         ownedClothing,
         resolvedGender
       );
+      const facingDirection = SaveSystem.normalizeDirection(
+        saved.position?.facingDirection ?? saved.player?.facingDirection ?? profile?.facingDirection
+      );
 
       this.playerProfile = {
         ...(profile || saved.player),
         gender: resolvedGender,
         coins: saved.inventory.coins,
         currentTool: saved.player.currentTool ?? profile?.currentTool ?? 'axe_basic',
+        facingDirection,
         ownedClothing,
         equippedClothing,
       };
@@ -93,6 +103,15 @@ export class GameManager {
       this.playerWorldChanges = {
         ...SaveSystem.getDefaultWorldChanges(),
         ...(saved.playerWorldChanges || {}),
+      };
+
+      const rawX = saved.position?.tileX ?? 30;
+      const rawY = saved.position?.tileY ?? 30;
+      const safePos = this.mapSystem.findNearestWalkableTile(rawX, rawY);
+      this.initialPosition = {
+        tileX: safePos.snapped ? safePos.tileX : Math.max(0, Math.min(119, rawX)),
+        tileY: safePos.snapped ? safePos.tileY : Math.max(0, Math.min(119, rawY)),
+        facingDirection,
       };
       this.hasHydrated = true;
     } else {
@@ -111,19 +130,19 @@ export class GameManager {
         ownedClothing,
         baseProf.gender
       );
+      const facingDirection = SaveSystem.normalizeDirection(baseProf.facingDirection);
       this.playerProfile = {
         ...baseProf,
+        facingDirection,
         ownedClothing,
         equippedClothing,
       };
       this.inventorySystem.initStarterItems();
       this.playerStats = SaveSystem.getDefaultStats();
       this.playerWorldChanges = SaveSystem.getDefaultWorldChanges();
+      this.initialPosition = { tileX: 30, tileY: 30, facingDirection };
       this.hasHydrated = !userId;
     }
-
-    // Populate natural resource nodes
-    this.resourceSystem.generateResources(this.mapSystem);
   }
 
   public initGame(parentContainerId: string): void {
@@ -323,6 +342,17 @@ export class GameManager {
     return result;
   }
 
+  public unequipAllClothing(): ClothingEquipResult {
+    const result = ClothingSystem.unequipAll(this.playerProfile);
+    if (result.ok && result.equippedClothing) {
+      this.worldScene?.applyEquippedClothing(result.equippedClothing);
+      this.networkSystem.broadcastOutfit(result.equippedClothing);
+      this.onClothingChanged?.();
+      this.saveCurrentState(false);
+    }
+    return result;
+  }
+
   public recordStat(
     key: 'totalGathered' | 'totalCrafted' | 'totalBuilt' | 'totalSoldGold',
     delta = 1
@@ -355,11 +385,14 @@ export class GameManager {
   private buildSnapshot(): { state: SavedGameState; currentZone: string } | null {
     if (!this.worldScene || !this.hasHydrated) return null;
 
-    const tileX = Math.round(this.worldScene.playerTileX);
-    const tileY = Math.round(this.worldScene.playerTileY);
-    const currentZone = this.mapSystem.getZoneAt(tileX, tileY).name;
+    const safePos = this.worldScene.getSafeSavePosition();
+    const tileX = safePos.tileX;
+    const tileY = safePos.tileY;
+    const facingDirection = safePos.facingDirection;
+    const currentZone = this.mapSystem.getZoneAt(Math.round(tileX), Math.round(tileY)).name;
 
     this.recordZoneDiscovered(currentZone);
+    this.playerProfile.facingDirection = facingDirection;
 
     const state: SavedGameState = {
       version: CURRENT_SAVE_VERSION,
@@ -368,10 +401,12 @@ export class GameManager {
       player: {
         ...this.playerProfile,
         coins: this.inventorySystem.coins,
+        facingDirection,
       },
       position: {
         tileX,
         tileY,
+        facingDirection,
       },
       inventory: this.inventorySystem.serialize(),
       buildings: this.buildingSystem.serialize(this.userId, this.playerProfile.name),
@@ -386,6 +421,19 @@ export class GameManager {
   }
 
   /**
+   * Throttled movement checkpoint (saves every 3.5s during sustained travel or immediately on stop/zone change)
+   */
+  public saveMovementCheckpoint(immediate = false): Promise<boolean> {
+    if (!this.hasHydrated || !this.worldScene) return Promise.resolve(false);
+    const now = Date.now();
+    if (!immediate && now - this.lastMovementCheckpointAt < 3500) {
+      return Promise.resolve(false);
+    }
+    this.lastMovementCheckpointAt = now;
+    return this.saveCurrentState(false);
+  }
+
+  /**
    * Synchronously store pending state into UID-scoped localStorage on pagehide/beforeunload
    */
   public flushPendingLocalOnly(): void {
@@ -397,8 +445,23 @@ export class GameManager {
   public saveCurrentState(immediate = false): Promise<boolean> {
     const snap = this.buildSnapshot();
     if (!snap) return Promise.resolve(false);
+    if (immediate) {
+      this.lastMovementCheckpointAt = Date.now();
+    }
 
     return SaveSystem.saveGameWithCloud(this.userId, snap.state, snap.currentZone, immediate);
+  }
+
+  /**
+   * Flush current live state and wait for the entire Cloud Save queue to drain before signing out
+   */
+  public async flushBeforeSignOut(): Promise<boolean> {
+    const ok = await this.saveCurrentState(true);
+    if (this.userId) {
+      const queueOk = await SaveSystem.flushQueue(this.userId);
+      return ok && queueOk;
+    }
+    return ok;
   }
 
   public destroy(): void {
