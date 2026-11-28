@@ -11,11 +11,13 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade & Official Launch API endpoints routed to authoritative GameRoomDO
+    // WebSocket upgrade, Player Save, Session Ban/Announcement check & Admin API endpoints routed to authoritative GameRoomDO
     if (
       url.pathname === '/ws' ||
       url.pathname === '/ws/' ||
+      url.pathname.startsWith('/api/player/') ||
       url.pathname === '/api/launch-status' ||
+      url.pathname === '/api/session/check' ||
       url.pathname.startsWith('/api/admin/')
     ) {
       const id = env.GAME_ROOM.idFromName('random-city-main');

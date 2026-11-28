@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, Axe, Coins, Compass, Fish, Flame, Hammer, MessageCircle, Package, Shirt, Signpost, X } from 'lucide-react';
+import { ArrowRight, Axe, Coins, Compass, Fish, Flame, Hammer, MessageCircle, Package, Shirt, Signpost, Sprout, X } from 'lucide-react';
 import type { FishingHudState } from '../game/scenes/WorldScene';
 import type { MerchantGuideInfo } from '../game/types';
 import { UI_THEME } from './uiTheme';
@@ -95,6 +95,8 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
         return <MessageCircle className="text-pink-400" size={14} />;
       case 'signpost':
         return <Signpost className="text-amber-300" size={14} />;
+      case 'farm_plot':
+        return <Sprout className="text-emerald-400" size={14} />;
       default:
         return <Axe className="text-yellow-400" size={14} />;
     }
@@ -265,8 +267,8 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
                   {fishingState.phase === 'waiting'
                     ? '🌊 ငါးစာစောင့်နေသည်...'
                     : inSweetSpot
-                    ? '✨ ယခုဆွဲတင်ပါ! (×၂ ငါး)'
-                    : '🐟 ငါးကိုက်ပြီ! အချိန်ကိုက်ဆွဲတင်ပါ'}
+                    ? '✨ ယခုဆွဲတင်ပါ! (+၃ ကောင်)'
+                    : '🐟 ငါးကိုက်ပြီ! အစိမ်းရောင်ဇုန်ထဲ ဆွဲတင်ပါ'}
                 </span>
               </div>
               <button
@@ -281,18 +283,22 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
 
             {fishingState.phase === 'bite' ? (
               <>
-                <div className="relative h-5 rounded-lg bg-[#110f0c] border border-[#3e362c] overflow-hidden">
+                <div className="relative h-6 rounded-lg bg-[#110f0c] border border-[#3e362c] overflow-hidden">
                   <div
                     style={{
                       left: `${fishingState.sweetMin * 100}%`,
                       width: `${(fishingState.sweetMax - fishingState.sweetMin) * 100}%`,
                     }}
-                    className="absolute inset-y-0 bg-emerald-500/35 border-x border-emerald-400"
+                    className={`absolute inset-y-0 border-x-2 transition-colors ${
+                      inSweetSpot
+                        ? 'bg-emerald-500/55 border-emerald-300 shadow-inner'
+                        : 'bg-emerald-500/35 border-emerald-400'
+                    }`}
                   />
                   <div
                     style={{ left: `${fishingState.cursorPos * 100}%` }}
-                    className={`absolute top-0 bottom-0 w-1.5 -translate-x-1/2 rounded-full shadow ${
-                      inSweetSpot ? 'bg-yellow-300 shadow-yellow-300/80' : 'bg-white'
+                    className={`absolute top-0 bottom-0 w-2 -translate-x-1/2 rounded-full shadow ${
+                      inSweetSpot ? 'bg-yellow-300 shadow-yellow-300/90' : 'bg-white'
                     }`}
                   />
                 </div>
@@ -307,9 +313,9 @@ export const ActionPromptHUD: React.FC<ActionPromptHUDProps> = ({
                 <button
                   type="button"
                   onClick={onCatchFishing}
-                  className={`w-full py-2 min-h-[38px] rounded-xl text-xs font-bold ${UI_THEME.primaryGreenBtn}`}
+                  className={`w-full py-2.5 min-h-[42px] rounded-xl text-xs font-bold ${UI_THEME.primaryGreenBtn}`}
                 >
-                  🎣 ဆွဲတင်မည် {isTouchMode ? '' : '[E]'}
+                  🎣 {inSweetSpot ? 'ယခုဆွဲတင်မည်! (+၃ ငါး)' : 'ဆွဲတင်မည်'} {isTouchMode ? '' : '[E]'}
                 </button>
               </>
             ) : (

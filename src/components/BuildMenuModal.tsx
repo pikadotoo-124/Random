@@ -121,7 +121,7 @@ export const BuildMenuModal: React.FC<BuildMenuModalProps> = ({
   ];
 
   const handleStartPlacement = (itemType: BuildingType, mats: any[]) => {
-    if (!inventory.hasItem(itemType, 1)) {
+    if (itemType !== 'fence_wood' && !inventory.hasItem(itemType, 1)) {
       const hasAllMats = mats.every((m) => inventory.getItemCount(m.itemId) >= m.count);
       if (hasAllMats) {
         for (const m of mats) {
@@ -170,7 +170,7 @@ export const BuildMenuModal: React.FC<BuildMenuModalProps> = ({
         <div className="p-4 sm:p-6 overflow-y-auto space-y-3">
           <div className="text-xs text-emerald-200/95 bg-emerald-950/45 border border-emerald-700/45 rounded-xl px-3.5 py-2.5 leading-relaxed">
             🏡 <strong>ဆောက်လုပ်နိုင်သော ဇုန် (Homestead District — X: 40–114, Y: 40–114):</strong>{' '}
-            အိမ်နှင့် ခြံစည်းရိုးများကို သတ်မှတ်ထားသော အိမ်ရာဇုန်အတွင်း မြေလွတ်နေရာများတွင်သာ ဆောက်လုပ်နိုင်ပါသည် (မြို့လယ်၊ လမ်းမ၊ ရေပြင်နှင့် စိုက်ခင်းများပေါ်တွင် မဆောက်နိုင်ပါ)။
+            အိမ်နှင့် ခြံစည်းရိုးများကို သတ်မှတ်ထားသော အိမ်ရာဇုန်အတွင်း မြေလွတ်နေရာများတွင်သာ ဆောက်လုပ်နိုင်ပါသည် (မြို့လယ်၊ လမ်းမ၊ ရေပြင်နှင့် အများပိုင်လမ်းများပေါ်တွင် မဆောက်နိုင်ပါ)။ 🌾 မိမိဝယ်ယူပိုင်ဆိုင်ထားသော စိုက်ပျိုးမြေကွက်များအတွင်း၌လည်း <strong>သစ်သားခြံစည်းရိုး</strong> ကာရံနိုင်ပါသည်။
           </div>
 
           {ownedDecorItems.length > 0 && (
@@ -276,7 +276,13 @@ export const BuildMenuModal: React.FC<BuildMenuModalProps> = ({
                       isReady ? UI_THEME.primaryGreenBtn : UI_THEME.disabledBtn
                     }`}
                   >
-                    <span>{inBagCount > 0 ? 'အိတ်ထဲမှ နေရာချမည်' : 'ဖန်တီး၍ နေရာချမည်'}</span>
+                    <span>
+                      {bp.type === 'fence_wood'
+                        ? 'ဆက်တိုက် နေရာချမည်'
+                        : inBagCount > 0
+                        ? 'အိတ်ထဲမှ နေရာချမည်'
+                        : 'ဖန်တီး၍ နေရာချမည်'}
+                    </span>
                     <ArrowRight size={14} />
                   </button>
                 </div>

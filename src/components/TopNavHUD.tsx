@@ -18,6 +18,7 @@ import {
   Minus,
   Plus,
   Settings,
+  Shield,
   RefreshCw,
 } from 'lucide-react';
 import { PlayerProfile } from '../game/types';
@@ -31,7 +32,7 @@ interface TopNavHUDProps {
   coins: number;
   currentZone: string;
   coords: { x: number; y: number };
-  onOpenModal: (modal: 'inventory' | 'crafting' | 'shop' | 'building' | 'map' | 'settings') => void;
+  onOpenModal: (modal: 'inventory' | 'crafting' | 'shop' | 'building' | 'map' | 'settings' | 'admin') => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   isBuildMode: boolean;
@@ -45,6 +46,7 @@ interface TopNavHUDProps {
   unreadChatCount?: number;
   onToggleChat?: () => void;
   atmosphere?: AtmosphereSnapshot | null;
+  isVerifiedOwner?: boolean;
 }
 
 export const TopNavHUD: React.FC<TopNavHUDProps> = ({
@@ -66,6 +68,7 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
   unreadChatCount = 0,
   onToggleChat,
   atmosphere = null,
+  isVerifiedOwner = false,
 }) => {
   const stopProp = (e: React.SyntheticEvent) => {
     e.stopPropagation();
@@ -351,6 +354,19 @@ export const TopNavHUD: React.FC<TopNavHUDProps> = ({
                 )}
               </div>
               <span className="hidden lg:inline">စကားပြော [T]</span>
+            </button>
+          )}
+
+          {isVerifiedOwner && (
+            <button
+              type="button"
+              onClick={() => onOpenModal('admin')}
+              aria-label="Admin Panel"
+              title="Owner Admin Panel"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/35 hover:bg-amber-500/25 transition cursor-pointer"
+            >
+              <Shield size={14} className="shrink-0" />
+              <span className="hidden lg:inline">Admin</span>
             </button>
           )}
 

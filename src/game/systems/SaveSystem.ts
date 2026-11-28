@@ -4,7 +4,12 @@
  */
 
 import { auth } from '../../firebase/config';
-import { CloudSaveService } from '../../firebase/cloudSaveService';
+import {
+  CloudSaveAuthoritativeEconomy,
+  CloudSaveRequestError,
+  CloudSaveService,
+  CloudSaveWriteResult,
+} from '../../firebase/cloudSaveService';
 import { STARTER_TOOLS, isStarterTool } from '../constants';
 import {
   FacingDirection,
@@ -44,22 +49,26 @@ export interface SavedGameState {
 }
 
 const STORAGE_KEY_DEFAULT = 'random_city_save_v1';
-const DEBOUNCE_SAVE_MS = 450;
+const DEBOUNCE_SAVE_MS = 2000;
+const MIN_CLOUD_SYNC_INTERVAL_MS = 2500;
 const MAX_AUTO_RETRIES = 5;
 const RETRY_BASE_DELAY_MS = 2500;
 const RETRY_MAX_DELAY_MS = 30000;
 
 type SyncListener = (state: CloudSyncState) => void;
+type EconomyReconcileListener = (uid: string, economy: CloudSaveAuthoritativeEconomy) => void;
 
 type CloudWriteAdapter = (
   uid: string,
   state: SavedGameState,
-  currentZone: string
-) => Promise<boolean>;
+  currentZone: string,
+  options?: { saveId?: string; expectedRevision?: number }
+) => Promise<boolean | CloudSaveWriteResult>;
 
 interface QueuedSavePayload {
   state: SavedGameState;
   currentZone: string;
+  saveId: string;
   resolvers: Array<(ok: boolean) => void>;
 }
 
@@ -70,14 +79,17 @@ interface UidSaveQueue {
   retryAttempt: number;
   queued: QueuedSavePayload | null;
   lastMonotonicTs: number;
+  lastCloudAttemptAt: number;
+  knownSaveRevision?: number;
 }
 
 export class SaveSystem {
   private static uidQueues = new Map<string, UidSaveQueue>();
   private static syncListeners: Set<SyncListener> = new Set();
+  private static economyListeners: Set<EconomyReconcileListener> = new Set();
   private static currentSyncState: CloudSyncState = { status: 'idle' };
 
-  // Testable hooks (default strictly to Firebase Auth & Firestore in production)
+  // Testable hooks (default strictly to Firebase Auth & Backend Save API in production)
   private static cloudWriterOverride: CloudWriteAdapter | null = null;
   private static authUidCheckOverride: ((uid: string) => boolean) | null = null;
   private static onlineCheckOverride: (() => boolean) | null = null;
@@ -115,10 +127,26 @@ export class SaveSystem {
         retryAttempt: 0,
         queued: null,
         lastMonotonicTs: 0,
+        lastCloudAttemptAt: 0,
       };
       this.uidQueues.set(uid, q);
     }
     return q;
+  }
+
+  public static setKnownSaveRevision(uid?: string, revision?: number | null): void {
+    if (!uid) return;
+    const q = this.getQueue(uid);
+    if (typeof revision === 'number' && Number.isInteger(revision) && revision >= 0) {
+      q.knownSaveRevision = revision;
+    } else if (revision === null) {
+      q.knownSaveRevision = undefined;
+    }
+  }
+
+  public static getKnownSaveRevision(uid?: string): number | undefined {
+    if (!uid) return undefined;
+    return this.uidQueues.get(uid)?.knownSaveRevision;
   }
 
   private static nextMonotonicTimestamp(uid: string, candidate?: number): number {
@@ -137,6 +165,13 @@ export class SaveSystem {
     };
   }
 
+  public static subscribeEconomyReconciled(listener: EconomyReconcileListener): () => void {
+    this.economyListeners.add(listener);
+    return () => {
+      this.economyListeners.delete(listener);
+    };
+  }
+
   public static getSyncStatus(): CloudSyncState {
     return this.currentSyncState;
   }
@@ -146,6 +181,53 @@ export class SaveSystem {
     for (const l of this.syncListeners) {
       try {
         l(next);
+      } catch {
+        // Ignore subscriber error
+      }
+    }
+  }
+
+  private static generateSaveId(uid: string, ts: number): string {
+    return `save_${uid.slice(0, 10)}_${ts}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private static reconcileLocalEconomyCache(
+    uid: string,
+    economy: CloudSaveAuthoritativeEconomy
+  ): void {
+    if (typeof localStorage !== 'undefined') {
+      const local = this.loadGame(uid);
+      if (local) {
+        const cleanOwned = ClothingSystem.normalizeOwnedClothing(economy.ownedClothing);
+        const reconciled: SavedGameState = {
+          ...local,
+          player: {
+            ...local.player,
+            coins: Math.max(0, Math.round(economy.gold)),
+            ownedClothing: cleanOwned,
+            equippedClothing: ClothingSystem.normalizeEquippedClothing(
+              local.player.equippedClothing,
+              cleanOwned,
+              local.player.gender
+            ),
+          },
+          inventory: {
+            slots: Array.isArray(economy.inventorySlots)
+              ? (economy.inventorySlots as InventorySlot[]).map((s) => ({
+                  item: s.item,
+                  quantity: s.quantity,
+                }))
+              : local.inventory.slots,
+            coins: Math.max(0, Math.round(economy.gold)),
+          },
+        };
+        this.saveGame(reconciled, uid);
+      }
+    }
+
+    for (const listener of this.economyListeners) {
+      try {
+        listener(uid, economy);
       } catch {
         // Ignore subscriber error
       }
@@ -272,12 +354,22 @@ export class SaveSystem {
       typeof worldChangesRaw?.resetEpoch === 'string' && worldChangesRaw.resetEpoch.trim().length > 0
         ? worldChangesRaw.resetEpoch.trim().slice(0, 64)
         : undefined;
+    const ownedFarmPlots: string[] | undefined = Array.isArray(worldChangesRaw?.ownedFarmPlots)
+      ? Array.from(
+          new Set<string>(
+            worldChangesRaw.ownedFarmPlots.filter(
+              (pid: unknown): pid is string => typeof pid === 'string' && pid.trim().length > 0
+            )
+          )
+        )
+      : undefined;
     const worldChanges: PlayerWorldChanges = {
       tutorialCompleted: Boolean(worldChangesRaw?.tutorialCompleted),
       discoveredZones: Array.isArray(worldChangesRaw?.discoveredZones)
         ? Array.from(new Set(worldChangesRaw.discoveredZones.filter((z: any) => typeof z === 'string')))
         : ['Central Plaza (Main City)'],
       ...(resetEpoch ? { resetEpoch } : {}),
+      ...(ownedFarmPlots && ownedFarmPlots.length > 0 ? { ownedFarmPlots } : {}),
     };
 
     const ownedClothing = ClothingSystem.normalizeOwnedClothing(raw.player?.ownedClothing);
@@ -380,7 +472,7 @@ export class SaveSystem {
 
   public static getPendingSync(
     uid?: string
-  ): { uid: string; state: SavedGameState; currentZone: string; time: number } | null {
+  ): { uid: string; state: SavedGameState; currentZone: string; time: number; saveId?: string } | null {
     if (!uid || typeof localStorage === 'undefined') return null;
     try {
       const raw = localStorage.getItem(this.getPendingSyncKey(uid));
@@ -393,6 +485,7 @@ export class SaveSystem {
         state: this.migrateGameState(parsed.state, parsed.state?.player?.name, fallbackGender),
         currentZone: parsed.currentZone || parsed.state.currentZone || 'Central Plaza (Main City)',
         time: parsed.time || parsed.state.lastSaved || Date.now(),
+        saveId: typeof parsed.saveId === 'string' ? parsed.saveId : undefined,
       };
     } catch {
       return null;
@@ -451,6 +544,7 @@ export class SaveSystem {
     const q = this.uidQueues.get(uid);
     if (!q) return;
     this.cancelPendingTimers(uid);
+    q.knownSaveRevision = undefined;
     if (q.queued) {
       for (const r of q.queued.resolvers) r(false);
       q.queued = null;
@@ -463,7 +557,8 @@ export class SaveSystem {
   public static queuePendingLocalSave(
     uid: string | null | undefined,
     state: SavedGameState,
-    currentZone = 'Central Plaza (Main City)'
+    currentZone = 'Central Plaza (Main City)',
+    saveIdOverride?: string
   ): SavedGameState {
     const ts = uid ? this.nextMonotonicTimestamp(uid, state.lastSaved) : state.lastSaved || Date.now();
     const normalized = this.migrateGameState(
@@ -474,9 +569,10 @@ export class SaveSystem {
     this.saveGame(normalized, uid || undefined);
     if (!uid || typeof localStorage === 'undefined') return normalized;
     try {
+      const saveId = saveIdOverride || this.generateSaveId(uid, ts);
       localStorage.setItem(
         this.getPendingSyncKey(uid),
-        JSON.stringify({ uid, state: normalized, currentZone, time: Date.now() })
+        JSON.stringify({ uid, state: normalized, currentZone, time: Date.now(), saveId })
       );
     } catch (e) {
       console.error('[SaveSystem Error] Failed to queue pending cloud sync:', e);
@@ -497,15 +593,16 @@ export class SaveSystem {
     return rawMsg;
   }
 
-  private static scheduleAutoRetry(uid: string): void {
+  private static scheduleAutoRetry(uid: string, minDelayMs = 0): void {
     const q = this.getQueue(uid);
     if (q.retryTimer || q.retryAttempt >= MAX_AUTO_RETRIES) return;
     if (!this.isCloudAuthorized(uid) || !this.hasPendingSync(uid)) return;
 
-    const delay = Math.min(
+    const expDelay = Math.min(
       RETRY_BASE_DELAY_MS * Math.pow(2, q.retryAttempt),
       RETRY_MAX_DELAY_MS
     );
+    const delay = Math.max(expDelay, minDelayMs);
     q.retryAttempt += 1;
 
     q.retryTimer = setTimeout(() => {
@@ -561,13 +658,21 @@ export class SaveSystem {
             lastSyncedAt: this.currentSyncState.lastSyncedAt,
           });
 
-          try {
-            const writer: CloudWriteAdapter =
-              this.cloudWriterOverride ||
-              ((targetUid, targetState, zone) =>
-                CloudSaveService.saveGameState(targetUid, targetState, zone));
-
-            await writer(uid, batch.state, batch.currentZone);
+          q.lastCloudAttemptAt = Date.now();
+          const sentExpectedRevision = q.knownSaveRevision;
+          const finalizeWriteSuccess = (writeResult: boolean | CloudSaveWriteResult) => {
+            if (writeResult && typeof writeResult === 'object') {
+              if (
+                typeof writeResult.saveRevision === 'number' &&
+                Number.isInteger(writeResult.saveRevision) &&
+                writeResult.saveRevision >= 0
+              ) {
+                q.knownSaveRevision = writeResult.saveRevision;
+              }
+              if (writeResult.authoritativeEconomy) {
+                this.reconcileLocalEconomyCache(uid, writeResult.authoritativeEconomy);
+              }
+            }
 
             // Check whether a newer mutation arrived while this write was in flight
             const latestPending = this.getPendingSync(uid);
@@ -593,22 +698,110 @@ export class SaveSystem {
 
             for (const resolve of batch.resolvers) resolve(true);
             lastOutcome = true;
-          } catch (err: any) {
-            const msg = this.formatCloudError(err);
-            console.error('[CloudSave Error] Sequential Firestore write failed; local queue preserved:', msg, err);
+          };
+
+          try {
+            const writer: CloudWriteAdapter =
+              this.cloudWriterOverride ||
+              ((targetUid, targetState, zone, opts) =>
+                CloudSaveService.saveGameState(targetUid, targetState, zone, {
+                  saveId: opts?.saveId,
+                  expectedRevision: opts?.expectedRevision,
+                }));
+
+            const writeResult = await writer(uid, batch.state, batch.currentZone, {
+              saveId: batch.saveId,
+              expectedRevision: sentExpectedRevision,
+            });
+            finalizeWriteSuccess(writeResult);
+          } catch (firstErr: any) {
+            let activeErr = firstErr;
+            const canResyncAfterServerReset =
+              firstErr instanceof CloudSaveRequestError &&
+              firstErr.code === 'SAVE_REVISION_CONFLICT' &&
+              typeof sentExpectedRevision === 'number' &&
+              typeof firstErr.saveRevision === 'number' &&
+              Number.isInteger(firstErr.saveRevision) &&
+              firstErr.saveRevision >= 0 &&
+              sentExpectedRevision > firstErr.saveRevision;
+
+            if (canResyncAfterServerReset) {
+              q.knownSaveRevision = firstErr.saveRevision;
+              if (firstErr.authoritativeEconomy) {
+                this.reconcileLocalEconomyCache(uid, firstErr.authoritativeEconomy);
+              }
+              try {
+                const writer: CloudWriteAdapter =
+                  this.cloudWriterOverride ||
+                  ((targetUid, targetState, zone, opts) =>
+                    CloudSaveService.saveGameState(targetUid, targetState, zone, {
+                      saveId: opts?.saveId,
+                      expectedRevision: opts?.expectedRevision,
+                    }));
+                const retryResult = await writer(uid, batch.state, batch.currentZone, {
+                  saveId: batch.saveId,
+                  expectedRevision: firstErr.saveRevision,
+                });
+                finalizeWriteSuccess(retryResult);
+                continue;
+              } catch (retryErr: any) {
+                activeErr = retryErr;
+              }
+            }
+
+            const msg = this.formatCloudError(activeErr);
+            const isRateLimited =
+              activeErr instanceof CloudSaveRequestError &&
+              (activeErr.status === 429 || activeErr.code === 'RATE_LIMITED');
+            const isRevisionOrStaleConflict =
+              activeErr instanceof CloudSaveRequestError &&
+              (activeErr.code === 'STALE_SAVE' || activeErr.code === 'SAVE_REVISION_CONFLICT');
+
+            if (isRateLimited) {
+              console.warn('[CloudSave RateLimit] Cloud save throttled; local queue preserved and backing off:', msg);
+            } else if (isRevisionOrStaleConflict) {
+              console.warn('[CloudSave Conflict] Newer save detected on server; synced revision:', msg);
+            } else {
+              console.error('[CloudSave Error] Sequential backend cloud save failed; local queue preserved:', msg, activeErr);
+            }
+
+            if (activeErr instanceof CloudSaveRequestError) {
+              if (
+                typeof activeErr.saveRevision === 'number' &&
+                Number.isInteger(activeErr.saveRevision) &&
+                activeErr.saveRevision >= 0
+              ) {
+                q.knownSaveRevision = activeErr.saveRevision;
+              }
+              if (activeErr.authoritativeEconomy) {
+                this.reconcileLocalEconomyCache(uid, activeErr.authoritativeEconomy);
+              }
+              if (isRevisionOrStaleConflict && !q.queued) {
+                this.clearPendingSync(uid);
+              }
+            }
 
             const isOfflineErr =
-              !this.isNetworkOnline() || /offline|network|unavailable|timeout/i.test(msg);
+              isRateLimited ||
+              !this.isNetworkOnline() ||
+              /offline|network|unavailable|timeout/i.test(msg);
+            const isRetryable =
+              activeErr instanceof CloudSaveRequestError ? activeErr.retryable : true;
 
             this.setSyncStatus({
               status: isOfflineErr ? 'pending_offline' : 'error',
               lastSyncedAt: this.currentSyncState.lastSyncedAt,
-              errorMessage: msg,
+              errorMessage: isRateLimited
+                ? 'Cloud sync paused briefly — saved locally.'
+                : msg,
             });
 
-            // Preserve snapshot on localStorage pending queue (it is already written, ensure latest survives)
-            if (!q.queued) {
-              this.scheduleAutoRetry(uid);
+            // Preserve snapshot on localStorage pending queue and retry only on transient failures
+            if (!q.queued && isRetryable) {
+              const minDelayMs = isRateLimited
+                ? Math.max(5000, ((activeErr as CloudSaveRequestError).retryAfterSeconds ?? 5) * 1000)
+                : 0;
+              this.scheduleAutoRetry(uid, minDelayMs);
             }
 
             for (const resolve of batch.resolvers) resolve(false);
@@ -634,9 +827,9 @@ export class SaveSystem {
   }
 
   /**
-   * Save game state locally immediately and coalesce/serialize cloud saves to Firestore.
+   * Save game state locally immediately and coalesce/serialize cloud saves via backend API.
    * NOTE: Repeated non-immediate calls update the queued snapshot WITHOUT resetting/starving
-   * an already-armed debounce timer, guaranteeing sustained movement never cancels inventory saves!
+   * an already-armed debounce timer, guaranteeing sustained movement never cancels saves!
    */
   public static saveGameWithCloud(
     uid: string | null | undefined,
@@ -644,8 +837,9 @@ export class SaveSystem {
     currentZone = 'Central Plaza (Main City)',
     immediate = false
   ): Promise<boolean> {
+    const provisionalSaveId = uid ? this.generateSaveId(uid, state.lastSaved || Date.now()) : '';
     // 1. Instant UID-scoped local persistence & pending queue
-    const normalized = this.queuePendingLocalSave(uid, state, currentZone);
+    const normalized = this.queuePendingLocalSave(uid, state, currentZone, provisionalSaveId);
 
     if (!uid) return Promise.resolve(false);
 
@@ -659,11 +853,13 @@ export class SaveSystem {
       if (q.queued) {
         q.queued.state = normalized;
         q.queued.currentZone = currentZone;
+        q.queued.saveId = provisionalSaveId;
         q.queued.resolvers.push(resolve);
       } else {
         q.queued = {
           state: normalized,
           currentZone,
+          saveId: provisionalSaveId,
           resolvers: [resolve],
         };
       }
@@ -679,10 +875,12 @@ export class SaveSystem {
 
       // Do NOT clear/delay an already-pending debounceTimer so continuous walking cannot starve saves
       if (!q.debounceTimer) {
+        const sinceLast = q.lastCloudAttemptAt > 0 ? Date.now() - q.lastCloudAttemptAt : MIN_CLOUD_SYNC_INTERVAL_MS;
+        const delayMs = Math.max(DEBOUNCE_SAVE_MS, MIN_CLOUD_SYNC_INTERVAL_MS - sinceLast);
         q.debounceTimer = setTimeout(() => {
           q.debounceTimer = null;
           this.drainQueue(uid);
-        }, DEBOUNCE_SAVE_MS);
+        }, delayMs);
       }
     });
   }
@@ -739,17 +937,20 @@ export class SaveSystem {
     }
 
     const q = this.getQueue(uid);
+    const pendingSaveId = pending.saveId || this.generateSaveId(uid, pending.state.lastSaved);
     return new Promise<boolean>((resolve) => {
       if (q.queued) {
         if (pending.state.lastSaved > q.queued.state.lastSaved) {
           q.queued.state = pending.state;
           q.queued.currentZone = pending.currentZone;
+          q.queued.saveId = pendingSaveId;
         }
         q.queued.resolvers.push(resolve);
       } else {
         q.queued = {
           state: pending.state,
           currentZone: pending.currentZone,
+          saveId: pendingSaveId,
           resolvers: [resolve],
         };
       }

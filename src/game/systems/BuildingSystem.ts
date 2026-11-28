@@ -3,16 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BuildingType, FenceRotation, PlacedBuilding } from '../types';
+import { BuildingType, FarmPlotOwnersMap, FenceRotation, PlacedBuilding } from '../types';
+import { isTileInsideFarmPlot } from './FarmPlotOwnershipSystem';
 import { InventorySystem } from './InventorySystem';
+import {
+  canOwnerModifyBuilding,
+  validateServerOrClientBuild,
+} from './LandOwnershipSystem';
 import { MapSystem } from './MapSystem';
 
 export class BuildingSystem {
   public buildings: PlacedBuilding[];
+  public farmPlotOwners: FarmPlotOwnersMap = {};
   public onUpdate?: () => void;
 
   constructor() {
     this.buildings = [];
+  }
+
+  public setFarmPlotOwners(owners: FarmPlotOwnersMap): void {
+    this.farmPlotOwners = owners ? { ...owners } : {};
   }
 
   public static getFootprint(type: BuildingType): { width: number; height: number } {
@@ -43,10 +53,9 @@ export class BuildingSystem {
     if (b.ownerId) {
       return b.ownerId === uid;
     }
-    // Legacy save compatibility (before ownerId existed)
+    // Legacy save compatibility (before ownerId existed) — never allow strangers to claim
     if (b.placedBy === uid) return true;
     if (playerName && b.placedBy === playerName) return true;
-    // If neither matches and no ownerId, keep if not explicitly owned by someone else
     return false;
   }
 
@@ -66,7 +75,8 @@ export class BuildingSystem {
     remotePlayers?: Array<{ x: number; y: number }>,
     npcs?: Array<{ tileX: number; tileY: number }>,
     resourceNodes?: Array<{ tileX: number; tileY: number }>,
-    excludeBuildingId?: string
+    excludeBuildingId?: string,
+    options?: { ownerId?: string; checkLandOwnership?: boolean }
   ): { valid: boolean; reason?: string } {
     const { width, height } = BuildingSystem.getFootprint(type);
 
@@ -75,10 +85,29 @@ export class BuildingSystem {
         const tx = tileX + dx;
         const ty = tileY + dy;
 
-        // 1. Check map boundaries & designated Buildable Zone (Homestead District, roads, water, farmland, town center)
-        const zoneCheck = mapSystem.isTileInBuildableZone(tx, ty);
-        if (!zoneCheck.allowed) {
-          return { valid: false, reason: zoneCheck.reason };
+        // 1. Check map boundaries & designated Buildable Zone (or Farm Plot fence exception)
+        if (isTileInsideFarmPlot(tx, ty)) {
+          if (type !== 'fence_wood') {
+            return {
+              valid: false,
+              reason: 'စိုက်ပျိုးမြေကွက်ပေါ်တွင် သစ်သားခြံစည်းရိုး (Fence) ကိုသာ ဆောက်လုပ်နိုင်ပါသည်',
+            };
+          }
+          if (!mapSystem.isTileInBounds(tx, ty)) {
+            return { valid: false, reason: 'မြေပုံနယ်နိမိတ်ပြင်ပ ဖြစ်နေပါသည် (Out of bounds)' };
+          }
+          const tile = mapSystem.tiles[ty]?.[tx];
+          if (tile === 'water' || tile === 'bridge' || tile === 'cliff') {
+            return { valid: false, reason: 'ရေပြင်၊ တံတား (သို့) ကျောက်ဆောင်ပေါ်တွင် ဆောက်လုပ်၍မရပါ' };
+          }
+          if (mapSystem.protectedPropTiles.has(`${tx}_${ty}`)) {
+            return { valid: false, reason: 'ရွာပိုင်ပစ္စည်းများ ရှိနေသောနေရာတွင် ဆောက်လုပ်၍မရပါ' };
+          }
+        } else {
+          const zoneCheck = mapSystem.isTileInBuildableZone(tx, ty);
+          if (!zoneCheck.allowed) {
+            return { valid: false, reason: zoneCheck.reason };
+          }
         }
 
         // 2. Check if Player is currently standing on the footprint (Prevent self-trapping bug!)
@@ -130,6 +159,19 @@ export class BuildingSystem {
       }
     }
 
+    if (options?.checkLandOwnership !== false && options?.ownerId) {
+      const ownershipCheck = validateServerOrClientBuild(
+        this.buildings,
+        { id: excludeBuildingId, type, tileX, tileY },
+        options.ownerId,
+        mapSystem,
+        { excludeBuildingId, farmPlotOwners: this.farmPlotOwners }
+      );
+      if (!ownershipCheck.allowed) {
+        return { valid: false, reason: ownershipCheck.reason };
+      }
+    }
+
     return { valid: true };
   }
 
@@ -158,7 +200,9 @@ export class BuildingSystem {
       playerPos,
       remotePlayers,
       npcs,
-      resourceNodes
+      resourceNodes,
+      undefined,
+      { ownerId: ownerId || playerName, checkLandOwnership: true }
     );
     if (!check.valid) return null;
 
@@ -215,10 +259,15 @@ export class BuildingSystem {
     remotePlayers?: Array<{ x: number; y: number }>,
     npcs?: Array<{ tileX: number; tileY: number }>,
     resourceNodes?: Array<{ tileX: number; tileY: number }>,
-    newRotation?: FenceRotation
+    newRotation?: FenceRotation,
+    requesterUid?: string
   ): PlacedBuilding | null {
     const building = this.buildings.find((b) => b.id === id);
     if (!building) return null;
+
+    if (requesterUid && !canOwnerModifyBuilding(building, requesterUid)) {
+      return null;
+    }
 
     // Validate new location
     const check = this.canPlaceBuilding(
@@ -230,7 +279,8 @@ export class BuildingSystem {
       remotePlayers,
       npcs,
       resourceNodes,
-      id
+      id,
+      { ownerId: requesterUid || building.ownerId || building.placedBy, checkLandOwnership: true }
     );
     if (!check.valid) return null;
 

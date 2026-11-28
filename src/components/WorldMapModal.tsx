@@ -5,9 +5,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Compass, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { ZONE_SIGNPOSTS } from '../game/constants';
+import { FARM_PLOTS, ZONE_SIGNPOSTS } from '../game/constants';
 import { MapSystem } from '../game/systems/MapSystem';
-import { PlacedBuilding, ResourceNode } from '../game/types';
+import { FarmPlotOwnersMap, PlacedBuilding, ResourceNode } from '../game/types';
 import { UI_THEME } from './uiTheme';
 
 interface WorldMapModalProps {
@@ -15,6 +15,8 @@ interface WorldMapModalProps {
   currentZone: string;
   mapSystem: MapSystem;
   placedBuildings?: PlacedBuilding[];
+  farmPlotOwners?: FarmPlotOwnersMap;
+  currentUserId?: string;
   resourceNodes?: ResourceNode[];
   onlinePlayers?: Array<{ id: string; name: string; tileX: number; tileY: number }>;
   onClose: () => void;
@@ -27,6 +29,8 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
   currentZone,
   mapSystem,
   placedBuildings = [],
+  farmPlotOwners = {},
+  currentUserId,
   resourceNodes = [],
   onlinePlayers = [],
   onClose,
@@ -100,6 +104,20 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
     ctx.strokeRect(40 * scale, 40 * scale, 75 * scale, 75 * scale);
     ctx.setLineDash([]);
 
+    // Farming District Plot ownership markers
+    for (const plot of FARM_PLOTS) {
+      const owner = farmPlotOwners[plot.id];
+      const isMine = Boolean(owner && currentUserId && owner.ownerId === currentUserId);
+      ctx.strokeStyle = isMine ? '#22c55e' : owner ? '#38bdf8' : 'rgba(245, 158, 11, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        plot.bounds.minX * scale,
+        plot.bounds.minY * scale,
+        (plot.bounds.maxX - plot.bounds.minX + 1) * scale,
+        (plot.bounds.maxY - plot.bounds.minY + 1) * scale
+      );
+    }
+
     // Active fishing spots
     for (const node of resourceNodes) {
       if (node.type !== 'lake_fish') continue;
@@ -154,7 +172,7 @@ export const WorldMapModal: React.FC<WorldMapModalProps> = ({
       ctx.lineWidth = 1.2;
       ctx.stroke();
     }
-  }, [mapSystem, placedBuildings, resourceNodes, onlinePlayers]);
+  }, [mapSystem, placedBuildings, farmPlotOwners, currentUserId, resourceNodes, onlinePlayers]);
 
   const clampPan = (nx: number, ny: number, targetZoom: number) => {
     const maxOffset = Math.max(0, (targetZoom - 1) * 160);

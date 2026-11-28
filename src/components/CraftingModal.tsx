@@ -16,6 +16,7 @@ interface CraftingModalProps {
   inventory: InventorySystem;
   isNearWorkbench: boolean;
   isNearCampfire: boolean;
+  onCraftRecipe?: (recipeId: string) => Promise<{ ok: boolean; reason?: string }>;
   onCrafted?: () => void;
   onGuideToCraftStation?: () => void;
   onClose: () => void;
@@ -26,6 +27,7 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
   inventory,
   isNearWorkbench,
   isNearCampfire,
+  onCraftRecipe,
   onCrafted,
   onGuideToCraftStation,
   onClose,
@@ -36,6 +38,8 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
       ? craftingSystem.recipes[1].id
       : craftingSystem.recipes[0].id;
   const [selectedRecipeId, setSelectedRecipeId] = useState<string>(initialRecipeId);
+  const [isCraftingPending, setIsCraftingPending] = useState(false);
+  const [craftFeedback, setCraftFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const selectedRecipe =
     craftingSystem.recipes.find((r) => r.id === selectedRecipeId) || craftingSystem.recipes[0];
@@ -47,9 +51,33 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
     isNearWorkbench,
     isNearCampfire,
   );
+  const canFitResult = inventory.canFitItem(selectedRecipe.resultItem, selectedRecipe.resultCount);
+  const canExecuteCraft = craftStatus.can && canFitResult && !isCraftingPending;
 
-  const handleCraft = () => {
-    if (!craftStatus.can) return;
+  const handleCraft = async () => {
+    if (!canExecuteCraft) {
+      SoundSynth.playRustle();
+      return;
+    }
+
+    if (onCraftRecipe) {
+      setIsCraftingPending(true);
+      setCraftFeedback(null);
+      try {
+        const res = await onCraftRecipe(selectedRecipe.id);
+        if (res.ok) {
+          SoundSynth.playSuccess();
+          setCraftFeedback({ ok: true, text: `${targetItemDef.name} ဖန်တီးပြီးပါပြီ!` });
+        } else {
+          SoundSynth.playRustle();
+          setCraftFeedback({ ok: false, text: res.reason || 'ဖန်တီးမှု မအောင်မြင်ပါ' });
+        }
+      } finally {
+        setIsCraftingPending(false);
+      }
+      return;
+    }
+
     const success = craftingSystem.craft(
       selectedRecipe,
       inventory,
@@ -267,19 +295,37 @@ export const CraftingModal: React.FC<CraftingModalProps> = ({
             </div>
 
             {/* Craft Button */}
-            <div className="pt-4 mt-4 border-t border-[#322c23]">
+            <div className="pt-4 mt-4 border-t border-[#322c23] space-y-2">
+              {!canFitResult && craftStatus.can && (
+                <div className="text-[11px] font-medium text-rose-300">
+                  🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ
+                </div>
+              )}
+              {craftFeedback && (
+                <div
+                  className={`px-3 py-1.5 rounded-xl text-xs font-medium border leading-snug ${
+                    craftFeedback.ok
+                      ? 'bg-emerald-950/45 border-emerald-500/35 text-emerald-200'
+                      : 'bg-rose-950/45 border-rose-500/35 text-rose-200'
+                  }`}
+                >
+                  {craftFeedback.text}
+                </div>
+              )}
               <button
                 type="button"
-                onClick={handleCraft}
-                disabled={!craftStatus.can}
+                onClick={() => void handleCraft()}
+                disabled={!canExecuteCraft}
                 className={`w-full py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 ${
-                  craftStatus.can
+                  canExecuteCraft
                     ? 'bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 text-white shadow-lg shadow-sky-950/50 border border-sky-400/30 transition active:scale-[0.98] cursor-pointer'
                     : UI_THEME.disabledBtn
                 }`}
               >
                 <Hammer size={16} />
-                <span>{targetItemDef.name} ဖန်တီးမည်</span>
+                <span>
+                  {isCraftingPending ? 'ဖန်တီးနေသည်...' : `${targetItemDef.name} ဖန်တီးမည်`}
+                </span>
               </button>
             </div>
           </div>

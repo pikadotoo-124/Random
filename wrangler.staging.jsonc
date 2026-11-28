@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "random-city-multiplayer-staging",
+  "main": "server/cloudflare/worker.staging.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist-staging",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/ws", "/ws/*", "/health", "/api/*"]
+  },
+  "vars": {
+    "APP_ENV": "staging",
+    "DO_SAVE_CUTOVER_MODE": "do_primary",
+    "FIREBASE_PROJECT_ID": "intrepid-cyclist-mbvhw",
+    "FIREBASE_DATABASE_ID": "ai-studio-randomcity-5937d77e-b2d8-41e1-a0e0-e3c9da9af426",
+    "STAGING_ALLOWED_TEST_UIDS": "",
+    "STAGING_ALLOWED_TEST_EMAILS": ""
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GAME_ROOM_STAGING",
+        "class_name": "GameRoomStagingDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-staging",
+      "new_sqlite_classes": ["GameRoomStagingDO"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

@@ -4,6 +4,7 @@
  */
 
 import {
+  ActiveAnnouncement,
   ChatMessage,
   ClientMessage,
   ConnectionStatus,
@@ -11,7 +12,14 @@ import {
   ServerMessage,
   WorldSyncState,
 } from '../multiplayer/types';
-import { ActionToolKind, EquippedClothingState, PlacedBuilding } from '../types';
+import {
+  ActionToolKind,
+  EquippedClothingState,
+  FarmPlotOwnersMap,
+  InventorySlot,
+  ItemId,
+  PlacedBuilding,
+} from '../types';
 import { ClothingSystem } from './ClothingSystem';
 
 export interface RemotePlayer {
@@ -29,6 +37,8 @@ export interface RemotePlayer {
   action?: 'gathering' | 'building' | 'fishing' | 'idle';
   actionTool?: ActionToolKind;
   equippedClothing?: EquippedClothingState;
+  seatedBenchId?: string;
+  seatedSeatIndex?: 0 | 1;
   color: string;
 }
 
@@ -40,13 +50,26 @@ export type NetworkEventType =
   | 'player_left'
   | 'building_placed'
   | 'building_dismantled'
+  | 'build_rejected'
+  | 'dismantle_rejected'
+  | 'farm_plot_updated'
+  | 'farm_plot_purchase_result'
+  | 'shop_trade_result'
+  | 'fishing_result'
+  | 'inventory_sync'
+  | 'craft_result'
+  | 'storage_transfer_result'
+  | 'bench_state'
   | 'resource_harvested'
   | 'resource_respawned'
   | 'chat_message'
   | 'room_state'
   | 'world_sync'
   | 'official_reset'
-  | 'auth_error';
+  | 'auth_error'
+  | 'announcement'
+  | 'kicked'
+  | 'banned';
 
 export interface NetworkEvent {
   type: NetworkEventType;
@@ -62,9 +85,12 @@ export class NetworkSystem {
   public playerCount = 1;
   public localPlayerId: string | null = null;
   public remotePlayers = new Map<string, RemotePlayer>();
+  public benchSeats = new Map<string, [string | null, string | null]>();
+  public farmPlotOwners: FarmPlotOwnersMap = {};
   public chatMessages: ChatMessage[] = [];
   public errorMessage: string | null = null;
   public lastRoomState: WorldSyncState | null = null;
+  public activeAnnouncement: ActiveAnnouncement | null = null;
 
   private listeners = new Map<NetworkEventType, ((event: NetworkEvent) => void)[]>();
   private reconnectAttempts = 0;
@@ -73,6 +99,9 @@ export class NetworkSystem {
   private cachedAuthData: { idToken: string; profile: any } | null = null;
   private tokenRefresher?: () => Promise<string>;
   private lastBroadcastOutfitSig: string | null = null;
+  private preventReconnect = false;
+  private hasSyncedRoomOnce = false;
+  private txSeq = 0;
 
   constructor(roomName = 'random-city-main', maxPlayers = 10) {
     this.roomName = roomName;
@@ -117,6 +146,7 @@ export class NetworkSystem {
       positionY: number;
       facingDirection?: 'down' | 'left' | 'right' | 'up';
       equippedClothing?: EquippedClothingState;
+      coins?: number;
     },
     tokenRefresher?: () => Promise<string>
   ): void {
@@ -145,6 +175,7 @@ export class NetworkSystem {
       this.socket = null;
     }
 
+    this.preventReconnect = false;
     this.setStatus('connecting');
     const wsUrl = this.getWebSocketUrl();
 
@@ -177,6 +208,11 @@ export class NetworkSystem {
       };
 
       this.socket.onclose = (event: CloseEvent) => {
+        if (event.code === 4001 || event.code === 4003 || this.preventReconnect) {
+          this.setStatus(event.code === 4003 ? 'auth_error' : 'disconnected');
+          return;
+        }
+
         if (event.code === 1008 && event.reason.includes('full')) {
           this.setStatus('room_full');
           this.errorMessage = 'Random City is at max capacity (10/10 settlers).';
@@ -205,7 +241,7 @@ export class NetworkSystem {
   }
 
   private scheduleReconnect(): void {
-    if (this.status === 'room_full') return;
+    if (this.status === 'room_full' || this.preventReconnect) return;
     this.reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 12000);
     this.setStatus('reconnecting');
@@ -239,8 +275,11 @@ export class NetworkSystem {
       case 's:room_state': {
         const state: WorldSyncState = msg.payload;
         this.lastRoomState = state;
+        this.hasSyncedRoomOnce = true;
         this.playerCount = state.playerCount;
         this.chatMessages = state.recentChat || [];
+        this.activeAnnouncement = state.activeAnnouncement ?? null;
+        this.farmPlotOwners = state.farmPlotOwners ? { ...state.farmPlotOwners } : {};
 
         // Hydrate remote players
         this.remotePlayers.clear();
@@ -272,12 +311,16 @@ export class NetworkSystem {
                 undefined,
                 p.gender
               ),
+              seatedBenchId: p.seatedBenchId,
+              seatedSeatIndex: p.seatedSeatIndex,
               color: p.color,
             });
           }
         }
 
+        this.applyBenchSeatsSnapshot(state.benchSeats);
         this.emit('room_state', state);
+        this.emit('announcement', { announcement: this.activeAnnouncement });
         break;
       }
 
@@ -330,6 +373,10 @@ export class NetworkSystem {
         const { playerId, playerCount } = msg.payload;
         this.playerCount = playerCount;
         this.remotePlayers.delete(playerId);
+        for (const pair of this.benchSeats.values()) {
+          if (pair[0] === playerId) pair[0] = null;
+          if (pair[1] === playerId) pair[1] = null;
+        }
         this.emit('player_left', msg.payload);
         break;
       }
@@ -408,6 +455,89 @@ export class NetworkSystem {
         break;
       }
 
+      case 's:bench_state': {
+        this.applyBenchSeatsSnapshot(msg.payload.benchSeats);
+        this.emit('bench_state', msg.payload);
+        break;
+      }
+
+      case 's:build_rejected': {
+        this.emit('build_rejected', msg.payload);
+        break;
+      }
+
+      case 's:dismantle_rejected': {
+        this.emit('dismantle_rejected', msg.payload);
+        break;
+      }
+
+      case 's:farm_plot_purchase_result': {
+        if (msg.payload?.ok && msg.payload?.owner && msg.payload?.plotId) {
+          this.farmPlotOwners = {
+            ...this.farmPlotOwners,
+            [msg.payload.plotId]: msg.payload.owner,
+          };
+        }
+        this.emit('farm_plot_purchase_result', msg.payload);
+        break;
+      }
+
+      case 's:farm_plot_updated': {
+        this.farmPlotOwners = msg.payload?.farmPlotOwners
+          ? { ...msg.payload.farmPlotOwners }
+          : msg.payload?.plotId && msg.payload?.owner
+          ? { ...this.farmPlotOwners, [msg.payload.plotId]: msg.payload.owner }
+          : this.farmPlotOwners;
+        this.emit('farm_plot_updated', msg.payload);
+        break;
+      }
+
+      case 's:shop_trade_result': {
+        this.emit('shop_trade_result', msg.payload);
+        break;
+      }
+
+      case 's:fishing_result': {
+        this.emit('fishing_result', msg.payload);
+        break;
+      }
+
+      case 's:inventory_sync': {
+        this.emit('inventory_sync', msg.payload);
+        break;
+      }
+
+      case 's:craft_result': {
+        this.emit('craft_result', msg.payload);
+        break;
+      }
+
+      case 's:storage_transfer_result': {
+        this.emit('storage_transfer_result', msg.payload);
+        break;
+      }
+
+      case 's:announcement': {
+        this.activeAnnouncement = msg.payload?.announcement ?? null;
+        this.emit('announcement', { announcement: this.activeAnnouncement });
+        break;
+      }
+
+      case 's:kicked': {
+        this.preventReconnect = true;
+        this.errorMessage = msg.payload?.reason || 'Admin မှ ဂိမ်းခန်းမှ ထုတ်ပယ်လိုက်ပါသည်။';
+        this.emit('kicked', msg.payload);
+        break;
+      }
+
+      case 's:banned': {
+        this.preventReconnect = true;
+        this.setStatus('auth_error');
+        this.errorMessage = msg.payload?.reason || 'Admin မှ ဂိမ်းဝင်ခွင့် ပိတ်ပင်ထားပါသည်။';
+        this.emit('banned', msg.payload);
+        break;
+      }
+
       case 's:auth_error': {
         this.setStatus('auth_error');
         this.errorMessage = msg.payload.message;
@@ -422,6 +552,34 @@ export class NetworkSystem {
         }
         console.warn('Multiplayer Server error:', msg.payload.message);
         break;
+      }
+    }
+  }
+
+  private applyBenchSeatsSnapshot(snapshot?: Record<string, [string | null, string | null]>): void {
+    this.benchSeats.clear();
+    if (snapshot) {
+      for (const [benchId, seats] of Object.entries(snapshot)) {
+        if (Array.isArray(seats) && seats.length >= 2) {
+          this.benchSeats.set(benchId, [seats[0] ?? null, seats[1] ?? null]);
+        }
+      }
+    }
+    // Sync seatedBenchId / seatedSeatIndex across remotePlayers
+    for (const rp of this.remotePlayers.values()) {
+      rp.seatedBenchId = undefined;
+      rp.seatedSeatIndex = undefined;
+    }
+    for (const [benchId, [s0, s1]] of this.benchSeats.entries()) {
+      if (s0 && this.remotePlayers.has(s0)) {
+        const rp = this.remotePlayers.get(s0)!;
+        rp.seatedBenchId = benchId;
+        rp.seatedSeatIndex = 0;
+      }
+      if (s1 && this.remotePlayers.has(s1)) {
+        const rp = this.remotePlayers.get(s1)!;
+        rp.seatedBenchId = benchId;
+        rp.seatedSeatIndex = 1;
       }
     }
   }
@@ -525,12 +683,40 @@ export class NetworkSystem {
   }
 
   /**
+   * Register an authoritative fishing cast session with the multiplayer server.
+   */
+  public startFishingSession(nodeId: string, sessionId: string): boolean {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    this.send({
+      type: 'c:fishing_start',
+      payload: { nodeId, sessionId },
+    });
+    return true;
+  }
+
+  /**
+   * Submit a catch attempt; server ignores client amounts and decides 3 fish (success) or 0 fish (miss).
+   */
+  public claimFishingCatch(nodeId: string, sessionId: string, inSuccessZone: boolean): boolean {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    this.send({
+      type: 'c:fishing_catch',
+      payload: { nodeId, sessionId, inSuccessZone: Boolean(inSuccessZone) },
+    });
+    return true;
+  }
+
+  /**
    * Broadcast newly placed building
    */
-  public broadcastBuilding(building: PlacedBuilding): void {
+  public broadcastBuilding(building: PlacedBuilding, useRawFenceMaterials?: boolean): void {
     this.send({
       type: 'c:build_request',
-      payload: { building },
+      payload: useRawFenceMaterials ? { building, useRawFenceMaterials: true } : { building },
     });
   }
 
@@ -541,6 +727,297 @@ export class NetworkSystem {
     this.send({
       type: 'c:dismantle_request',
       payload: { buildingId },
+    });
+  }
+
+  /**
+   * Purchase an unowned Farming Plot via authoritative server Gold check
+   */
+  public buyFarmPlot(plotId: string): boolean {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    this.send({
+      type: 'c:buy_farm_plot',
+      payload: { plotId },
+    });
+    return true;
+  }
+
+  /**
+   * Execute verified shop/clothing trade online and wait for server confirmation (no offline queueing).
+   */
+  public executeShopTrade(
+    action: 'sell_item' | 'buy_item' | 'buy_clothing',
+    itemId: string,
+    quantity = 1
+  ): Promise<{
+    ok: boolean;
+    txId?: string;
+    action?: 'sell_item' | 'buy_item' | 'buy_clothing';
+    itemId?: string;
+    quantity?: number;
+    balance?: number;
+    inventorySlots?: InventorySlot[];
+    ownedClothing?: string[];
+    reason?: string;
+    code?: string;
+  }> {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.status !== 'connected') {
+      return Promise.resolve({
+        ok: false,
+        action,
+        itemId,
+        code: 'OFFLINE',
+        reason: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ ဈေးဝယ်/ရောင်းချနိုင်ပါသည်',
+      });
+    }
+
+    const cleanQty = Math.max(1, Math.min(99, Math.floor(Number.isFinite(quantity) ? quantity : 1)));
+    this.txSeq += 1;
+    const txId = `tx_${Date.now()}_${this.txSeq}`;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsubResult: (() => void) | null = null;
+      let unsubStatus: (() => void) | null = null;
+
+      const finish = (res: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubResult?.();
+        unsubStatus?.();
+        resolve(res);
+      };
+
+      const timer = setTimeout(() => {
+        finish({
+          ok: false,
+          txId,
+          action,
+          itemId,
+          quantity: cleanQty,
+          code: 'TIMEOUT',
+          reason: 'ဆာဗာမှ တုံ့ပြန်မှု ကြာမြင့်နေပါသည် — ထပ်မံကြိုးစားပါ',
+        });
+      }, 8000);
+
+      unsubResult = this.on('shop_trade_result', (evt) => {
+        const p = evt.payload;
+        if (!p) return;
+        if (p.txId && p.txId !== txId) return;
+        finish(p);
+      });
+
+      unsubStatus = this.on('status_changed', (evt) => {
+        const st = evt.payload?.status || evt.payload;
+        if (st !== 'connected') {
+          finish({
+            ok: false,
+            txId,
+            action,
+            itemId,
+            quantity: cleanQty,
+            code: 'OFFLINE',
+            reason: 'ချိတ်ဆက်မှု ပြတ်တောက်သွားပါသည်',
+          });
+        }
+      });
+
+      this.send({
+        type: 'c:shop_trade',
+        payload: { txId, action, itemId, quantity: cleanQty },
+      });
+    });
+  }
+
+  /**
+   * Request authoritative crafting via WebSocket server.
+   */
+  public requestCraft(recipeId: string): Promise<{
+    ok: boolean;
+    txId?: string;
+    recipeId: string;
+    resultItem?: ItemId;
+    resultCount?: number;
+    inventorySlots?: InventorySlot[];
+    reason?: string;
+    code?: string;
+  }> {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.status !== 'connected') {
+      return Promise.resolve({
+        ok: false,
+        recipeId,
+        code: 'OFFLINE',
+        reason: 'Offline mode',
+      });
+    }
+
+    this.txSeq += 1;
+    const txId = `craft_${Date.now()}_${this.txSeq}`;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsubResult: (() => void) | null = null;
+      let unsubStatus: (() => void) | null = null;
+
+      const finish = (res: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubResult?.();
+        unsubStatus?.();
+        resolve(res);
+      };
+
+      const timer = setTimeout(() => {
+        finish({
+          ok: false,
+          txId,
+          recipeId,
+          code: 'TIMEOUT',
+          reason: 'ဆာဗာမှ တုံ့ပြန်မှု ကြာမြင့်နေပါသည်',
+        });
+      }, 8000);
+
+      unsubResult = this.on('craft_result', (evt) => {
+        const p = evt.payload;
+        if (!p) return;
+        if (p.txId && p.txId !== txId) return;
+        finish(p);
+      });
+
+      unsubStatus = this.on('status_changed', (evt) => {
+        const st = evt.payload?.status || evt.payload;
+        if (st !== 'connected') {
+          finish({
+            ok: false,
+            txId,
+            recipeId,
+            code: 'OFFLINE',
+            reason: 'ချိတ်ဆက်မှု ပြတ်တောက်သွားပါသည်',
+          });
+        }
+      });
+
+      this.send({
+        type: 'c:craft_request',
+        payload: { txId, recipeId },
+      });
+    });
+  }
+
+  /**
+   * Request authoritative Storage Box deposit / withdraw via WebSocket server.
+   */
+  public requestStorageTransfer(
+    buildingId: string,
+    direction: 'deposit' | 'withdraw',
+    itemId: ItemId,
+    quantity = 1
+  ): Promise<{
+    ok: boolean;
+    txId?: string;
+    buildingId: string;
+    direction: 'deposit' | 'withdraw';
+    itemId: string;
+    quantity: number;
+    inventorySlots?: InventorySlot[];
+    storage?: InventorySlot[];
+    reason?: string;
+    code?: string;
+  }> {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.status !== 'connected') {
+      return Promise.resolve({
+        ok: false,
+        buildingId,
+        direction,
+        itemId,
+        quantity,
+        code: 'OFFLINE',
+        reason: 'Offline mode',
+      });
+    }
+
+    const cleanQty = Math.max(1, Math.min(99, Math.floor(Number.isFinite(quantity) ? quantity : 1)));
+    this.txSeq += 1;
+    const txId = `st_${Date.now()}_${this.txSeq}`;
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsubResult: (() => void) | null = null;
+      let unsubStatus: (() => void) | null = null;
+
+      const finish = (res: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubResult?.();
+        unsubStatus?.();
+        resolve(res);
+      };
+
+      const timer = setTimeout(() => {
+        finish({
+          ok: false,
+          txId,
+          buildingId,
+          direction,
+          itemId,
+          quantity: cleanQty,
+          code: 'TIMEOUT',
+          reason: 'ဆာဗာမှ တုံ့ပြန်မှု ကြာမြင့်နေပါသည်',
+        });
+      }, 8000);
+
+      unsubResult = this.on('storage_transfer_result', (evt) => {
+        const p = evt.payload;
+        if (!p) return;
+        if (p.txId && p.txId !== txId) return;
+        finish(p);
+      });
+
+      unsubStatus = this.on('status_changed', (evt) => {
+        const st = evt.payload?.status || evt.payload;
+        if (st !== 'connected') {
+          finish({
+            ok: false,
+            txId,
+            buildingId,
+            direction,
+            itemId,
+            quantity: cleanQty,
+            code: 'OFFLINE',
+            reason: 'ချိတ်ဆက်မှု ပြတ်တောက်သွားပါသည်',
+          });
+        }
+      });
+
+      this.send({
+        type: 'c:storage_transfer',
+        payload: { txId, buildingId, direction, itemId, quantity: cleanQty },
+      });
+    });
+  }
+
+  /**
+   * Request sitting on a lakeside 2-seater bench
+   */
+  public sitOnBench(benchId: string, seatIndex?: 0 | 1): void {
+    this.send({
+      type: 'c:bench_sit',
+      payload: { benchId, seatIndex },
+    });
+  }
+
+  /**
+   * Notify server when standing up from a bench
+   */
+  public standFromBench(): void {
+    this.send({
+      type: 'c:bench_stand',
+      payload: {},
     });
   }
 
@@ -591,9 +1068,11 @@ export class NetworkSystem {
   }
 
   public disconnect(): void {
+    this.preventReconnect = true;
     this.cachedAuthData = null;
     this.tokenRefresher = undefined;
     this.lastBroadcastOutfitSig = null;
+    this.activeAnnouncement = null;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -608,6 +1087,9 @@ export class NetworkSystem {
     }
     this.setStatus('disconnected');
     this.remotePlayers.clear();
+    this.benchSeats.clear();
+    this.farmPlotOwners = {};
+    this.hasSyncedRoomOnce = false;
     this.lastRoomState = null;
   }
 }

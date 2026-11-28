@@ -38,6 +38,36 @@ export class InventorySystem {
   }
 
   /**
+   * Authoritatively overwrite local inventory slots from verified server state
+   */
+  public replaceSlotsFromServer(serverSlots: InventorySlot[]): void {
+    if (!Array.isArray(serverSlots)) return;
+    const validSlots: InventorySlot[] = [];
+    for (const raw of serverSlots) {
+      if (
+        !raw ||
+        typeof raw.item !== 'string' ||
+        typeof raw.quantity !== 'number' ||
+        !Number.isFinite(raw.quantity)
+      ) {
+        continue;
+      }
+      const def = ITEMS[raw.item as ItemId];
+      if (!def) continue;
+      const qty = Math.floor(raw.quantity);
+      if (qty <= 0) continue;
+      validSlots.push({
+        item: raw.item as ItemId,
+        quantity: Math.min(def.maxStack, qty),
+      });
+      if (validSlots.length >= this.maxSlots) break;
+    }
+    this.slots = validSlots;
+    this.ensureStarterTools();
+    this.notifyUpdate();
+  }
+
+  /**
    * Add an item to the player's inventory
    * Handles stacking up to maxStack and filling empty slots
    */
@@ -90,6 +120,32 @@ export class InventorySystem {
     return this.slots
       .filter((s) => s.item === itemId)
       .reduce((sum, s) => sum + s.quantity, 0);
+  }
+
+  /**
+   * Compute how many more units of `itemId` can fit in existing partial stacks + empty inventory slots.
+   */
+  public getRemainingCapacity(itemId: ItemId): number {
+    const itemDef = ITEMS[itemId];
+    if (!itemDef) return 0;
+
+    let capacity = 0;
+    for (const slot of this.slots) {
+      if (slot.item === itemId && slot.quantity < itemDef.maxStack) {
+        capacity += itemDef.maxStack - slot.quantity;
+      }
+    }
+    const emptySlots = Math.max(0, this.maxSlots - this.slots.length);
+    capacity += emptySlots * itemDef.maxStack;
+    return capacity;
+  }
+
+  /**
+   * Check whether at least `amount` units of `itemId` can fit without overflowing inventory.
+   */
+  public canFitItem(itemId: ItemId, amount = 1): boolean {
+    if (amount <= 0) return true;
+    return this.getRemainingCapacity(itemId) >= amount;
   }
 
   /**

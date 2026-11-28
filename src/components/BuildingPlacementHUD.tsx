@@ -16,6 +16,7 @@ interface BuildingPlacementHUDProps {
   rotation?: FenceRotation;
   valid: boolean;
   reason?: string;
+  stockLabel?: string;
   onRotate?: () => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -29,6 +30,7 @@ export const BuildingPlacementHUD: React.FC<BuildingPlacementHUDProps> = ({
   rotation = 0,
   valid,
   reason,
+  stockLabel,
   onRotate,
   onConfirm,
   onCancel,
@@ -110,6 +112,11 @@ export const BuildingPlacementHUD: React.FC<BuildingPlacementHUDProps> = ({
                 {isFence && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300">
                     {getRotationLabel(rotation)}
+                  </span>
+                )}
+                {isFence && stockLabel && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-950/60 border border-emerald-700/40 text-emerald-300 font-mono">
+                    {stockLabel}
                   </span>
                 )}
               </div>

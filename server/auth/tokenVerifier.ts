@@ -140,6 +140,7 @@ async function getCryptoKeyForKid(kid: string): Promise<CryptoKey | null> {
 export interface VerifiedTokenClaims {
   uid: string;
   email?: string;
+  email_verified?: boolean;
   name?: string;
   picture?: string;
   iss: string;
@@ -267,17 +268,18 @@ export async function verifyFirebaseIdToken(
 
     // Successfully verified!
     const claims: VerifiedTokenClaims = {
+      ...payload,
       uid,
-      email: payload.email,
-      name: payload.name,
-      picture: payload.picture,
+      email: typeof payload.email === 'string' ? payload.email : undefined,
+      email_verified: payload.email_verified === true,
+      name: typeof payload.name === 'string' ? payload.name : undefined,
+      picture: typeof payload.picture === 'string' ? payload.picture : undefined,
       iss: payload.iss,
       aud: payload.aud,
       sub: payload.sub,
       auth_time: payload.auth_time,
       exp: payload.exp,
       iat: payload.iat,
-      ...payload,
     };
 
     return {

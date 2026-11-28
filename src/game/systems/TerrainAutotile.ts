@@ -62,6 +62,7 @@ export function getCliffVariantKey(tx: number, ty: number): string {
 
 export function getWaterVariantKey(tx: number, ty: number, mapSystem?: MapSystem): string {
   const isGlade = tx >= 74 && tx <= 98 && ty >= 14 && ty <= 30;
+  const isSilverbrookRiver = mapSystem ? mapSystem.isSilverbrookRiverTile(tx, ty) : tx >= 34 && ty >= 48;
   const h = hash2D(tx, ty, 59);
 
   if (mapSystem) {
@@ -71,19 +72,29 @@ export function getWaterVariantKey(tx: number, ty: number, mapSystem?: MapSystem
       return t === 'water' || t === 'bridge';
     };
 
-    // Check immediate 4-neighbor land adjacency -> Shallow Shoreline Band
     const nearLand =
       !isWaterTile(tx - 1, ty) ||
       !isWaterTile(tx + 1, ty) ||
       !isWaterTile(tx, ty - 1) ||
       !isWaterTile(tx, ty + 1);
 
-    if (nearLand) {
+    const depth = mapSystem.getWaterDepth(tx, ty);
+
+    if (isSilverbrookRiver) {
+      if (nearLand || depth < 0.34) {
+        return h % 2 === 0 ? 'tile_water_river_shallow' : 'tile_water_river_shallow_1';
+      }
+      if (depth >= 0.64) {
+        return h % 2 === 0 ? 'tile_water_river_deep_0' : 'tile_water_river_deep_1';
+      }
+      return h % 2 === 0 ? 'tile_water_river_0' : 'tile_water_river_1';
+    }
+
+    if (nearLand || depth < 0.28) {
       if (isGlade) return 'tile_water_glade_shallow';
       return h % 2 === 0 ? 'tile_water_shallow_0' : 'tile_water_shallow_1';
     }
 
-    // Check radius 2 for deep open lake center
     let isDeepCenter = true;
     for (let dy = -2; dy <= 2 && isDeepCenter; dy++) {
       for (let dx = -2; dx <= 2; dx++) {
@@ -94,7 +105,7 @@ export function getWaterVariantKey(tx: number, ty: number, mapSystem?: MapSystem
       }
     }
 
-    if (isDeepCenter) {
+    if (isDeepCenter && depth >= 0.56) {
       if (isGlade) return 'tile_water_glade_deep';
       return h % 2 === 0 ? 'tile_water_deep_0' : 'tile_water_deep_1';
     }
@@ -102,6 +113,9 @@ export function getWaterVariantKey(tx: number, ty: number, mapSystem?: MapSystem
 
   if (isGlade) {
     return 'tile_water_2';
+  }
+  if (isSilverbrookRiver) {
+    return h % 2 === 0 ? 'tile_water_river_0' : 'tile_water_river_1';
   }
   return h % 2 === 0 ? 'tile_water_1' : 'tile_water_0';
 }
@@ -151,23 +165,67 @@ export function getTileTransitionOverlays(mapSystem: MapSystem, tx: number, ty: 
   const tS = getTile(tx + 1, ty + 1);
   const tW = getTile(tx - 1, ty + 1);
 
-  // 1. WATER: Natural Curved Shoreline with non-uniform organic foam pockets vs calm glassy edges
-  if (tileType === 'water') {
+  // 1. WATER & BRIDGE UNDER-WATER: Natural Curved Shoreline + River Depth & Submerged Bed Hints
+  if (tileType === 'water' || tileType === 'bridge') {
+    const isRiver = mapSystem.isSilverbrookRiverTile(tx, ty);
+    const depth = mapSystem.getWaterDepth(tx, ty);
+    const flowCell = isRiver ? mapSystem.getRiverFlowCell(tx, ty) : null;
+    const shoreKind = (t: TileType | null): 'sand' | 'grass' => (t === 'sand' ? 'sand' : 'grass');
+
+    if (tileType === 'water') {
+      if (depth >= 0.56) {
+        overlays.push({ key: 'fx_river_depth_pool', depthOffset: 0.14 });
+      }
+      const bedHash = hash2D(tx, ty, 331);
+      const isRiffle = flowCell?.zoneKind === 'riffle' || flowCell?.zoneKind === 'cascade';
+      const stoneThreshold = isRiver ? (isRiffle ? 54 : 34) : depth < 0.35 ? 20 : 0;
+      if (depth < 0.74 && stoneThreshold > 0 && bedHash % 100 < stoneThreshold) {
+        overlays.push({
+          key: bedHash % 2 === 0 ? 'fx_river_submerged_stones_0' : 'fx_river_submerged_stones_1',
+          depthOffset: 0.16,
+        });
+      }
+    }
+
+    if (tileType === 'bridge') {
+      const isNonRoadBank = (t: TileType | null): boolean =>
+        t !== null && t !== 'water' && t !== 'bridge' && t !== 'dirt' && t !== 'cobble';
+      if (isNonRoadBank(tNW)) overlays.push({ key: `fx_shore_calm_${shoreKind(tNW)}_nw`, depthOffset: 0.34 });
+      if (isNonRoadBank(tNE)) overlays.push({ key: `fx_shore_calm_${shoreKind(tNE)}_ne`, depthOffset: 0.34 });
+      if (isNonRoadBank(tSE)) overlays.push({ key: `fx_shore_calm_${shoreKind(tSE)}_se`, depthOffset: 0.34 });
+      if (isNonRoadBank(tSW)) overlays.push({ key: `fx_shore_calm_${shoreKind(tSW)}_sw`, depthOffset: 0.34 });
+      return overlays;
+    }
+
     const landNW = isLand(tNW);
     const landNE = isLand(tNE);
     const landSE = isLand(tSE);
     const landSW = isLand(tSW);
 
-    const shoreKind = (t: TileType | null): 'sand' | 'grass' => (t === 'sand' ? 'sand' : 'grass');
     const edgeFoamPrefix = (dirSalt: number): 'fx_shore_' | 'fx_shore_calm_' => {
       const wave = Math.sin(tx * 0.62 + ty * 0.48 + dirSalt) + ((hash2D(tx, ty, 83 + dirSalt) % 100) / 100 - 0.5) * 0.85;
       return wave > -0.12 ? 'fx_shore_' : 'fx_shore_calm_';
     };
 
-    if (landNW) overlays.push({ key: `${edgeFoamPrefix(1)}${shoreKind(tNW)}_nw`, depthOffset: 0.35 });
-    if (landNE) overlays.push({ key: `${edgeFoamPrefix(2)}${shoreKind(tNE)}_ne`, depthOffset: 0.35 });
-    if (landSE) overlays.push({ key: `${edgeFoamPrefix(3)}${shoreKind(tSE)}_se`, depthOffset: 0.35 });
-    if (landSW) overlays.push({ key: `${edgeFoamPrefix(4)}${shoreKind(tSW)}_sw`, depthOffset: 0.35 });
+    const allowMossEdge = (t: TileType | null, salt: number): boolean =>
+      t === 'grass' && (isRiver || hash2D(tx, ty, 409 + salt) % 100 < 52);
+
+    if (landNW) {
+      overlays.push({ key: `${edgeFoamPrefix(1)}${shoreKind(tNW)}_nw`, depthOffset: 0.35 });
+      if (allowMossEdge(tNW, 1)) overlays.push({ key: 'fx_river_moss_edge_nw', depthOffset: 0.39 });
+    }
+    if (landNE) {
+      overlays.push({ key: `${edgeFoamPrefix(2)}${shoreKind(tNE)}_ne`, depthOffset: 0.35 });
+      if (allowMossEdge(tNE, 2)) overlays.push({ key: 'fx_river_moss_edge_ne', depthOffset: 0.39 });
+    }
+    if (landSE) {
+      overlays.push({ key: `${edgeFoamPrefix(3)}${shoreKind(tSE)}_se`, depthOffset: 0.35 });
+      if (allowMossEdge(tSE, 3)) overlays.push({ key: 'fx_river_moss_edge_se', depthOffset: 0.39 });
+    }
+    if (landSW) {
+      overlays.push({ key: `${edgeFoamPrefix(4)}${shoreKind(tSW)}_sw`, depthOffset: 0.35 });
+      if (allowMossEdge(tSW, 4)) overlays.push({ key: 'fx_river_moss_edge_sw', depthOffset: 0.39 });
+    }
 
     const covePrefix = (cSalt: number): 'fx_shore_in_' | 'fx_shore_in_calm_' =>
       hash2D(tx, ty, 131 + cSalt) % 100 < 56 ? 'fx_shore_in_' : 'fx_shore_in_calm_';
@@ -207,8 +265,14 @@ export function getTileTransitionOverlays(mapSystem: MapSystem, tx: number, ty: 
     return overlays;
   }
 
-  // 2. SAND: Seamless Grass Overhang & Curved Meadow Borders
+  // 2. SAND: Layered Wet Soil / Gravel Band next to Water + Seamless Grass Overhang
   if (tileType === 'sand') {
+    const isW = (t: TileType | null) => t === 'water' || t === 'bridge';
+    if (isW(tNW)) overlays.push({ key: 'fx_sand_wet_edge_nw', depthOffset: 0.22 });
+    if (isW(tNE)) overlays.push({ key: 'fx_sand_wet_edge_ne', depthOffset: 0.22 });
+    if (isW(tSE)) overlays.push({ key: 'fx_sand_wet_edge_se', depthOffset: 0.22 });
+    if (isW(tSW)) overlays.push({ key: 'fx_sand_wet_edge_sw', depthOffset: 0.22 });
+
     const isG = (t: TileType | null) => t === 'grass';
     const gNW = isG(tNW);
     const gNE = isG(tNE);

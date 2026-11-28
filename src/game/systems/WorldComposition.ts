@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BUILDABLE_ZONE_BOUNDS, TOWN_PROTECTED_BOUNDS, ZONE_SIGNPOSTS } from '../constants';
+import { BUILDABLE_ZONE_BOUNDS, FARM_PLOTS, TOWN_PROTECTED_BOUNDS, ZONE_SIGNPOSTS } from '../constants';
 import { MapSystem } from './MapSystem';
 import { hash2D } from './TerrainAutotile';
 
@@ -15,6 +15,7 @@ export interface ZoneDecorPlacement {
   depthOffset: number;
   flipX: boolean;
   alpha: number;
+  solid?: boolean;
   sway?: 'flora' | 'lily' | 'reed';
   swayAmp?: number;
 }
@@ -88,28 +89,23 @@ export const STEP7_LANDMARK_PROPS: LandmarkPropSpec[] = [
  * Every prop sits on a wing/corner tile or sandy shore entrance, keeping walkways and lakeside fishing tiles unobstructed.
  */
 export const STEP14_SCENIC_PROPS: LandmarkPropSpec[] = [
-  // 1. Mirror Lake East Grand Pier (2x3 head at 29..30, 60..62)
+  // 1. Mirror Lake East Grand Pier (2x3 head at 29..30, 60..62) — double-seater bench handled by LAKESIDE_DOUBLE_BENCHES
   { tx: 30, ty: 60, tex: 'obj_pier_pergola', originY: 0.88, solid: true, protectedProp: true, shadowScale: [1.2, 0.78], hasLanternGlow: true, glowOffsetY: -34 },
-  { tx: 30, ty: 62, tex: 'obj_bench', originY: 0.83, solid: true, protectedProp: true, shadowScale: [1.05, 0.68] },
   { tx: 35, ty: 60, tex: 'obj_pier_planter', originY: 0.86, solid: true, protectedProp: true, shadowScale: [0.85, 0.56] },
 
-  // 2. Mirror Lake North Cove Pier (2x3 head at 14..15, 55..57)
-  { tx: 14, ty: 55, tex: 'obj_bench', originY: 0.83, solid: true, protectedProp: true, shadowScale: [1.05, 0.68] },
+  // 2. Mirror Lake North Cove Pier (2x3 head at 14..15, 55..57) — double-seater bench handled by LAKESIDE_DOUBLE_BENCHES
   { tx: 15, ty: 55, tex: 'obj_lantern', originY: 0.9, solid: true, protectedProp: true, shadowScale: [0.75, 0.5], hasLanternGlow: true, glowOffsetY: -24 },
   { tx: 9, ty: 55, tex: 'obj_pier_planter', originY: 0.86, solid: true, protectedProp: true, shadowScale: [0.85, 0.56] },
 
-  // 3. Emerald Glade Pavilion Pier (3x2 head at 81..83, 23..24)
+  // 3. Emerald Glade Pavilion Pier (3x2 head at 81..83, 23..24) — double-seater bench handled by LAKESIDE_DOUBLE_BENCHES
   { tx: 83, ty: 23, tex: 'obj_pier_pergola', originY: 0.88, solid: true, protectedProp: true, shadowScale: [1.2, 0.78], hasLanternGlow: true, glowOffsetY: -34 },
-  { tx: 83, ty: 24, tex: 'obj_bench', originY: 0.83, solid: true, protectedProp: true, shadowScale: [1.05, 0.68] },
   { tx: 81, ty: 28, tex: 'obj_pier_planter', originY: 0.86, solid: true, protectedProp: true, shadowScale: [0.85, 0.56] },
 
-  // 4. Highland Spring Alpine Pier (3x2 head at 14..16, 15..16)
+  // 4. Highland Spring Alpine Pier (3x2 head at 14..16, 15..16) — double-seater bench handled by LAKESIDE_DOUBLE_BENCHES
   { tx: 16, ty: 15, tex: 'obj_lantern', originY: 0.9, solid: true, protectedProp: true, shadowScale: [0.75, 0.5], hasLanternGlow: true, glowOffsetY: -24 },
-  { tx: 16, ty: 16, tex: 'obj_bench', originY: 0.83, solid: true, protectedProp: true, shadowScale: [1.05, 0.68] },
   { tx: 14, ty: 19, tex: 'obj_pier_planter', originY: 0.86, solid: true, protectedProp: true, shadowScale: [0.85, 0.56] },
 
-  // 5. Silverbrook Grand Bridge Overlook Deck (88..91, 69)
-  { tx: 90, ty: 69, tex: 'obj_bench', originY: 0.83, solid: true, protectedProp: true, shadowScale: [1.05, 0.68] },
+  // 5. Silverbrook Grand Bridge Overlook Deck (88..91, 69) — double-seater bench handled by LAKESIDE_DOUBLE_BENCHES
   { tx: 91, ty: 69, tex: 'obj_lantern', originY: 0.9, solid: true, protectedProp: true, shadowScale: [0.75, 0.5], hasLanternGlow: true, glowOffsetY: -24 },
 ];
 
@@ -215,9 +211,9 @@ export class WorldComposition {
       usedLandProps.add(`${s.tileX}_${s.tileY}`);
     }
 
-    const isNearBridge = (tx: number, ty: number): boolean => {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
+    const isNearBridge = (tx: number, ty: number, radius = 1): boolean => {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
           const nx = tx + dx;
           const ny = ty + dy;
           if (mapSystem.isTileInBounds(nx, ny) && mapSystem.tiles[ny][nx] === 'bridge') {
@@ -227,6 +223,28 @@ export class WorldComposition {
       }
       return false;
     };
+
+    const isNearRoad = (tx: number, ty: number, radius = 1): boolean => {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = tx + dx;
+          const ny = ty + dy;
+          if (mapSystem.isTileInBounds(nx, ny) && mapSystem.getRoadTier(nx, ny) !== 'none') {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    const isNearFarmPlot = (tx: number, ty: number, pad = 1): boolean =>
+      FARM_PLOTS.some(
+        (p) =>
+          tx >= p.bounds.minX - pad &&
+          tx <= p.bounds.maxX + pad &&
+          ty >= p.bounds.minY - pad &&
+          ty <= p.bounds.maxY + pad
+      );
 
     const isNearSignpost = (tx: number, ty: number): boolean =>
       ZONE_SIGNPOSTS.some((s) => Math.abs(s.tileX - tx) <= 1 && Math.abs(s.tileY - ty) <= 1);
@@ -269,6 +287,21 @@ export class WorldComposition {
       ty >= BUILDABLE_ZONE_BOUNDS.minY &&
       ty <= BUILDABLE_ZONE_BOUNDS.maxY;
 
+    const shorelineTrees: Array<{ tx: number; ty: number }> = [];
+    const isNearWaterTile = (tx: number, ty: number, radius = 2): boolean => {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = tx + dx;
+          const ny = ty + dy;
+          if (mapSystem.isTileInBounds(nx, ny) && mapSystem.tiles[ny][nx] === 'water') {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
     for (let ty = 2; ty < mapSystem.height - 2; ty++) {
       for (let tx = 2; tx < mapSystem.width - 2; tx++) {
         const tile = mapSystem.tiles[ty][tx];
@@ -277,9 +310,10 @@ export class WorldComposition {
         const h2 = hash2D(tx, ty, 919);
 
         // 1. WATER SHORELINE COMPOSITION (Mirror Lake, Emerald Glade, Highland Spring, Silverbrook River)
-        if (tile === 'water' && !usedWaterProps.has(coordKey) && !isNearBridge(tx, ty)) {
+        const isRiverWater = tile === 'water' && mapSystem.isSilverbrookRiverTile(tx, ty);
+        if (tile === 'water' && !usedWaterProps.has(coordKey) && !isNearBridge(tx, ty, isRiverWater ? 2 : 1)) {
           // Never cover fishing spot tiles or their immediate neighbors
-          if (isNearResource(tx, ty, 1)) continue;
+          if (isNearResource(tx, ty, isRiverWater ? 2 : 1)) continue;
 
           let adjLand = false;
           let twoStepLand = false;
@@ -297,15 +331,35 @@ export class WorldComposition {
           }
 
           if (adjLand) {
-            // Clustered reeds / sedge along organic coves using wave noise (not grid scatter)
+            // Clustered reeds / cattails / broadleaf water plants / shallow stones along organic coves
             const coveWave = Math.sin(tx * 0.34 + ty * 0.29) + Math.cos(tx * 0.19 - ty * 0.37) * 0.7;
-            if (coveWave > 0.78 && h % 100 < 30) {
+            if (isRiverWater && coveWave > 0.62 && h % 100 < 26) {
               usedWaterProps.add(coordKey);
-              const useTallReed = h2 % 100 < 48;
+              const stonePick = h2 % 100;
               items.push({
                 tx,
                 ty,
-                key: useTallReed ? 'obj_water_reed' : 'obj_shore_sedge',
+                key: stonePick < 58 ? 'obj_river_rock_cluster' : 'obj_river_stone',
+                originY: 0.72,
+                depthOffset: 24,
+                flipX: (h & 1) === 1,
+                alpha: 0.95,
+              });
+            } else if (coveWave > (isRiverWater ? 0.48 : 0.66) && h % 100 < (isRiverWater ? 44 : 34)) {
+              usedWaterProps.add(coordKey);
+              const pickReed = h2 % 100;
+              const key =
+                pickReed < 26
+                  ? 'obj_water_plant'
+                  : isRiverWater && pickReed < 52
+                  ? 'obj_cattail_reeds'
+                  : pickReed < 78
+                  ? 'obj_water_reed'
+                  : 'obj_shore_sedge';
+              items.push({
+                tx,
+                ty,
+                key,
                 originY: 0.88,
                 depthOffset: 34,
                 flipX: (h & 1) === 1,
@@ -315,10 +369,20 @@ export class WorldComposition {
             }
           } else if (twoStepLand) {
             const calmPoolWave = Math.sin(tx * 0.28 - ty * 0.22) * Math.cos(tx * 0.21 + ty * 0.31);
-            if (calmPoolWave > 0.42 && h % 100 < 24) {
+            if (calmPoolWave > 0.38 && h % 100 < (isRiverWater ? 28 : 26)) {
               usedWaterProps.add(coordKey);
               const pick = h2 % 100;
-              if (pick < 52) {
+              if (isRiverWater && pick < 36) {
+                items.push({
+                  tx,
+                  ty,
+                  key: pick < 20 ? 'obj_river_rock_cluster' : 'obj_river_stone',
+                  originY: 0.7,
+                  depthOffset: 24,
+                  flipX: (h & 1) === 1,
+                  alpha: 0.95,
+                });
+              } else if (pick < 54) {
                 items.push({
                   tx,
                   ty,
@@ -329,7 +393,7 @@ export class WorldComposition {
                   alpha: 0.95,
                   sway: 'lily',
                 });
-              } else if (pick < 80) {
+              } else if (pick < 82) {
                 items.push({
                   tx,
                   ty,
@@ -356,27 +420,111 @@ export class WorldComposition {
           continue;
         }
 
-        // 2. SAND SHORELINE BEACH ACCENTS (pebbles & driftwood strictly outside Homestead lots)
+        // 2. SAND SHORELINE & RIVERBANK CLUSTERS (Sand is unbuildable; never blocks roads, bridges, or fishing!)
         if (
           tile === 'sand' &&
           !isInTown(tx, ty) &&
-          !isInHomestead(tx, ty) &&
           !usedLandProps.has(coordKey) &&
           !mapSystem.collisionMap[ty][tx] &&
-          !isNearResource(tx, ty, 0) &&
+          !isNearBridge(tx, ty, 1) &&
+          !isNearRoad(tx, ty, 1) &&
+          !isNearFarmPlot(tx, ty, 1) &&
+          !isNearResource(tx, ty, 1) &&
           !isNearFishingSpot(tx, ty, 1) &&
           !isNearSignpost(tx, ty)
         ) {
-          if (h % 100 < 10) {
+          let nearRiver = false;
+          let adjGrass = false;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = tx + dx;
+              const ny = ty + dy;
+              if (!mapSystem.isTileInBounds(nx, ny)) continue;
+              if (mapSystem.isSilverbrookRiverTile(nx, ny)) nearRiver = true;
+              if (mapSystem.tiles[ny][nx] === 'grass') adjGrass = true;
+            }
+          }
+
+          if (nearRiver) {
+            const bankClusterWave =
+              Math.sin(tx * 0.29 + ty * 0.23) * Math.cos(tx * 0.17 - ty * 0.31) +
+              Math.sin((tx - ty) * 0.19) * 0.25;
+            if (bankClusterWave > -0.18 && h % 100 < 48) {
+              usedLandProps.add(coordKey);
+              const pick = h2 % 100;
+              if (adjGrass && pick < 48) {
+                const key =
+                  pick < 18
+                    ? 'obj_river_flower_bank'
+                    : pick < 36
+                    ? 'obj_river_fern'
+                    : 'obj_shore_bush';
+                items.push({
+                  tx,
+                  ty,
+                  key,
+                  originY: key === 'obj_shore_bush' ? 0.8 : 0.78,
+                  depthOffset: 25,
+                  flipX: (h & 1) === 1,
+                  alpha: 0.96,
+                  sway: 'flora',
+                  swayAmp: key === 'obj_shore_bush' ? 0.024 : 0.032,
+                });
+              } else if (pick < 64) {
+                items.push({
+                  tx,
+                  ty,
+                  key: 'obj_mossy_bank_stone',
+                  originY: 0.74,
+                  depthOffset: 23,
+                  flipX: (h & 1) === 1,
+                  alpha: 0.94,
+                });
+              } else if (pick < 82) {
+                items.push({
+                  tx,
+                  ty,
+                  key: 'obj_shore_pebbles',
+                  originY: 0.75,
+                  depthOffset: 23,
+                  flipX: (h & 1) === 1,
+                  alpha: 0.92,
+                });
+              } else {
+                items.push({
+                  tx,
+                  ty,
+                  key: pick < 91 ? 'obj_fallen_branch' : 'obj_driftwood',
+                  originY: 0.75,
+                  depthOffset: 23,
+                  flipX: (h & 1) === 1,
+                  alpha: 0.93,
+                });
+              }
+            }
+          } else if (!isInHomestead(tx, ty) && h % 100 < 16) {
             usedLandProps.add(coordKey);
+            const lakePick = h2 % 100;
+            const key =
+              lakePick < 22
+                ? 'obj_shore_bush'
+                : lakePick < 42
+                ? 'obj_river_flower_bank'
+                : lakePick < 62
+                ? 'obj_fallen_branch'
+                : lakePick < 80
+                ? 'obj_shore_pebbles'
+                : 'obj_driftwood';
             items.push({
               tx,
               ty,
-              key: h2 % 100 < 32 ? 'obj_driftwood' : 'obj_shore_pebbles',
-              originY: 0.75,
+              key,
+              originY: key === 'obj_shore_bush' ? 0.8 : 0.75,
               depthOffset: 23,
               flipX: (h & 1) === 1,
-              alpha: 0.92,
+              alpha: 0.93,
+              sway: key === 'obj_shore_bush' || key === 'obj_river_flower_bank' ? 'flora' : undefined,
+              swayAmp: 0.028,
             });
           }
           continue;
@@ -495,6 +643,45 @@ export class WorldComposition {
               alpha: 0.95,
               sway: key !== 'obj_meadow_stones' ? 'flora' : undefined,
               swayAmp: 0.036,
+            });
+          }
+        }
+
+        // 4. ORGANIC WATERSIDE TREE CLUSTERS (Willow, Birch, Small Oak) OUTSIDE HOMESTEAD & CLEAR OF ROADS/BRIDGES/FISHING SPOTS
+        if (
+          !usedLandProps.has(coordKey) &&
+          !nearRoad &&
+          !nearCliff &&
+          !isNearFarmPlot(tx, ty, 2) &&
+          !isNearBridge(tx, ty, 2) &&
+          !isNearResource(tx, ty, 2) &&
+          !isNearFishingSpot(tx, ty, 2) &&
+          isNearWaterTile(tx, ty, 3)
+        ) {
+          const shoreGroveWave =
+            Math.sin(tx * 0.21 - ty * 0.17) + Math.cos(tx * 0.14 + ty * 0.25) * 0.6;
+          const spacedFromTrees = shorelineTrees.every(
+            (st) => Math.hypot(st.tx - tx, st.ty - ty) >= 3.2
+          );
+          if (shoreGroveWave > 0.12 && spacedFromTrees && h % 100 < 28) {
+            usedLandProps.add(coordKey);
+            shorelineTrees.push({ tx, ty });
+            const treePick = h2 % 100;
+            const key =
+              treePick < 48
+                ? 'obj_tree_willow'
+                : treePick < 78
+                ? 'obj_tree_birch'
+                : 'obj_tree';
+            items.push({
+              tx,
+              ty,
+              key,
+              originY: 0.88,
+              depthOffset: 50,
+              flipX: (h & 1) === 1,
+              alpha: 0.98,
+              solid: true,
             });
           }
         }

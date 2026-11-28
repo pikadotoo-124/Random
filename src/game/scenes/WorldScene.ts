@@ -13,6 +13,7 @@ import {
   CRAFTING_STATION_LOCATION,
   DEFAULT_MOVEMENT_MODE,
   FARM_PLOTS,
+  FARM_PLOT_PURCHASES_LOCKED,
   getResourceSourceHintMy,
   ITEMS,
   MAP_CONFIG,
@@ -22,9 +23,28 @@ import {
   ZONE_SIGNPOSTS,
   ZoneSignpostDef,
 } from '../constants';
+import {
+  LAKESIDE_DOUBLE_BENCHES,
+  LakesideDoubleBenchDef,
+  getLakesideBenchById,
+  getNearestLakesideBench,
+} from '../data/LakesideBenches';
 import { BuildingSystem } from '../systems/BuildingSystem';
 import { ClothingSystem } from '../systems/ClothingSystem';
 import { CraftingSystem } from '../systems/CraftingSystem';
+import {
+  buildFenceCoordSet,
+  computeFenceConnectionMask,
+  formatFenceInsufficientMessage,
+  getContinuousFenceCostPlan,
+  getNextContinuousFenceTile,
+} from '../systems/FenceTopology';
+import {
+  formatFarmSignboardText,
+  getFarmPlotAtTile,
+  getNearestInteractiveFarmPlot,
+  getShortFarmPlotName,
+} from '../systems/FarmPlotOwnershipSystem';
 import { InventorySystem } from '../systems/InventorySystem';
 import { MapSystem } from '../systems/MapSystem';
 import { NetworkSystem } from '../systems/NetworkSystem';
@@ -62,6 +82,7 @@ import {
   BuildingType,
   ClothingEquipmentSlot,
   EquippedClothingState,
+  FarmPlotDefinition,
   FenceRotation,
   GuidanceRequirementItem,
   ItemId,
@@ -141,6 +162,17 @@ export class WorldScene extends Phaser.Scene {
   public buildGridHighlights: Phaser.GameObjects.Sprite[] = [];
   public buildableZoneGraphics: Phaser.GameObjects.Graphics | null = null;
   public hoverTile = { tx: 30, ty: 30 };
+  private pendingPlacements = new Map<
+    string,
+    { building: PlacedBuilding; usedRawFence: boolean; isMove: boolean; prevBuilding?: PlacedBuilding }
+  >();
+  private pendingDismantles = new Map<string, PlacedBuilding>();
+  private farmPlotOverlayGfx: Phaser.GameObjects.Graphics | null = null;
+  private farmPlotLabels: Map<string, Phaser.GameObjects.Text> = new Map();
+  private farmPlotSignSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
+  private localSeatedBenchId: string | null = null;
+  private localSeatedSeatIndex: 0 | 1 | null = null;
+  private preSitTile: { x: number; y: number } | null = null;
 
   // Tracking last saved tile / interaction target
   private lastReportedTileX = -999;
@@ -627,8 +659,12 @@ export class WorldScene extends Phaser.Scene {
   private playerSettleMs = 0;
   private animatedWaterProps: Array<{
     sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
-    kind: 'shimmer' | 'reflection' | 'lily' | 'reed';
+    kind: 'shimmer' | 'reflection' | 'lily' | 'reed' | 'flow' | 'swirl' | 'rock_foam' | 'glint' | 'cascade' | 'riffle';
+    baseX: number;
     baseY: number;
+    dirX?: number;
+    dirY?: number;
+    speedMul?: number;
     phase: number;
     speed: number;
   }> = [];
@@ -636,8 +672,9 @@ export class WorldScene extends Phaser.Scene {
   // Floating notifications
   private floatingTexts: Phaser.GameObjects.Text[] = [];
 
-  // Phase 2: Fishing timing state, swimming fish, and fishing graphics
+  // Phase 2 & Step 35.5: Fishing timing state, swimming fish, jumping fish pool, and fishing graphics
   public fishingState: {
+    sessionId: string;
     node: ResourceNode;
     phase: 'waiting' | 'bite';
     elapsedMs: number;
@@ -647,7 +684,10 @@ export class WorldScene extends Phaser.Scene {
     cursorDir: 1 | -1;
     sweetMin: number;
     sweetMax: number;
+    resolved: boolean;
+    pendingServerClaim: boolean;
   } | null = null;
+  private fishingSessionSeq = 0;
   private fishingGraphics!: Phaser.GameObjects.Graphics;
   private remoteFishingGraphics!: Phaser.GameObjects.Graphics;
   private fishingHudLastEmit = 0;
@@ -659,6 +699,22 @@ export class WorldScene extends Phaser.Scene {
     vy: number;
     phase: number;
   }> = [];
+  private jumpingFishEligibleTiles: Array<{ tx: number; ty: number }> = [];
+  private jumpingFishPool: Array<{
+    sprite: Phaser.GameObjects.Image;
+    splash: Phaser.GameObjects.Image;
+    active: boolean;
+    baseX: number;
+    baseY: number;
+    tileX: number;
+    tileY: number;
+    age: number;
+    duration: number;
+    peakH: number;
+    dirX: number;
+    splashedEntry: boolean;
+  }> = [];
+  private nextFishJumpAt = 0;
 
   // Interaction prompt callback to React UI
   public onInteractionChange?: (prompt: { type: string; title: string; subtitle: string; actionKey: string; targetId?: string } | null) => void;
@@ -682,8 +738,11 @@ export class WorldScene extends Phaser.Scene {
     rotation: FenceRotation;
     valid: boolean;
     reason?: string;
+    stockLabel?: string;
   }) => void;
+  public onPlacementNotice?: (message: string, tone?: 'info' | 'warning' | 'error') => void;
   public onSelectPlacedBuilding?: (building: PlacedBuilding) => void;
+  public onSelectFarmPlot?: (plot: FarmPlotDefinition) => void;
   public isSceneReady = false;
   public onSceneReady?: () => void;
 
@@ -716,8 +775,10 @@ export class WorldScene extends Phaser.Scene {
   public isNearCampfire = false;
   public nearbyStorageChest: PlacedBuilding | null = null;
   public nearbyPlacedBuilding: PlacedBuilding | null = null;
+  public nearbyDoubleBench: LakesideDoubleBenchDef | null = null;
   public nearbyVillageNpc: { role: string; title: string; subtitle: string; message: string } | null = null;
   public nearbySignpost: ZoneSignpostDef | null = null;
+  public nearbyFarmPlot: FarmPlotDefinition | null = null;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -784,6 +845,10 @@ export class WorldScene extends Phaser.Scene {
     this.animatedWaterProps = [];
     this.swayingFlora = [];
     this.interactiveTreesAndBushes = [];
+    this.jumpingFishEligibleTiles = [];
+    this.jumpingFishPool = [];
+    this.nextFishJumpAt = 0;
+    this.fishingState = null;
     this.lastReportedTileX = -999;
     this.lastReportedTileY = -999;
     this.lastReportedZone = '';
@@ -796,6 +861,11 @@ export class WorldScene extends Phaser.Scene {
     this.gatherStrikeCount = 0;
     this.isNearShop = false;
     this.isNearClothingShop = false;
+    this.nearbyFarmPlot = null;
+    this.pendingDismantles.clear();
+    this.farmPlotLabels.clear();
+    this.farmPlotSignSprites.clear();
+    this.farmPlotOverlayGfx = null;
     this.playerClothingLayerSlots = {};
     this.guidanceCooldowns.clear();
 
@@ -816,8 +886,9 @@ export class WorldScene extends Phaser.Scene {
     // 2. Render 120x120 isometric ground tiles (baked into viewport-culled 10x10 chunks), narrow bridges, water shimmer & roadside nature
     this.createIsometricGround();
 
-    // 2B. Dynamic animated fish swimming inside lakes & rivers
+    // 2B. Dynamic animated fish swimming & Phase 5 pooled jumping fish inside lakes & rivers
     this.createAnimatedFish();
+    this.createJumpingFishPool();
 
     // 3. Render town landmarks & zone entrance signposts
     this.createTownLandmarks();
@@ -1281,6 +1352,10 @@ export class WorldScene extends Phaser.Scene {
 
         // 2. Water Flora & Lightweight Animated Shimmer Ripples (surface layer sits cleanly below bridges/piers)
         if (tileType === 'water') {
+          const isRiver = this.mapSystem.isSilverbrookRiverTile(tx, ty);
+          const flowVec = isRiver ? this.mapSystem.getRiverFlowScreenVector(tx, ty) : null;
+          const flowCell = isRiver ? this.mapSystem.getRiverFlowCell(tx, ty) : null;
+
           if (
             (tx === 84 && ty === 21) ||
             (tx === 88 && ty === 24) ||
@@ -1294,6 +1369,7 @@ export class WorldScene extends Phaser.Scene {
             this.animatedWaterProps.push({
               sprite: lily,
               kind: 'lily',
+              baseX: x,
               baseY: y + 14,
               phase: (tx * 0.7 + ty * 1.1) % (Math.PI * 2),
               speed: 0.0024,
@@ -1312,33 +1388,127 @@ export class WorldScene extends Phaser.Scene {
             this.animatedWaterProps.push({
               sprite: reed,
               kind: 'reed',
+              baseX: x,
               baseY: y + 16,
               phase: (tx * 0.9 + ty * 0.5) % (Math.PI * 2),
               speed: 0.0028,
             });
           } else if ((tx === 86 && ty === 20) || (tx === 20 && ty === 58) || (tx === 70 && ty === 76) || (tx === 52 && ty === 92)) {
+            const foam = this.add.image(x, y + 16, 'fx_river_rock_foam');
+            foam.setOrigin(0.5, 0.5);
+            foam.setDepth(-6.5);
+            this.animatedWaterProps.push({
+              sprite: foam,
+              kind: 'rock_foam',
+              baseX: x,
+              baseY: y + 16,
+              phase: (tx * 0.8 + ty * 0.5) % (Math.PI * 2),
+              speed: 0.0022,
+            });
             const stone = this.add.sprite(x, y + 16, 'obj_river_stone');
             stone.setOrigin(0.5, 0.7);
             stone.setDepth(-6);
-          } else if ((tx * 31 + ty * 17) % 19 === 0) {
+          } else if (
+            isRiver &&
+            flowCell?.zoneKind === 'cascade' &&
+            !resourceCoordSet.has(`${tx}_${ty}`) &&
+            (tx * 7 + ty * 13) % 2 === 0
+          ) {
+            const cascade = this.add.image(x, y + 15, 'fx_river_cascade');
+            cascade.setOrigin(0.5, 0.5);
+            cascade.setDepth(-6.2);
+            cascade.setAlpha(0.86);
+            this.animatedWaterProps.push({
+              sprite: cascade,
+              kind: 'cascade',
+              baseX: x,
+              baseY: y + 15,
+              phase: (tx * 0.9 + ty * 0.4) % (Math.PI * 2),
+              speed: 0.0055,
+            });
+          } else if (
+            isRiver &&
+            flowCell?.zoneKind === 'riffle' &&
+            !resourceCoordSet.has(`${tx}_${ty}`) &&
+            (tx * 11 + ty * 5) % 3 === 0
+          ) {
+            const riffle = this.add.image(x, y + 16, 'fx_river_riffle');
+            riffle.setOrigin(0.5, 0.5);
+            riffle.setDepth(-6.8);
+            riffle.setAlpha(0.68);
+            if (flowVec) riffle.setRotation(Math.atan2(flowVec.sy, flowVec.sx) * 0.45);
+            this.animatedWaterProps.push({
+              sprite: riffle,
+              kind: 'riffle',
+              baseX: x,
+              baseY: y + 16,
+              phase: (tx * 0.7 + ty * 0.6) % (Math.PI * 2),
+              speed: 0.0044,
+            });
+          } else if (isRiver && flowVec && (tx * 13 + ty * 7) % 4 === 0) {
+            const speedMul = flowCell?.speedMul ?? 1;
+            const streakKey = (tx + ty) % 2 === 0 ? 'fx_river_flow_streak_0' : 'fx_river_flow_streak_1';
+            const streak = this.add.image(x, y + 16, streakKey);
+            streak.setOrigin(0.5, 0.5);
+            streak.setDepth(-7.5);
+            streak.setRotation(Math.atan2(flowVec.sy, flowVec.sx));
+            this.animatedWaterProps.push({
+              sprite: streak,
+              kind: 'flow',
+              baseX: x,
+              baseY: y + 16,
+              dirX: flowVec.sx,
+              dirY: flowVec.sy,
+              speedMul,
+              phase: ((tx * 19 + ty * 11) % 100) / 100,
+              speed: (0.00034 + ((tx + ty) % 3) * 0.00005) * speedMul,
+            });
+          } else if (
+            isRiver &&
+            flowVec &&
+            Math.abs(flowVec.curvature) > 0.045 &&
+            (tx * 11 + ty * 23) % 17 === 0
+          ) {
+            const swirl = this.add.image(x, y + 16, 'fx_river_swirl');
+            swirl.setOrigin(0.5, 0.5);
+            swirl.setDepth(-7.2);
+            swirl.setAlpha(0.32);
+            this.animatedWaterProps.push({
+              sprite: swirl,
+              kind: 'swirl',
+              baseX: x,
+              baseY: y + 16,
+              phase: (tx * 0.7 + ty * 1.3) % (Math.PI * 2),
+              speed: 0.00055,
+            });
+          } else if (
+            (tx * 31 + ty * 17) % 19 === 0 ||
+            (isRiver && (tx * 17 + ty * 31) % 9 === 0)
+          ) {
             const shimmer = this.add.image(x, y + 16, 'fx_water_shimmer');
             shimmer.setOrigin(0.5, 0.5);
             shimmer.setDepth(-7);
             this.animatedWaterProps.push({
               sprite: shimmer,
               kind: 'shimmer',
+              baseX: x,
               baseY: y + 16,
               phase: ((tx * 13 + ty * 7) % 12) * 0.52,
               speed: 0.0024 + ((tx + ty) % 4) * 0.00025,
             });
-          } else if ((tx * 23 + ty * 41) % 29 === 0) {
-            const reflection = this.add.image(x, y + 16, 'fx_water_reflection');
+          } else if (
+            (tx * 23 + ty * 41) % 29 === 0 ||
+            (isRiver && (tx * 23 + ty * 13) % 13 === 0)
+          ) {
+            const useGlint = (tx + ty) % 2 === 0;
+            const reflection = this.add.image(x, y + 16, useGlint ? 'fx_water_sun_glint' : 'fx_water_reflection');
             reflection.setOrigin(0.5, 0.5);
-            reflection.setDepth(-8);
+            reflection.setDepth(-7.8);
             reflection.setAlpha(0.32);
             this.animatedWaterProps.push({
               sprite: reflection,
-              kind: 'reflection',
+              kind: useGlint ? 'glint' : 'reflection',
+              baseX: x,
               baseY: y + 16,
               phase: ((tx * 11 + ty * 19) % 14) * 0.45,
               speed: 0.0018 + ((tx + ty) % 3) * 0.0002,
@@ -1394,9 +1564,23 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // 3. Clean Future-Ready Rectangular Farm Plot Borders & Corner Wooden Stakes
-    const farmBorderGfx = this.add.graphics();
-    farmBorderGfx.setDepth(245);
+    // 3. Dynamic Farm Plot Ownership Borders, Corner Stakes & Owner Badges
+    this.farmPlotOverlayGfx = this.add.graphics();
+    this.farmPlotOverlayGfx.setDepth(245);
+    this.renderFarmPlotOwnershipOverlays();
+  }
+
+  public recordPendingDismantle(building: PlacedBuilding): void {
+    this.pendingDismantles.set(building.id, { ...building });
+  }
+
+  public renderFarmPlotOwnershipOverlays(): void {
+    if (!this.farmPlotOverlayGfx || !this.add) return;
+
+    this.farmPlotOverlayGfx.clear();
+    const effectiveUid = this.networkSystem?.localPlayerId || this.playerProfile?.name;
+    const ownersMap = this.buildingSystem?.farmPlotOwners || {};
+
     for (const plot of FARM_PLOTS) {
       const { minX, minY, maxX, maxY } = plot.bounds;
       const nRaw = MapSystem.tileToWorld(minX - 0.5, minY - 0.5);
@@ -1409,20 +1593,114 @@ export class WorldScene extends Phaser.Scene {
       const s = { x: sRaw.x, y: sRaw.y + 16 };
       const w = { x: wRaw.x, y: wRaw.y + 16 };
 
-      farmBorderGfx.lineStyle(2, 0x5c3a21, 0.72);
-      farmBorderGfx.beginPath();
-      farmBorderGfx.moveTo(n.x, n.y);
-      farmBorderGfx.lineTo(e.x, e.y);
-      farmBorderGfx.lineTo(s.x, s.y);
-      farmBorderGfx.lineTo(w.x, w.y);
-      farmBorderGfx.closePath();
-      farmBorderGfx.strokePath();
+      const owner = ownersMap[plot.id];
+      const isMine = Boolean(owner && effectiveUid && owner.ownerId === effectiveUid);
+
+      const borderCol = isMine ? 0x22c55e : owner ? 0x38bdf8 : 0xf59e0b;
+      const borderAlpha = isMine ? 0.94 : owner ? 0.90 : 0.80;
+      const fillAlpha = isMine ? 0.08 : owner ? 0.06 : 0.03;
+      const stakeTopCol = isMine ? 0x16a34a : owner ? 0x0284c7 : 0xb45309;
+
+      this.farmPlotOverlayGfx.fillStyle(borderCol, fillAlpha);
+      this.farmPlotOverlayGfx.beginPath();
+      this.farmPlotOverlayGfx.moveTo(n.x, n.y);
+      this.farmPlotOverlayGfx.lineTo(e.x, e.y);
+      this.farmPlotOverlayGfx.lineTo(s.x, s.y);
+      this.farmPlotOverlayGfx.lineTo(w.x, w.y);
+      this.farmPlotOverlayGfx.closePath();
+      this.farmPlotOverlayGfx.fillPath();
+
+      this.farmPlotOverlayGfx.lineStyle(isMine || owner ? 2.4 : 2, borderCol, borderAlpha);
+      this.farmPlotOverlayGfx.beginPath();
+      this.farmPlotOverlayGfx.moveTo(n.x, n.y);
+      this.farmPlotOverlayGfx.lineTo(e.x, e.y);
+      this.farmPlotOverlayGfx.lineTo(s.x, s.y);
+      this.farmPlotOverlayGfx.lineTo(w.x, w.y);
+      this.farmPlotOverlayGfx.closePath();
+      this.farmPlotOverlayGfx.strokePath();
 
       for (const corner of [n, e, s, w]) {
-        farmBorderGfx.fillStyle(0x451a03, 0.9);
-        farmBorderGfx.fillRect(corner.x - 2, corner.y - 6, 4, 7);
-        farmBorderGfx.fillStyle(0xb45309, 0.95);
-        farmBorderGfx.fillRect(corner.x - 1.5, corner.y - 7, 3, 2);
+        this.farmPlotOverlayGfx.fillStyle(0x451a03, 0.92);
+        this.farmPlotOverlayGfx.fillRect(corner.x - 2, corner.y - 6, 4, 7);
+        this.farmPlotOverlayGfx.fillStyle(stakeTopCol, 0.96);
+        this.farmPlotOverlayGfx.fillRect(corner.x - 1.5, corner.y - 7, 3, 2.5);
+      }
+
+      // Gate Entrance visual posts & threshold marker (never blocks movement)
+      if (plot.gateTile) {
+        const gx = plot.gateTile.x;
+        const gy = plot.gateTile.y;
+        let gStartRaw: { x: number; y: number };
+        let gEndRaw: { x: number; y: number };
+        if (plot.gateTile.side === 'north') {
+          gStartRaw = MapSystem.tileToWorld(gx - 0.45, gy - 0.5);
+          gEndRaw = MapSystem.tileToWorld(gx + 0.45, gy - 0.5);
+        } else if (plot.gateTile.side === 'south') {
+          gStartRaw = MapSystem.tileToWorld(gx - 0.45, gy + 0.5);
+          gEndRaw = MapSystem.tileToWorld(gx + 0.45, gy + 0.5);
+        } else if (plot.gateTile.side === 'west') {
+          gStartRaw = MapSystem.tileToWorld(gx - 0.5, gy - 0.45);
+          gEndRaw = MapSystem.tileToWorld(gx - 0.5, gy + 0.45);
+        } else {
+          gStartRaw = MapSystem.tileToWorld(gx + 0.5, gy - 0.45);
+          gEndRaw = MapSystem.tileToWorld(gx + 0.5, gy + 0.45);
+        }
+        const g1 = { x: gStartRaw.x, y: gStartRaw.y + 16 };
+        const g2 = { x: gEndRaw.x, y: gEndRaw.y + 16 };
+
+        // Warm threshold bar along the gate opening
+        this.farmPlotOverlayGfx.lineStyle(3.2, 0xfef3c7, 0.85);
+        this.farmPlotOverlayGfx.beginPath();
+        this.farmPlotOverlayGfx.moveTo(g1.x, g1.y);
+        this.farmPlotOverlayGfx.lineTo(g2.x, g2.y);
+        this.farmPlotOverlayGfx.strokePath();
+
+        // Two slightly taller gate posts flanking the entrance
+        for (const postPt of [g1, g2]) {
+          this.farmPlotOverlayGfx.fillStyle(0x78350f, 0.96);
+          this.farmPlotOverlayGfx.fillRect(postPt.x - 2.2, postPt.y - 10, 4.4, 10.5);
+          this.farmPlotOverlayGfx.fillStyle(0xfbbf24, 0.96);
+          this.farmPlotOverlayGfx.fillRect(postPt.x - 1.8, postPt.y - 11.5, 3.6, 2.5);
+        }
+      }
+
+      const signAnchorX = plot.signTile ? plot.signTile.x : (minX + maxX) / 2;
+      const signAnchorY = plot.signTile ? plot.signTile.y : minY - 0.55;
+      const badgePos = MapSystem.tileToWorld(signAnchorX, signAnchorY);
+      const badgeOffsetY = plot.signTile ? -26 : 4;
+      const labelText = formatFarmSignboardText(
+        plot,
+        owner,
+        effectiveUid,
+        FARM_PLOT_PURCHASES_LOCKED
+      );
+      const textColor = isMine ? '#bbf7d0' : owner ? '#bae6fd' : '#fde68a';
+      const bgColor = isMine
+        ? 'rgba(6, 78, 59, 0.92)'
+        : owner
+        ? 'rgba(12, 74, 110, 0.92)'
+        : 'rgba(38, 26, 14, 0.92)';
+
+      let badge = this.farmPlotLabels.get(plot.id);
+      if (!badge) {
+        badge = this.add
+          .text(badgePos.x, badgePos.y + badgeOffsetY, labelText, {
+            fontSize: '10px',
+            fontFamily: 'sans-serif',
+            fontStyle: 'bold',
+            color: textColor,
+            backgroundColor: bgColor,
+            padding: { x: 6, y: 3 },
+          })
+          .setOrigin(0.5, 1)
+          .setDepth(25034)
+          .setResolution(2);
+        this.farmPlotLabels.set(plot.id, badge);
+      } else {
+        badge.setPosition(badgePos.x, badgePos.y + badgeOffsetY);
+        badge.setText(labelText);
+        badge.setColor(textColor);
+        badge.setBackgroundColor(bgColor);
       }
     }
   }
@@ -1491,6 +1769,57 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private createJumpingFishPool(): void {
+    this.jumpingFishEligibleTiles = [];
+    this.jumpingFishPool = [];
+    this.nextFishJumpAt = 1600;
+
+    const spotSet = new Set(
+      this.resourceSystem.nodes.filter((n) => n.type === 'lake_fish').map((n) => `${n.tileX}_${n.tileY}`)
+    );
+    for (let ty = 4; ty < this.mapSystem.height - 4; ty++) {
+      for (let tx = 4; tx < this.mapSystem.width - 4; tx++) {
+        if (this.mapSystem.tiles[ty][tx] !== 'water') continue;
+        if (spotSet.has(`${tx}_${ty}`)) continue;
+        const depth = this.mapSystem.getWaterDepth(tx, ty);
+        if (depth < 0.44) continue;
+        const flowCell = this.mapSystem.isSilverbrookRiverTile(tx, ty)
+          ? this.mapSystem.getRiverFlowCell(tx, ty)
+          : null;
+        if (flowCell && (flowCell.zoneKind === 'cascade' || flowCell.zoneKind === 'riffle')) continue;
+        this.jumpingFishEligibleTiles.push({ tx, ty });
+      }
+    }
+
+    const MAX_JUMPING_FISH = 4;
+    for (let i = 0; i < MAX_JUMPING_FISH; i++) {
+      const sprite = this.add
+        .image(0, 0, 'obj_jumping_fish_0')
+        .setOrigin(0.5, 0.5)
+        .setDepth(-3)
+        .setVisible(false);
+      const splash = this.add
+        .image(0, 0, 'fx_fish_splash_ring')
+        .setOrigin(0.5, 0.5)
+        .setDepth(-3.5)
+        .setVisible(false);
+      this.jumpingFishPool.push({
+        sprite,
+        splash,
+        active: false,
+        baseX: 0,
+        baseY: 0,
+        tileX: 0,
+        tileY: 0,
+        age: 0,
+        duration: 0.88,
+        peakH: 16,
+        dirX: 1,
+        splashedEntry: false,
+      });
+    }
+  }
+
   private getFootprintWorldPos(tileX: number, tileY: number, width: number, height: number): { x: number; y: number; depth: number } {
     const cx = tileX + (width - 1) / 2;
     const cy = tileY + (height - 1) / 2;
@@ -1502,7 +1831,13 @@ export class WorldScene extends Phaser.Scene {
     };
   }
 
-  private getBuildingVisualConfig(type: BuildingType, rotation: FenceRotation = 0): { tex: string; originY: number } {
+  private getBuildingVisualConfig(
+    type: BuildingType,
+    rotation: FenceRotation = 0,
+    tileX?: number,
+    tileY?: number,
+    fenceCoords?: ReadonlySet<string>
+  ): { tex: string; originY: number } {
     switch (type) {
       case 'house_small':
         return { tex: 'obj_house_small', originY: 132 / 176 };
@@ -1512,7 +1847,14 @@ export class WorldScene extends Phaser.Scene {
         return { tex: 'obj_house_large', originY: 178 / 242 };
       case 'fence_wood': {
         const rot = BuildingSystem.normalizeRotation(rotation);
-        return { tex: `obj_fence_wood_${rot}`, originY: 38 / 56 };
+        if (tileX !== undefined && tileY !== undefined) {
+          const coords = fenceCoords ?? buildFenceCoordSet(this.buildingSystem.buildings);
+          const info = computeFenceConnectionMask(coords, tileX, tileY, rot);
+          return { tex: info.textureKey, originY: 38 / 56 };
+        }
+        const baseMask = rot % 2 === 0 ? 5 : 10;
+        const braced = rot >= 2;
+        return { tex: `obj_fence_wood_${braced ? 'b_' : ''}m${baseMask}`, originY: 38 / 56 };
       }
       case 'campfire':
         return { tex: 'obj_campfire', originY: 0.75 };
@@ -1569,6 +1911,24 @@ export class WorldScene extends Phaser.Scene {
           flicker: isForgeHearth,
           alwaysWarmMin: isForgeHearth ? 0.45 : 0,
           phase: x * 0.03 + i * 1.1,
+          parentBuilding,
+        });
+      }
+      if (anchors.sconce) {
+        const sconceGlow = this.add
+          .image(x + anchors.sconce.dx, y + anchors.sconce.dy, 'fx_glow_warm')
+          .setOrigin(0.5)
+          .setDepth(buildingDepth + 1)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setScale(0.40)
+          .setAlpha(0);
+        this.townLights.push({
+          sprite: sconceGlow,
+          baseAlpha: 0.52,
+          baseScale: 0.40,
+          flicker: true,
+          alwaysWarmMin: 0,
+          phase: x * 0.04 + 0.7,
           parentBuilding,
         });
       }
@@ -1854,6 +2214,25 @@ export class WorldScene extends Phaser.Scene {
 
     spawnTownNpc(50, 74, 'npc_farmer', 'သောမတ်စ် (လယ်သမားကြီး)', '#86efac', 'down', 'farmer', 4, 2);
 
+    // Farm Plot Entrance Wooden Signboards (placed on 1-tile dirt border beside gate, non-blocking)
+    for (const plot of FARM_PLOTS) {
+      if (!plot.signTile) continue;
+      const sx = plot.signTile.x;
+      const sy = plot.signTile.y;
+      this.mapSystem.setProtectedProp(sx, sy, true);
+      const sp = MapSystem.tileToWorld(sx, sy);
+      this.add
+        .image(sp.x + 1, sp.y + 16.5, 'shadow_round')
+        .setOrigin(0.5, 0.5)
+        .setDepth((sx + sy) * 100 + 18)
+        .setAlpha(0.32)
+        .setScale(0.76, 0.48);
+      const signSprite = this.add.sprite(sp.x, sp.y + 16, 'obj_farm_plot_sign');
+      signSprite.setOrigin(0.5, 0.88);
+      signSprite.setDepth((sx + sy) * 100 + 44);
+      this.farmPlotSignSprites.set(plot.id, signSprite);
+    }
+
     // === 8. STEP 7 & STEP 14: CURATED ZONE LANDMARK PROPS, FISHING PIERS & BRIDGE/PIER LOUNGES ===
     for (const spec of [...STEP7_LANDMARK_PROPS, ...STEP14_SCENIC_PROPS]) {
       const p = MapSystem.tileToWorld(spec.tx, spec.ty);
@@ -1897,6 +2276,11 @@ export class WorldScene extends Phaser.Scene {
         });
       }
     }
+
+    // === 9. LAKESIDE 2-SEATER CEDAR BENCHES (Shared Pier & Overlook Seating) ===
+    for (const bench of LAKESIDE_DOUBLE_BENCHES) {
+      placeTownProp(bench.tileX, bench.tileY, bench.textureKey, bench.originY, true, [1.22, 0.78]);
+    }
   }
 
   private renderStep7ZoneComposition(): void {
@@ -1905,12 +2289,54 @@ export class WorldScene extends Phaser.Scene {
 
     for (const item of placements) {
       const { x, y } = MapSystem.tileToWorld(item.tx, item.ty);
+      if (item.solid) {
+        this.mapSystem.setCollision(item.tx, item.ty, true);
+        this.add
+          .image(x + 3, y + 17, 'shadow_round')
+          .setOrigin(0.5, 0.5)
+          .setDepth((item.tx + item.ty) * 100 + 20)
+          .setAlpha(0.18)
+          .setScale(1.26, 0.86);
+      }
+
       const img = this.add.image(x, y + 16, item.key);
       img.setOrigin(0.5, item.originY);
-      const isWaterSurfaceProp = item.sway === 'lily' || item.key === 'obj_river_stone';
-      img.setDepth(isWaterSurfaceProp ? (item.key === 'obj_river_stone' ? -6 : -5) : (item.tx + item.ty) * 100 + item.depthOffset);
+      const isRiverStone = item.key === 'obj_river_stone' || item.key === 'obj_river_rock_cluster';
+      const isWaterSurfaceProp = item.sway === 'lily' || isRiverStone;
+      img.setDepth(isWaterSurfaceProp ? (isRiverStone ? -6 : -5) : (item.tx + item.ty) * 100 + item.depthOffset);
       img.setFlipX(item.flipX);
       img.setAlpha(item.alpha);
+
+      if (item.key.startsWith('obj_tree')) {
+        const treeSprite = img as unknown as Phaser.GameObjects.Sprite;
+        this.interactiveTreesAndBushes.push({
+          sprite: treeSprite,
+          wx: x,
+          wy: y + 16,
+          tileX: item.tx,
+          tileY: item.ty,
+          isTree: true,
+          isBlossom: false,
+          baseScale: 1,
+          phase: (item.tx * 0.52 + item.ty * 0.78) % (Math.PI * 2),
+          rustleEnergy: 0,
+          rustleCooldownUntil: 0,
+        });
+      }
+
+      if (isRiverStone) {
+        const foam = this.add.image(x, y + 16, 'fx_river_rock_foam');
+        foam.setOrigin(0.5, 0.5);
+        foam.setDepth(-6.5);
+        this.animatedWaterProps.push({
+          sprite: foam,
+          kind: 'rock_foam',
+          baseX: x,
+          baseY: y + 16,
+          phase: (item.tx * 0.67 + item.ty * 0.89) % (Math.PI * 2),
+          speed: 0.0022,
+        });
+      }
 
       if (item.sway === 'flora') {
         this.swayingFlora.push({
@@ -1928,6 +2354,7 @@ export class WorldScene extends Phaser.Scene {
         this.animatedWaterProps.push({
           sprite: img,
           kind: item.sway,
+          baseX: x,
           baseY: y + 16,
           phase: (item.tx * 0.73 + item.ty * 0.59) % (Math.PI * 2),
           speed: item.sway === 'lily' ? 0.0023 : 0.0027,
@@ -1986,7 +2413,15 @@ export class WorldScene extends Phaser.Scene {
           treeScale = treeScalePresets[treeHash % treeScalePresets.length];
           treeFlipX = ((treeHash >>> 3) & 1) === 1;
         } else if (node.type === 'rock') {
-          tex = (node.tileX + node.tileY) % 4 === 0 ? 'obj_cliff_rock' : 'obj_rock';
+          const rockHash = hash2D(node.tileX, node.tileY, 719);
+          const rVariant = node.rockVariant ?? (rockHash % 3);
+          if (rVariant === 1) {
+            tex = 'obj_rock_1';
+          } else if (rVariant === 2) {
+            tex = 'obj_rock_2';
+          } else {
+            tex = (node.tileX + node.tileY) % 4 === 0 ? 'obj_cliff_rock' : 'obj_rock';
+          }
           originY = 0.78;
         } else if (node.type === 'bush') {
           tex = node.spriteVariant === 'tall_grass' ? 'obj_harvest_grass' : 'obj_bush';
@@ -2002,6 +2437,11 @@ export class WorldScene extends Phaser.Scene {
           originY = 0.5;
         }
 
+        const rockScale =
+          node.type === 'rock'
+            ? [0.92, 0.98, 1.04, 1.1][hash2D(node.tileX, node.tileY, 727) % 4]
+            : 1;
+
         // Consistent top-left sun -> SE soft ambient contact shadow (subtle so baked sprite shadow never double-darkens)
         if (node.type !== 'lake_fish') {
           const sx = node.type === 'tree' ? x + 3 : node.type === 'rock' ? x + 2.5 : x + 2;
@@ -2014,7 +2454,7 @@ export class WorldScene extends Phaser.Scene {
             shadow.setScale(1.38 * treeScale, 0.94 * treeScale);
           } else if (node.type === 'rock') {
             shadow.setAlpha(0.22);
-            shadow.setScale(1.12, 0.82);
+            shadow.setScale(1.12 * rockScale, 0.82 * rockScale);
           } else if (tex === 'res_animal_rabbit') {
             shadow.setAlpha(0.18);
             shadow.setScale(0.68, 0.52);
@@ -2030,6 +2470,8 @@ export class WorldScene extends Phaser.Scene {
         if (node.type === 'tree') {
           sprite.setScale(treeScale);
           sprite.setFlipX(treeFlipX);
+        } else if (node.type === 'rock') {
+          sprite.setScale(rockScale);
         } else if (node.type === 'animal' && animalScale !== 1) {
           sprite.setScale(animalScale);
         }
@@ -2168,6 +2610,24 @@ export class WorldScene extends Phaser.Scene {
           parentBuilding,
         });
       }
+      if (anchors.sconce) {
+        const sconceGlow = this.add
+          .image(x + anchors.sconce.dx, y + anchors.sconce.dy, 'fx_glow_warm')
+          .setOrigin(0.5)
+          .setDepth(renderDepth + 1)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setScale(0.40)
+          .setAlpha(0);
+        items.push({
+          sprite: sconceGlow,
+          baseAlpha: 0.52,
+          baseScale: 0.40,
+          flicker: true,
+          alwaysWarmMin: 0,
+          phase: phase + 0.7,
+          parentBuilding,
+        });
+      }
       const halo = this.add
         .image(x, y + anchors.haloOffsetY, 'fx_glow_warm')
         .setOrigin(0.5)
@@ -2203,6 +2663,8 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    const fenceCoords = buildFenceCoordSet(this.buildingSystem.buildings);
+
     // Render placed buildings centered accurately on their isometric footprints
     for (const b of this.buildingSystem.buildings) {
       const fp = BuildingSystem.getFootprint(b.type);
@@ -2211,7 +2673,7 @@ export class WorldScene extends Phaser.Scene {
       const { x, y, depth } = this.getFootprintWorldPos(b.tileX, b.tileY, w, h);
       const renderDepth = b.type === 'campfire' ? (b.tileX + b.tileY) * 100 + 35 : depth;
       const rot = BuildingSystem.normalizeRotation(b.rotation);
-      const { tex, originY } = this.getBuildingVisualConfig(b.type, rot);
+      const { tex, originY } = this.getBuildingVisualConfig(b.type, rot, b.tileX, b.tileY, fenceCoords);
 
       const existing = this.buildingSprites.get(b.id);
       if (existing) {
@@ -2252,8 +2714,18 @@ export class WorldScene extends Phaser.Scene {
     tileY: number;
     facingDirection: 'down' | 'left' | 'right' | 'up';
   } {
-    const rawX = Number.isFinite(this.playerTileX) ? this.playerTileX : this.lastValidWalkableX;
-    const rawY = Number.isFinite(this.playerTileY) ? this.playerTileY : this.lastValidWalkableY;
+    const rawX =
+      this.localSeatedBenchId && this.preSitTile
+        ? this.preSitTile.x
+        : Number.isFinite(this.playerTileX)
+        ? this.playerTileX
+        : this.lastValidWalkableX;
+    const rawY =
+      this.localSeatedBenchId && this.preSitTile
+        ? this.preSitTile.y
+        : Number.isFinite(this.playerTileY)
+        ? this.playerTileY
+        : this.lastValidWalkableY;
     const clampedX = Math.max(0, Math.min(this.mapSystem.width - 1, Math.round(rawX * 100) / 100));
     const clampedY = Math.max(0, Math.min(this.mapSystem.height - 1, Math.round(rawY * 100) / 100));
 
@@ -2584,6 +3056,101 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
+    // 3B. Authoritative Server Fishing Catch Result
+    this.networkSystem.on('fishing_result', (evt) => {
+      const payload = evt.payload as {
+        ok: boolean;
+        sessionId?: string;
+        nodeId: string;
+        caught: boolean;
+        itemId: 'fish';
+        quantity: number;
+        respawnAt?: number;
+        inventorySlots?: any[];
+        reason?: string;
+        code?: string;
+      };
+      if (!payload) return;
+
+      const fs = this.fishingState;
+      const targetNode =
+        fs?.node && fs.node.id === payload.nodeId
+          ? fs.node
+          : this.resourceSystem.nodes.find((n) => n.id === payload.nodeId);
+
+      // Ignore stale session callbacks that don't match an active claim
+      if (fs && payload.sessionId && fs.sessionId !== payload.sessionId) {
+        return;
+      }
+
+      this.fishingState = null;
+      this.fishingGraphics?.clear();
+      this.networkSystem.broadcastActionState(this.playerTileX, this.playerTileY, this.playerDirection, 'idle');
+      this.onFishingStateChange?.(null);
+
+      if (Array.isArray(payload.inventorySlots)) {
+        this.inventorySystem.replaceSlotsFromServer(payload.inventorySlots);
+      }
+
+      if (!payload.ok) {
+        SoundSynth.playRustle();
+        this.spawnFloatingText(
+          targetNode?.tileX ?? this.playerTileX,
+          targetNode?.tileY ?? this.playerTileY,
+          payload.reason || 'ငါးမျှားခြင်း မအောင်မြင်ပါ',
+          '#f87171'
+        );
+        return;
+      }
+
+      if (!payload.caught || payload.quantity <= 0) {
+        SoundSynth.playRustle();
+        this.spawnFloatingText(
+          targetNode?.tileX ?? this.playerTileX,
+          targetNode?.tileY ?? this.playerTileY,
+          'လွဲသွားပြီ — အစိမ်းရောင်ဇုန်ထဲတွင် ဆွဲတင်မှ ငါး ၃ ကောင်ရမည်',
+          '#fbbf24'
+        );
+        return;
+      }
+
+      if (targetNode) {
+        targetNode.depletedUntil = payload.respawnAt || Date.now() + 20000;
+      }
+
+      let displayCount = payload.quantity;
+      if (!Array.isArray(payload.inventorySlots)) {
+        const remainingCapacity = this.inventorySystem.getRemainingCapacity('fish');
+        const grantCount = Math.min(payload.quantity, remainingCapacity);
+        if (grantCount <= 0) {
+          SoundSynth.playRustle();
+          this.spawnFloatingText(
+            this.playerTileX,
+            this.playerTileY,
+            '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ',
+            '#f87171'
+          );
+          this.renderResourceNodes();
+          return;
+        }
+        this.inventorySystem.addItem('fish', grantCount);
+        displayCount = grantCount;
+      }
+
+      SoundSynth.playSuccess();
+      const itemDef = ITEMS.fish;
+      const nodeName = itemDef ? itemDef.name : 'ငါး';
+      this.spawnFloatingText(
+        targetNode?.tileX ?? this.playerTileX,
+        targetNode?.tileY ?? this.playerTileY,
+        `✨ အထူးအမိ! +${displayCount} ${nodeName}`,
+        '#4ade80'
+      );
+      this.renderResourceNodes();
+      this.onResourceGathered?.();
+      this.onStateChanged?.();
+    });
+
     // 4. Shared Resource Respawned
     this.networkSystem.on('resource_respawned', (evt) => {
       const { nodeId } = evt.payload;
@@ -2605,6 +3172,7 @@ export class WorldScene extends Phaser.Scene {
     // 5. Shared Building Placed or Moved
     this.networkSystem.on('building_placed', (evt) => {
       const incoming = evt.payload as PlacedBuilding;
+      this.pendingPlacements.delete(incoming.id);
       const fp = BuildingSystem.getFootprint(incoming.type);
       const building: PlacedBuilding = {
         ...incoming,
@@ -2661,9 +3229,94 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
+    // 5B. Server-authoritative Land Ownership / Building Rejection Rollback
+    this.networkSystem.on('build_rejected', (evt) => {
+      const { buildingId, reason, message, inventorySlots } = evt.payload || {};
+      const pending = buildingId ? this.pendingPlacements.get(buildingId) : undefined;
+      if (buildingId) {
+        this.pendingPlacements.delete(buildingId);
+      }
+
+      if (Array.isArray(inventorySlots)) {
+        this.inventorySystem.replaceSlotsFromServer(inventorySlots);
+      }
+
+      if (pending) {
+        if (pending.isMove && pending.prevBuilding) {
+          const idx = this.buildingSystem.buildings.findIndex((b) => b.id === pending.building.id);
+          if (idx !== -1) {
+            const cur = this.buildingSystem.buildings[idx];
+            for (let dy = 0; dy < cur.height; dy++) {
+              for (let dx = 0; dx < cur.width; dx++) {
+                this.mapSystem.setCollision(cur.tileX + dx, cur.tileY + dy, false);
+              }
+            }
+            this.buildingSystem.buildings[idx] = { ...pending.prevBuilding };
+            if (!BuildingSystem.isNonSolidBuilding(pending.prevBuilding.type)) {
+              for (let dy = 0; dy < pending.prevBuilding.height; dy++) {
+                for (let dx = 0; dx < pending.prevBuilding.width; dx++) {
+                  this.mapSystem.setCollision(pending.prevBuilding.tileX + dx, pending.prevBuilding.tileY + dy, true);
+                }
+              }
+            }
+          }
+        } else {
+          const idx = this.buildingSystem.buildings.findIndex((b) => b.id === pending.building.id);
+          if (idx !== -1) {
+            const cur = this.buildingSystem.buildings[idx];
+            for (let dy = 0; dy < cur.height; dy++) {
+              for (let dx = 0; dx < cur.width; dx++) {
+                this.mapSystem.setCollision(cur.tileX + dx, cur.tileY + dy, false);
+              }
+            }
+            this.buildingSystem.buildings.splice(idx, 1);
+          }
+          if (!Array.isArray(inventorySlots)) {
+            if (pending.usedRawFence) {
+              this.inventorySystem.addItem('wood', 2);
+              this.inventorySystem.addItem('fiber', 1);
+            } else {
+              this.inventorySystem.addItem(pending.building.type, 1);
+            }
+          }
+        }
+        this.renderPlacedBuildings();
+        this.onStateChanged?.();
+      }
+
+      const noticeMsg =
+        message ||
+        reason ||
+        'အဆောက်အအုံ ဆောက်လုပ်/ပြင်ဆင်ခွင့် ငြင်းပယ်ခံရပါသည်';
+      SoundSynth.playRustle();
+      this.spawnFloatingText(this.playerTileX, this.playerTileY, noticeMsg, '#f87171');
+      this.onPlacementNotice?.(noticeMsg, 'error');
+      if (this.buildModeType) {
+        this.updateBuildPreview(this.selectedPlacementTile.tx, this.selectedPlacementTile.ty);
+      }
+    });
+
+    // 5C. Lakeside 2-Seater Bench State Sync
+    const syncLocalBenchSeat = (benchSeats?: Record<string, [string | null, string | null]>) => {
+      if (!this.localSeatedBenchId) return;
+      const localId = this.networkSystem.localPlayerId;
+      if (!localId) return;
+      const pair = benchSeats?.[this.localSeatedBenchId] || this.networkSystem.benchSeats.get(this.localSeatedBenchId);
+      if (!pair || (pair[0] !== localId && pair[1] !== localId)) {
+        this.standUpFromBench(false);
+        this.spawnFloatingText(this.playerTileX, this.playerTileY, 'ထိုင်ခုံနေရာ ပြည့်သွားပါပြီ', '#fbbf24');
+      } else {
+        this.localSeatedSeatIndex = pair[0] === localId ? 0 : 1;
+      }
+    };
+    this.networkSystem.on('bench_state', (evt) => {
+      syncLocalBenchSeat(evt.payload?.benchSeats);
+    });
+
     // 6. Shared Building Dismantled
     this.networkSystem.on('building_dismantled', (evt) => {
       const { buildingId } = evt.payload;
+      this.pendingDismantles.delete(buildingId);
       const idx = this.buildingSystem.buildings.findIndex((b) => b.id === buildingId);
       if (idx !== -1) {
         const b = this.buildingSystem.buildings[idx];
@@ -2677,8 +3330,73 @@ export class WorldScene extends Phaser.Scene {
       }
     });
 
+    // 6B. Server-authoritative Dismantle Rejection Rollback
+    this.networkSystem.on('dismantle_rejected', (evt) => {
+      const { buildingId, building, message, inventorySlots } = evt.payload || {};
+      const pending = buildingId ? this.pendingDismantles.get(buildingId) : undefined;
+      if (buildingId) {
+        this.pendingDismantles.delete(buildingId);
+      }
+
+      if (Array.isArray(inventorySlots)) {
+        this.inventorySystem.replaceSlotsFromServer(inventorySlots);
+      }
+
+      const restoreSource = pending || building;
+      if (restoreSource) {
+        const fp = BuildingSystem.getFootprint(restoreSource.type);
+        const restored: PlacedBuilding = {
+          ...restoreSource,
+          width: restoreSource.width || fp.width,
+          height: restoreSource.height || fp.height,
+          rotation:
+            restoreSource.type === 'fence_wood'
+              ? BuildingSystem.normalizeRotation(restoreSource.rotation)
+              : 0,
+        };
+        if (!this.buildingSystem.buildings.some((b) => b.id === restored.id)) {
+          this.buildingSystem.buildings.push(restored);
+          if (!BuildingSystem.isNonSolidBuilding(restored.type)) {
+            for (let dy = 0; dy < restored.height; dy++) {
+              for (let dx = 0; dx < restored.width; dx++) {
+                this.mapSystem.setCollision(restored.tileX + dx, restored.tileY + dy, true);
+              }
+            }
+          }
+        }
+        if (pending && !Array.isArray(inventorySlots)) {
+          this.inventorySystem.removeItem(restored.type, 1);
+        }
+        this.renderPlacedBuildings();
+        this.onStateChanged?.();
+      }
+
+      const noticeMsg = message || 'ဤအဆောက်အအုံကို ဖျက်သိမ်းခွင့်မရှိပါ';
+      SoundSynth.playRustle();
+      this.spawnFloatingText(this.playerTileX, this.playerTileY, noticeMsg, '#f87171');
+      this.onPlacementNotice?.(noticeMsg, 'error');
+    });
+
+    // 6C. Live Farming Plot Ownership Sync
+    this.networkSystem.on('farm_plot_updated', (evt) => {
+      const nextOwners = evt.payload?.farmPlotOwners || this.networkSystem.farmPlotOwners || {};
+      this.buildingSystem.setFarmPlotOwners(nextOwners);
+      this.renderFarmPlotOwnershipOverlays();
+      if (this.buildModeType) {
+        this.redrawBuildableZoneGraphics();
+        this.updateBuildPreview(this.selectedPlacementTile.tx, this.selectedPlacementTile.ty);
+      }
+    });
+
     const applyRoomState = (state: any) => {
       if (!state) return;
+      if (state.farmPlotOwners) {
+        this.buildingSystem.setFarmPlotOwners(state.farmPlotOwners);
+        this.renderFarmPlotOwnershipOverlays();
+      }
+      if (state.benchSeats) {
+        syncLocalBenchSeat(state.benchSeats);
+      }
       if (state.depletedResources) {
         let changedRes = false;
         for (const [nodeId, respawnAt] of Object.entries(state.depletedResources)) {
@@ -2707,7 +3425,8 @@ export class WorldScene extends Phaser.Scene {
             height: rawB.height || fp.height,
             rotation: rawB.type === 'fence_wood' ? BuildingSystem.normalizeRotation(rawB.rotation) : 0,
           };
-          if (!this.buildingSystem.buildings.some((existing) => existing.id === b.id)) {
+          const existingBox = this.buildingSystem.buildings.find((existing) => existing.id === b.id);
+          if (!existingBox) {
             this.buildingSystem.buildings.push(b);
             if (!BuildingSystem.isNonSolidBuilding(b.type)) {
               for (let dy = 0; dy < b.height; dy++) {
@@ -2727,6 +3446,8 @@ export class WorldScene extends Phaser.Scene {
               hydratedMineFromServer = true;
             }
             changedBld = true;
+          } else if (existingBox.type === 'storage_box' && Array.isArray(rawB.storage)) {
+            existingBox.storage = rawB.storage.map((s: any) => ({ item: s.item, quantity: s.quantity }));
           }
         }
         if (changedBld) {
@@ -2921,6 +3642,23 @@ export class WorldScene extends Phaser.Scene {
           }
         }
 
+        // Check if player clicked on a Farming District Plot or its Entrance Signboard
+        const clickedFarmPlot =
+          getFarmPlotAtTile(tx, ty) ||
+          FARM_PLOTS.find((p) => p.signTile && p.signTile.x === tx && p.signTile.y === ty);
+        if (clickedFarmPlot) {
+          const clampedX = Math.max(clickedFarmPlot.bounds.minX, Math.min(clickedFarmPlot.bounds.maxX, this.playerTileX));
+          const clampedY = Math.max(clickedFarmPlot.bounds.minY, Math.min(clickedFarmPlot.bounds.maxY, this.playerTileY));
+          const borderDist = Math.hypot(this.playerTileX - clampedX, this.playerTileY - clampedY);
+          if (borderDist <= 3.5 && this.onSelectFarmPlot) {
+            SoundSynth.playRustle();
+            this.onSelectFarmPlot(clickedFarmPlot);
+            return;
+          }
+          this.walkTowardsTile(tx, ty);
+          return;
+        }
+
         // Tap to walk or gather
         this.handleClickMoveOrGather(tx, ty);
       }
@@ -3085,8 +3823,16 @@ export class WorldScene extends Phaser.Scene {
     }
     this.buildGhostSprite = this.add.sprite(0, 0, 'obj_house_small').setVisible(false).setAlpha(0.75).setDepth(25041);
 
-    // Draw isometric outline of the Homestead Buildable Zone (X: 40..114, Y: 40..114), visible only in build mode
-    const g = this.add.graphics().setDepth(25035).setVisible(false);
+    // Draw isometric outline of Buildable Zones (Homestead 40..114 + owned Farm Plots for fences)
+    this.buildableZoneGraphics = this.add.graphics().setDepth(25035).setVisible(false);
+    this.redrawBuildableZoneGraphics();
+  }
+
+  private redrawBuildableZoneGraphics(): void {
+    const g = this.buildableZoneGraphics;
+    if (!g) return;
+    g.clear();
+
     const { minX, minY, maxX, maxY } = BUILDABLE_ZONE_BOUNDS;
     const nw = MapSystem.tileToWorld(minX, minY);
     const ne = MapSystem.tileToWorld(maxX, minY);
@@ -3100,7 +3846,27 @@ export class WorldScene extends Phaser.Scene {
     g.lineTo(sw.x - 32, sw.y + 16);
     g.closePath();
     g.strokePath();
-    this.buildableZoneGraphics = g;
+
+    if (this.buildModeType === 'fence_wood') {
+      const effectiveUid = this.networkSystem?.localPlayerId || this.playerProfile?.name;
+      const owners = this.buildingSystem?.farmPlotOwners || {};
+      for (const plot of FARM_PLOTS) {
+        const rec = owners[plot.id];
+        if (!rec || !effectiveUid || rec.ownerId !== effectiveUid) continue;
+        const nRaw = MapSystem.tileToWorld(plot.bounds.minX - 0.5, plot.bounds.minY - 0.5);
+        const eRaw = MapSystem.tileToWorld(plot.bounds.maxX + 0.5, plot.bounds.minY - 0.5);
+        const sRaw = MapSystem.tileToWorld(plot.bounds.maxX + 0.5, plot.bounds.maxY + 0.5);
+        const wRaw = MapSystem.tileToWorld(plot.bounds.minX - 0.5, plot.bounds.maxY + 0.5);
+        g.lineStyle(3, 0x4ade80, 0.95);
+        g.beginPath();
+        g.moveTo(nRaw.x, nRaw.y + 16);
+        g.lineTo(eRaw.x, eRaw.y + 16);
+        g.lineTo(sRaw.x, sRaw.y + 16);
+        g.lineTo(wRaw.x, wRaw.y + 16);
+        g.closePath();
+        g.strokePath();
+      }
+    }
   }
 
   private createAtmosphereAndWeather(): void {
@@ -3179,7 +3945,13 @@ export class WorldScene extends Phaser.Scene {
       this.atmosphereOverlay.setFillStyle(snap.tintColor, snap.tintAlpha);
     }
 
-    // 2. Dynamic Town & Placed-Building Lights + Window Glows (synced with parent building occlusion alpha)
+    // 2. Dynamic Town & Placed-Building Lights + Window/Sconce Glows (viewport-culled & synced with building fade)
+    const camView = this.cameras.main.worldView;
+    const viewMinX = camView.x - 180;
+    const viewMaxX = camView.right + 180;
+    const viewMinY = camView.y - 180;
+    const viewMaxY = camView.bottom + 180;
+
     const updateLightList = (
       lights: Array<{
         sprite: Phaser.GameObjects.Image;
@@ -3193,7 +3965,10 @@ export class WorldScene extends Phaser.Scene {
     ) => {
       for (const light of lights) {
         const effectiveLevel = Math.max(light.alwaysWarmMin, snap.lightIntensity);
-        if (effectiveLevel <= 0.015) {
+        const sx = light.sprite.x;
+        const sy = light.sprite.y;
+        const inView = sx >= viewMinX && sx <= viewMaxX && sy >= viewMinY && sy <= viewMaxY;
+        if (effectiveLevel <= 0.015 || !inView) {
           if (light.sprite.visible) light.sprite.setVisible(false);
           continue;
         }
@@ -3651,11 +4426,6 @@ export class WorldScene extends Phaser.Scene {
   public rotateBuildPreview(): void {
     if (this.buildModeType !== 'fence_wood') return;
     this.buildRotation = ((this.buildRotation + 1) % 4) as FenceRotation;
-    if (this.buildGhostSprite) {
-      const { tex, originY } = this.getBuildingVisualConfig('fence_wood', this.buildRotation);
-      this.buildGhostSprite.setTexture(tex);
-      this.buildGhostSprite.setOrigin(0.5, originY);
-    }
     SoundSynth.playRustle();
     this.updateBuildPreview(this.selectedPlacementTile.tx, this.selectedPlacementTile.ty);
   }
@@ -3698,6 +4468,7 @@ export class WorldScene extends Phaser.Scene {
         this.buildGhostSprite.setVisible(true);
       }
       if (this.buildableZoneGraphics) {
+        this.redrawBuildableZoneGraphics();
         this.buildableZoneGraphics.setVisible(true);
       }
 
@@ -3722,23 +4493,37 @@ export class WorldScene extends Phaser.Scene {
     if (!this.buildModeType || !this.buildGhostSprite) return;
 
     this.selectedPlacementTile = { tx, ty };
-    const { tex, originY } = this.getBuildingVisualConfig(this.buildModeType, this.buildRotation);
-    this.buildGhostSprite.setTexture(tex);
-    this.buildGhostSprite.setOrigin(0.5, originY);
+
+    let previewVisual: { tex: string; originY: number };
+    if (this.buildModeType === 'fence_wood') {
+      const existingFences = this.movingBuildingId
+        ? this.buildingSystem.buildings.filter((b) => b.id !== this.movingBuildingId)
+        : this.buildingSystem.buildings;
+      const previewCoords = buildFenceCoordSet(existingFences);
+      previewCoords.add(`${tx}_${ty}`);
+      previewVisual = this.getBuildingVisualConfig(this.buildModeType, this.buildRotation, tx, ty, previewCoords);
+    } else {
+      previewVisual = this.getBuildingVisualConfig(this.buildModeType, this.buildRotation);
+    }
+
+    this.buildGhostSprite.setTexture(previewVisual.tex);
+    this.buildGhostSprite.setOrigin(0.5, previewVisual.originY);
 
     const fp = BuildingSystem.getFootprint(this.buildModeType);
     const { x: ghostX, y: ghostY } = this.getFootprintWorldPos(tx, ty, fp.width, fp.height);
     this.buildGhostSprite.setPosition(ghostX, ghostY);
 
-    const remotePositions = Array.from(this.remotePlayerSprites.values()).map(rp => {
+    const remotePositions = Array.from(this.remotePlayerSprites.values()).map((rp) => {
       const tile = MapSystem.worldToTile(rp.sprite.x, rp.sprite.y - 16);
       return { x: tile.tx, y: tile.ty };
     });
 
-    const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
+    const npcPositions = this.townNpcs.map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
     const resourcePositions = this.resourceSystem.nodes
       .filter((n) => !n.depletedUntil || n.depletedUntil <= Date.now())
       .map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
+
+    const effectiveOwnerId = this.networkSystem.localPlayerId || this.playerProfile.name;
 
     const check = this.buildingSystem.canPlaceBuilding(
       this.buildModeType,
@@ -3749,11 +4534,29 @@ export class WorldScene extends Phaser.Scene {
       remotePositions,
       npcPositions,
       resourcePositions,
-      this.movingBuildingId || undefined
+      this.movingBuildingId || undefined,
+      { ownerId: effectiveOwnerId, checkLandOwnership: true }
     );
     this.lastPlacementCheck = check;
 
-    const hasItemOrMoving = !!this.movingBuildingId || this.inventorySystem.hasItem(this.buildModeType, 1);
+    let hasItemOrMoving = !!this.movingBuildingId;
+    let insufficientReason: string | undefined;
+    let stockLabel: string | undefined;
+
+    if (this.buildModeType === 'fence_wood' && !this.movingBuildingId) {
+      const plan = getContinuousFenceCostPlan(this.inventorySystem);
+      hasItemOrMoving = plan.canAfford;
+      stockLabel = `အိတ်: ${plan.inBag} | 🪵 ${plan.woodHave} | 🌾 ${plan.fiberHave}`;
+      if (!plan.canAfford) {
+        insufficientReason = formatFenceInsufficientMessage(plan);
+      }
+    } else if (!this.movingBuildingId) {
+      hasItemOrMoving = this.inventorySystem.hasItem(this.buildModeType, 1);
+      if (!hasItemOrMoving) {
+        insufficientReason = 'အိတ်ထဲတွင် အဆောက်အအုံ မလုံလောက်ပါ';
+      }
+    }
+
     const isValid = check.valid && hasItemOrMoving;
 
     // Highlight every tile inside the footprint (1x1, 2x2, 3x2, or 3x3)
@@ -3789,7 +4592,8 @@ export class WorldScene extends Phaser.Scene {
         tileY: ty,
         rotation: this.buildRotation,
         valid: isValid,
-        reason: !hasItemOrMoving ? 'အိတ်ထဲတွင် အဆောက်အအုံ မလုံလောက်ပါ' : check.reason,
+        reason: !hasItemOrMoving ? insufficientReason : check.reason,
+        stockLabel,
       });
     }
   }
@@ -3804,20 +4608,24 @@ export class WorldScene extends Phaser.Scene {
     if (!this.buildModeType) return;
     if (Date.now() < this.placementCooldown) return;
 
-    const remotePositions = Array.from(this.remotePlayerSprites.values()).map(rp => {
+    const remotePositions = Array.from(this.remotePlayerSprites.values()).map((rp) => {
       const tile = MapSystem.worldToTile(rp.sprite.x, rp.sprite.y - 16);
       return { x: tile.tx, y: tile.ty };
     });
 
-    const npcPositions = this.townNpcs.map(n => ({ tileX: n.tileX, tileY: n.tileY }));
+    const npcPositions = this.townNpcs.map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
     const resourcePositions = this.resourceSystem.nodes
       .filter((n) => !n.depletedUntil || n.depletedUntil <= Date.now())
       .map((n) => ({ tileX: n.tileX, tileY: n.tileY }));
 
     const ownerUid = this.networkSystem.localPlayerId || undefined;
+    const effectiveOwnerId = ownerUid || this.playerProfile.name;
 
     // 1. Move Mode Execution
     if (this.movingBuildingId) {
+      const prevTarget = this.buildingSystem.buildings.find((b) => b.id === this.movingBuildingId);
+      const prevSnapshot = prevTarget ? { ...prevTarget } : undefined;
+
       const moved = this.buildingSystem.moveBuilding(
         this.movingBuildingId,
         tx,
@@ -3827,12 +4635,22 @@ export class WorldScene extends Phaser.Scene {
         remotePositions,
         npcPositions,
         resourcePositions,
-        this.buildRotation
+        this.buildRotation,
+        effectiveOwnerId
       );
 
       if (moved) {
+        if (prevSnapshot) {
+          this.pendingPlacements.set(moved.id, {
+            building: { ...moved },
+            usedRawFence: false,
+            isMove: true,
+            prevBuilding: prevSnapshot,
+          });
+        }
         SoundSynth.playBuild();
         this.spawnFloatingText(moved.tileX, moved.tileY, 'အဆောက်အအုံရွှေ့ပြောင်းပြီးပါပြီ!', '#4ade80');
+        this.renderPlacedBuildings();
         this.networkSystem.broadcastBuilding(moved);
         this.nudgePlayerIfInsideBuilding(moved.tileX, moved.tileY, moved.width, moved.height);
         this.setBuildMode(null);
@@ -3847,7 +4665,47 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // 2. New Placement Execution
+    // 2. New Placement Execution (with single-unit continuous fence deduction)
+    let usedRawFence = false;
+    if (this.buildModeType === 'fence_wood') {
+      const plan = getContinuousFenceCostPlan(this.inventorySystem);
+      if (!plan.canAfford) {
+        const msg = formatFenceInsufficientMessage(plan);
+        SoundSynth.playRustle();
+        this.spawnFloatingText(tx, ty, msg, '#fbbf24');
+        this.onPlacementNotice?.(msg, 'warning');
+        this.setBuildMode(null);
+        return;
+      }
+
+      const preCheck = this.buildingSystem.canPlaceBuilding(
+        'fence_wood',
+        tx,
+        ty,
+        this.mapSystem,
+        { x: this.playerTileX, y: this.playerTileY },
+        remotePositions,
+        npcPositions,
+        resourcePositions,
+        undefined,
+        { ownerId: effectiveOwnerId, checkLandOwnership: true }
+      );
+      if (!preCheck.valid) {
+        SoundSynth.playRustle();
+        if (preCheck.reason) {
+          this.spawnFloatingText(tx, ty, preCheck.reason, '#f87171');
+        }
+        return;
+      }
+
+      if (plan.source === 'raw') {
+        this.inventorySystem.removeItem('wood', 2);
+        this.inventorySystem.removeItem('fiber', 1);
+        this.inventorySystem.addItem('fence_wood', 1);
+        usedRawFence = true;
+      }
+    }
+
     const placed = this.buildingSystem.placeBuilding(
       this.buildModeType,
       tx,
@@ -3860,34 +4718,68 @@ export class WorldScene extends Phaser.Scene {
       npcPositions,
       resourcePositions,
       this.buildRotation,
-      ownerUid
+      effectiveOwnerId
     );
 
     if (placed) {
+      this.pendingPlacements.set(placed.id, {
+        building: { ...placed },
+        usedRawFence,
+        isMove: false,
+      });
       SoundSynth.playBuild();
       this.spawnFloatingText(placed.tileX, placed.tileY, 'အဆောက်အအုံဆောက်လုပ်ပြီးပါပြီ!', '#4ade80');
-      this.networkSystem.broadcastBuilding(placed);
+      this.renderPlacedBuildings();
+      this.networkSystem.broadcastBuilding(placed, usedRawFence);
       this.nudgePlayerIfInsideBuilding(placed.tileX, placed.tileY, placed.width, placed.height);
 
       if (this.onBuildingBuilt) this.onBuildingBuilt(false);
       if (this.onStateChanged) this.onStateChanged();
 
-      // If no more items in inventory, exit build mode
-      if (!this.inventorySystem.hasItem(this.buildModeType, 1)) {
+      if (this.buildModeType === 'fence_wood') {
+        const nextPlan = getContinuousFenceCostPlan(this.inventorySystem);
+        if (!nextPlan.canAfford) {
+          const msg = formatFenceInsufficientMessage(nextPlan);
+          this.setBuildMode(null);
+          this.spawnFloatingText(tx, ty, msg, '#fbbf24');
+          this.onPlacementNotice?.(msg, 'warning');
+        } else {
+          const nextTile = getNextContinuousFenceTile(
+            this.mapSystem,
+            tx,
+            ty,
+            this.buildRotation,
+            (nx, ny) =>
+              this.buildingSystem.canPlaceBuilding(
+                'fence_wood',
+                nx,
+                ny,
+                this.mapSystem,
+                { x: this.playerTileX, y: this.playerTileY },
+                remotePositions,
+                npcPositions,
+                resourcePositions,
+                undefined,
+                { ownerId: effectiveOwnerId, checkLandOwnership: true }
+              ).valid
+          );
+          const nextTx = nextTile ? nextTile.tileX : tx;
+          const nextTy = nextTile ? nextTile.tileY : ty;
+          this.isPlacementPinned = true;
+          this.updateBuildPreview(nextTx, nextTy);
+        }
+      } else if (!this.inventorySystem.hasItem(this.buildModeType, 1)) {
         this.setBuildMode(null);
-      } else if (this.buildModeType === 'fence_wood') {
-        // Advance 1 tile along current isometric fence axis so building continuous fence lines is effortless
-        const stepX = this.buildRotation % 2 === 0 ? 1 : 0;
-        const stepY = this.buildRotation % 2 === 1 ? 1 : 0;
-        const nextTx = this.mapSystem.isTileInBounds(tx + stepX, ty + stepY) ? tx + stepX : tx;
-        const nextTy = this.mapSystem.isTileInBounds(tx + stepX, ty + stepY) ? ty + stepY : ty;
-        this.isPlacementPinned = true;
-        this.updateBuildPreview(nextTx, nextTy);
       } else {
         this.isPlacementPinned = false;
         this.updateBuildPreview(tx, ty);
       }
     } else {
+      if (usedRawFence) {
+        this.inventorySystem.removeItem('fence_wood', 1);
+        this.inventorySystem.addItem('wood', 2);
+        this.inventorySystem.addItem('fiber', 1);
+      }
       SoundSynth.playRustle();
       if (this.lastPlacementCheck.reason) {
         this.spawnFloatingText(tx, ty, this.lastPlacementCheck.reason, '#f87171');
@@ -3979,8 +4871,87 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private sitOnNearbyBench(bench: LakesideDoubleBenchDef): void {
+    const localId = this.networkSystem.localPlayerId || '__local__';
+    const existingSeats = this.networkSystem.benchSeats.get(bench.id) || [null, null];
+    let seatIdx: 0 | 1 | null = null;
+    if (!existingSeats[0] || existingSeats[0] === localId) seatIdx = 0;
+    else if (!existingSeats[1] || existingSeats[1] === localId) seatIdx = 1;
+
+    if (seatIdx === null) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(bench.tileX, bench.tileY, 'ဤထိုင်ခုံ ၂ နေရာစလုံး ပြည့်နေပါပြီ', '#fbbf24');
+      return;
+    }
+
+    if (this.isPositionWalkable(this.playerTileX, this.playerTileY)) {
+      this.preSitTile = { x: this.playerTileX, y: this.playerTileY };
+    } else {
+      this.preSitTile = { x: this.lastValidWalkableX, y: this.lastValidWalkableY };
+    }
+
+    this.smoothMoveX = 0;
+    this.smoothMoveY = 0;
+    this.isMoving = false;
+    this.localSeatedBenchId = bench.id;
+    this.localSeatedSeatIndex = seatIdx;
+    this.playerDirection = bench.facing;
+
+    const updatedPair: [string | null, string | null] = [...existingSeats] as [string | null, string | null];
+    updatedPair[seatIdx] = localId;
+    this.networkSystem.benchSeats.set(bench.id, updatedPair);
+
+    this.networkSystem.sitOnBench(bench.id, seatIdx);
+    this.networkSystem.broadcastActionState(bench.tileX, bench.tileY, bench.facing, 'idle');
+    SoundSynth.playRustle();
+  }
+
+  private standUpFromBench(broadcast = true): void {
+    if (!this.localSeatedBenchId) return;
+    const benchId = this.localSeatedBenchId;
+    const localId = this.networkSystem.localPlayerId || '__local__';
+
+    const existingSeats = this.networkSystem.benchSeats.get(benchId);
+    if (existingSeats) {
+      const nextPair: [string | null, string | null] = [
+        existingSeats[0] === localId ? null : existingSeats[0],
+        existingSeats[1] === localId ? null : existingSeats[1],
+      ];
+      this.networkSystem.benchSeats.set(benchId, nextPair);
+    }
+
+    this.localSeatedBenchId = null;
+    this.localSeatedSeatIndex = null;
+
+    if (this.preSitTile && this.isPositionWalkable(this.preSitTile.x, this.preSitTile.y)) {
+      this.playerTileX = this.preSitTile.x;
+      this.playerTileY = this.preSitTile.y;
+    } else {
+      const safe = this.mapSystem.findNearestWalkableTile(this.playerTileX, this.playerTileY);
+      this.playerTileX = safe.tileX;
+      this.playerTileY = safe.tileY;
+    }
+    this.preSitTile = null;
+    this.lastValidWalkableX = this.playerTileX;
+    this.lastValidWalkableY = this.playerTileY;
+
+    this.playerSprite?.setScale(0.5, 0.5);
+    this.playerSprite?.setAngle(0);
+
+    if (broadcast) {
+      this.networkSystem.standFromBench();
+      this.networkSystem.broadcastActionState(this.playerTileX, this.playerTileY, this.playerDirection, 'idle');
+    }
+  }
+
   public triggerInteraction(): void {
     if (this.isGathering) return;
+
+    // -1. Stand up cleanly if locally seated on a lakeside 2-seater bench
+    if (this.localSeatedBenchId) {
+      this.standUpFromBench(true);
+      return;
+    }
 
     // 0. Active Fishing Timing Trigger (Works seamlessly with [E] key and Mobile [E] Touch Button)
     if (this.fishingState) {
@@ -4022,10 +4993,27 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // 4. Resource Node check (includes Rod-gated Lake Fishing)
+    // 4. Resource Node vs Lakeside 2-Seater Bench proximity
     const nearbyNode = this.resourceSystem.getNearbyNode(this.playerTileX, this.playerTileY, 1.65);
+    const nodeDist = nearbyNode
+      ? Math.hypot(nearbyNode.tileX - this.playerTileX, nearbyNode.tileY - this.playerTileY)
+      : Number.POSITIVE_INFINITY;
+    const benchDist = this.nearbyDoubleBench
+      ? Math.hypot(this.nearbyDoubleBench.tileX - this.playerTileX, this.nearbyDoubleBench.tileY - this.playerTileY)
+      : Number.POSITIVE_INFINITY;
+
+    if (this.nearbyDoubleBench && (!nearbyNode || benchDist < nodeDist)) {
+      this.sitOnNearbyBench(this.nearbyDoubleBench);
+      return;
+    }
+
     if (nearbyNode) {
       this.startGathering(nearbyNode);
+      return;
+    }
+
+    if (this.nearbyDoubleBench) {
+      this.sitOnNearbyBench(this.nearbyDoubleBench);
       return;
     }
 
@@ -4046,6 +5034,13 @@ export class WorldScene extends Phaser.Scene {
     if (this.nearbySignpost) {
       SoundSynth.playRustle();
       this.spawnFloatingText(this.nearbySignpost.tileX, this.nearbySignpost.tileY, this.nearbySignpost.hint, this.nearbySignpost.color);
+      return;
+    }
+
+    // 8. Farming District Plot purchase / management modal
+    if (this.nearbyFarmPlot && this.onSelectFarmPlot) {
+      SoundSynth.playRustle();
+      this.onSelectFarmPlot(this.nearbyFarmPlot);
     }
   }
 
@@ -4082,6 +5077,17 @@ export class WorldScene extends Phaser.Scene {
 
     if (node.type === 'lake_fish') {
       this.startFishing(node);
+      return;
+    }
+
+    if (!this.inventorySystem.canFitItem(node.yieldItem, node.yieldAmount)) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(
+        node.tileX,
+        node.tileY,
+        '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ — ပစ္စည်းအချို့ သိမ်း/ရောင်းပါ',
+        '#f87171'
+      );
       return;
     }
 
@@ -4272,6 +5278,17 @@ export class WorldScene extends Phaser.Scene {
   public startFishing(node: ResourceNode): void {
     if (this.fishingState || this.isGathering) return;
 
+    if (this.inventorySystem.getRemainingCapacity('fish') < 3) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(
+        this.playerTileX,
+        this.playerTileY,
+        '🎒 အိတ်ထဲတွင် ငါး ၃ ကောင်အတွက် နေရာလွတ်မရှိပါ — ပစ္စည်းအချို့ သိမ်း/ရောင်းပါ',
+        '#f87171'
+      );
+      return;
+    }
+
     // Orient character toward fishing water spot
     const dx = node.tileX - this.playerTileX;
     const dy = node.tileY - this.playerTileY;
@@ -4281,17 +5298,25 @@ export class WorldScene extends Phaser.Scene {
       this.playerDirection = dy >= 0 ? 'down' : 'up';
     }
 
+    const sessionId = `fish_${Date.now()}_${++this.fishingSessionSeq}`;
     this.fishingState = {
+      sessionId,
       node,
       phase: 'waiting',
       elapsedMs: 0,
-      waitDurationMs: 1300 + Math.floor(Math.random() * 1300),
-      biteDurationMs: 2800,
-      cursorPos: 0.12,
+      waitDurationMs: 2000 + Math.floor(Math.random() * 2500),
+      biteDurationMs: 4500,
+      cursorPos: 0.10,
       cursorDir: 1,
-      sweetMin: 0.36,
-      sweetMax: 0.64,
+      sweetMin: 0.34,
+      sweetMax: 0.66,
+      resolved: false,
+      pendingServerClaim: false,
     };
+
+    if (this.networkSystem.status === 'connected') {
+      this.networkSystem.startFishingSession(node.id, sessionId);
+    }
 
     SoundSynth.playWater();
     this.spawnFloatingText(node.tileX, node.tileY, '🎣 ငါးမျှားကြိုးချလိုက်ပြီ...', '#7dd3fc');
@@ -4300,7 +5325,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   public triggerFishingCatch(): void {
-    if (!this.fishingState) return;
+    if (!this.fishingState || this.fishingState.resolved || this.fishingState.pendingServerClaim) return;
     const fs = this.fishingState;
 
     if (fs.phase === 'waiting') {
@@ -4311,12 +5336,54 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const inSweetSpot = fs.cursorPos >= fs.sweetMin && fs.cursorPos <= fs.sweetMax;
-    const catchCount = inSweetSpot ? 2 : 1;
+    fs.resolved = true;
+
+    if (this.networkSystem.status === 'connected') {
+      fs.pendingServerClaim = true;
+      this.networkSystem.claimFishingCatch(fs.node.id, fs.sessionId, inSweetSpot);
+      return;
+    }
+
+    // Offline single-player fallback: strictly 3 fish inside green zone, 0 fish if missed
+    if (!inSweetSpot) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(
+        fs.node.tileX,
+        fs.node.tileY,
+        'လွဲသွားပြီ — အစိမ်းရောင်ဇုန်ထဲတွင် ဆွဲတင်မှ ငါး ၃ ကောင်ရမည်',
+        '#fbbf24'
+      );
+      this.cancelFishing(true);
+      return;
+    }
+
+    const now = Date.now();
+    if (fs.node.depletedUntil && fs.node.depletedUntil > now) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(fs.node.tileX, fs.node.tileY, 'ငါးပြန်ပေါ်ရန် စောင့်ဆိုင်းနေပါသည်', '#f87171');
+      this.cancelFishing(true);
+      return;
+    }
+
+    const remainingCap = this.inventorySystem.getRemainingCapacity('fish');
+    if (remainingCap < 3) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(
+        this.playerTileX,
+        this.playerTileY,
+        '🎒 အိတ်ထဲတွင် ငါး ၃ ကောင်အတွက် နေရာလွတ်မရှိပါ',
+        '#f87171'
+      );
+      this.cancelFishing(true);
+      return;
+    }
+
+    const award = 3;
     const harvested = this.resourceSystem.harvestNode(
       fs.node,
       this.inventorySystem,
       this.mapSystem,
-      catchCount
+      award
     );
 
     SoundSynth.playSuccess();
@@ -4325,11 +5392,10 @@ export class WorldScene extends Phaser.Scene {
     this.spawnFloatingText(
       fs.node.tileX,
       fs.node.tileY,
-      inSweetSpot ? `✨ အထူးအမိ! +${harvested.amount} ${nodeName}` : `+${harvested.amount} ${nodeName}`,
-      inSweetSpot ? '#4ade80' : '#facc15'
+      `✨ အထူးအမိ! +${harvested.amount} ${nodeName}`,
+      '#4ade80'
     );
 
-    this.networkSystem.broadcastHarvest(fs.node.id);
     this.renderResourceNodes();
     this.cancelFishing(true);
 
@@ -4434,6 +5500,23 @@ export class WorldScene extends Phaser.Scene {
   private finishGathering(): void {
     if (!this.currentGatheringNode) return;
 
+    if (
+      !this.inventorySystem.canFitItem(
+        this.currentGatheringNode.yieldItem,
+        this.currentGatheringNode.yieldAmount
+      )
+    ) {
+      SoundSynth.playRustle();
+      this.spawnFloatingText(
+        this.currentGatheringNode.tileX,
+        this.currentGatheringNode.tileY,
+        '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ',
+        '#f87171'
+      );
+      this.cancelGathering(true);
+      return;
+    }
+
     const harvested = this.resourceSystem.harvestNode(
       this.currentGatheringNode,
       this.inventorySystem,
@@ -4515,6 +5598,14 @@ export class WorldScene extends Phaser.Scene {
 
   private updateAnimatedFish(time: number, delta: number): void {
     const dt = Math.min(0.05, delta / 1000);
+    const camView = this.cameras.main.worldView;
+    const hasCam = camView.width > 0 && camView.height > 0;
+    const pad = 150;
+    const minX = camView.x - pad;
+    const maxX = camView.right + pad;
+    const minY = camView.y - pad;
+    const maxY = camView.bottom + pad;
+
     for (const fish of this.animatedFish) {
       // Gentle burst-and-glide swim rhythm + curved shoreline avoidance lookahead (zero allocations)
       const glide = 0.78 + 0.28 * Math.sin(time * 0.0028 + fish.phase);
@@ -4552,6 +5643,12 @@ export class WorldScene extends Phaser.Scene {
       }
 
       const { x, y } = MapSystem.tileToWorld(fish.tileX, fish.tileY);
+      if (hasCam && (x < minX || x > maxX || y < minY || y > maxY)) {
+        if (fish.sprite.visible) fish.sprite.setVisible(false);
+        continue;
+      }
+      if (!fish.sprite.visible) fish.sprite.setVisible(true);
+
       const bobY = Math.sin(time * 0.0038 + fish.phase) * 1.5;
       fish.sprite.setPosition(x, y + 16 + bobY);
       fish.sprite.setDepth(-4);
@@ -4564,24 +5661,154 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private updateAnimatedWaterEnvironment(time: number, sunlightFactor = 1): void {
+  private updateJumpingFish(time: number, dt: number): void {
+    if (this.jumpingFishPool.length === 0 || this.jumpingFishEligibleTiles.length === 0) return;
+
     const camView = this.cameras.main.worldView;
     const hasCam = camView.width > 0 && camView.height > 0;
-    const pad = 120;
-    const shimmerMul = 0.42 + 0.58 * sunlightFactor;
+
+    let activeCount = 0;
+    for (const jf of this.jumpingFishPool) {
+      if (!jf.active) continue;
+      activeCount++;
+      jf.age += dt;
+      const t = jf.age / jf.duration;
+      if (t >= 1) {
+        jf.active = false;
+        jf.sprite.setVisible(false);
+        jf.splash.setVisible(false);
+        continue;
+      }
+
+      if (t < 0.72) {
+        const arc = t / 0.72;
+        const arcY = 4 * arc * (1 - arc) * jf.peakH;
+        const driftX = (arc - 0.5) * 14 * jf.dirX;
+        const depthBase = -3;
+        jf.sprite.setVisible(true);
+        jf.sprite.setPosition(jf.baseX + driftX, jf.baseY - arcY);
+        jf.sprite.setFlipX(jf.dirX < 0);
+        jf.sprite.setDepth(depthBase);
+        const targetTex = arc < 0.5 ? 'obj_jumping_fish_0' : 'obj_jumping_fish_1';
+        if (jf.sprite.texture.key !== targetTex) jf.sprite.setTexture(targetTex);
+        jf.sprite.setAlpha(arc < 0.12 ? arc / 0.12 : arc > 0.88 ? (1 - arc) / 0.12 : 0.96);
+
+        if (arc < 0.25) {
+          jf.splash.setVisible(true);
+          jf.splash.setPosition(jf.baseX - 6 * jf.dirX, jf.baseY + 1);
+          jf.splash.setScale(0.45 + arc * 1.4);
+          jf.splash.setAlpha(0.55 * (1 - arc / 0.25));
+        } else {
+          jf.splash.setVisible(false);
+        }
+      } else {
+        jf.sprite.setVisible(false);
+        const splashProgress = (t - 0.72) / 0.28;
+        jf.splash.setVisible(true);
+        jf.splash.setPosition(jf.baseX + 7 * jf.dirX, jf.baseY + 1);
+        jf.splash.setScale(0.55 + splashProgress * 0.9);
+        jf.splash.setAlpha(0.82 * (1 - splashProgress));
+      }
+    }
+
+    if (hasCam && time >= this.nextFishJumpAt && activeCount < 2) {
+      this.nextFishJumpAt = time + 1900 + Math.random() * 1700;
+      const slot = this.jumpingFishPool.find((j) => !j.active);
+      if (!slot) return;
+
+      const pad = 24;
+      const count = this.jumpingFishEligibleTiles.length;
+      for (let attempt = 0; attempt < 16; attempt++) {
+        const pick = this.jumpingFishEligibleTiles[Math.floor(Math.random() * count)];
+        const wp = MapSystem.tileToWorld(pick.tx, pick.ty);
+        if (
+          wp.x >= camView.x + pad &&
+          wp.x <= camView.right - pad &&
+          wp.y + 16 >= camView.y + pad &&
+          wp.y + 16 <= camView.bottom - pad
+        ) {
+          slot.active = true;
+          slot.tileX = pick.tx;
+          slot.tileY = pick.ty;
+          slot.baseX = wp.x;
+          slot.baseY = wp.y + 15;
+          slot.age = 0;
+          slot.duration = 0.82 + Math.random() * 0.22;
+          slot.peakH = 14 + Math.random() * 6;
+          slot.dirX = Math.random() < 0.5 ? 1 : -1;
+          slot.splashedEntry = false;
+          slot.sprite.setTexture('obj_jumping_fish_0').setVisible(true);
+          slot.splash.setVisible(false);
+          break;
+        }
+      }
+    }
+  }
+
+  private updateAnimatedWaterEnvironment(time: number, snap: AtmosphereSnapshot | null = null): void {
+    const camView = this.cameras.main.worldView;
+    const hasCam = camView.width > 0 && camView.height > 0;
+    const pad = 130;
+    const minX = camView.x - pad;
+    const maxX = camView.right + pad;
+    const minY = camView.y - pad;
+    const maxY = camView.bottom + pad;
+
+    const sunlightFactor = snap?.sunlightFactor ?? 1;
+    const phase = snap?.phase ?? 'day';
+    const rainIntensity = snap?.effectiveRainIntensity ?? 0;
+    const shimmerMul = (0.44 + 0.56 * sunlightFactor) * (1 - rainIntensity * 0.32);
+    const reflectionTint = phase === 'evening' ? 0xfdba74 : phase === 'night' ? 0xbae6fd : 0xffffff;
+    const expectedGlintKey = phase === 'night' ? 'fx_water_moon_glint' : 'fx_water_sun_glint';
 
     for (const item of this.animatedWaterProps) {
       if (hasCam) {
-        const sx = item.sprite.x;
-        const sy = item.sprite.y;
-        if (sx < camView.x - pad || sx > camView.right + pad || sy < camView.y - pad || sy > camView.bottom + pad) {
+        const sx = item.baseX;
+        const sy = item.baseY;
+        if (sx < minX || sx > maxX || sy < minY || sy > maxY) {
+          if (item.sprite.visible) item.sprite.setVisible(false);
           continue;
         }
+        if (!item.sprite.visible) item.sprite.setVisible(true);
       }
-      if (item.kind === 'shimmer') {
+
+      if (item.kind === 'flow') {
+        const cycle = ((time * item.speed + item.phase) % 1 + 1) % 1;
+        const drift = (cycle - 0.5) * (10 + (item.speedMul ?? 1) * 3);
+        item.sprite.setPosition(
+          item.baseX + (item.dirX ?? 0.85) * drift,
+          item.baseY + (item.dirY ?? 0.52) * drift
+        );
+        item.sprite.setAlpha(Math.sin(cycle * Math.PI) * (0.28 + 0.34 * sunlightFactor));
+      } else if (item.kind === 'cascade') {
+        const pulse = 0.5 + 0.5 * Math.sin(time * item.speed + item.phase);
+        item.sprite.setAlpha((0.68 + 0.24 * pulse) * (0.65 + 0.35 * sunlightFactor));
+        item.sprite.setScale(1, 0.96 + pulse * 0.08);
+      } else if (item.kind === 'riffle') {
+        const pulse = 0.5 + 0.5 * Math.sin(time * item.speed + item.phase);
+        item.sprite.setAlpha((0.36 + 0.38 * pulse) * (0.62 + 0.38 * sunlightFactor));
+        item.sprite.setScale(0.95 + pulse * 0.1, 0.95 + pulse * 0.08);
+      } else if (item.kind === 'swirl') {
+        item.sprite.setRotation(time * item.speed + item.phase);
+        item.sprite.setAlpha((0.18 + 0.24 * (0.5 + 0.5 * Math.sin(time * 0.0018 + item.phase))) * (0.55 + 0.45 * sunlightFactor));
+      } else if (item.kind === 'rock_foam') {
+        const pulse = 0.5 + 0.5 * Math.sin(time * item.speed + item.phase);
+        item.sprite.setScale(0.92 + pulse * 0.14);
+        item.sprite.setAlpha((0.28 + 0.34 * pulse) * (0.65 + 0.35 * sunlightFactor));
+      } else if (item.kind === 'glint') {
+        if (item.sprite.texture.key !== expectedGlintKey) {
+          item.sprite.setTexture(expectedGlintKey);
+        }
+        item.sprite.setTint(reflectionTint);
+        const glintMul = phase === 'night' ? 0.62 * (1 - rainIntensity * 0.45) : shimmerMul;
+        const wave = 0.5 + 0.5 * Math.sin(time * item.speed + item.phase);
+        item.sprite.setAlpha((0.16 + 0.48 * wave) * glintMul);
+      } else if (item.kind === 'shimmer') {
         item.sprite.setAlpha((0.24 + 0.52 * (0.5 + 0.5 * Math.sin(time * item.speed + item.phase))) * shimmerMul);
       } else if (item.kind === 'reflection') {
-        item.sprite.setAlpha((0.18 + 0.30 * (0.5 + 0.5 * Math.sin(time * item.speed + item.phase))) * shimmerMul);
+        item.sprite.setTint(reflectionTint);
+        const reflMul = phase === 'night' ? 0.54 : shimmerMul;
+        item.sprite.setAlpha((0.18 + 0.30 * (0.5 + 0.5 * Math.sin(time * item.speed + item.phase))) * reflMul);
       } else if (item.kind === 'lily') {
         item.sprite.y = item.baseY - 1 + Math.sin(time * item.speed + item.phase) * 1.1;
       } else if (item.kind === 'reed') {
@@ -4597,7 +5824,8 @@ export class WorldScene extends Phaser.Scene {
     this.updateVisibleGroundChunks();
     this.updateAtmosphereAndWeather(time, dt);
     this.updateAnimatedFish(time, delta);
-    this.updateAnimatedWaterEnvironment(time, this.currentAtmosphereSnapshot?.sunlightFactor ?? 1);
+    this.updateJumpingFish(time, dt);
+    this.updateAnimatedWaterEnvironment(time, this.currentAtmosphereSnapshot);
     this.updateStep6EnvironmentAndWildlife(time, dt, delta);
 
     // Read current directional input first so movement never gets frozen stubbornly during gather actions
@@ -4620,6 +5848,11 @@ export class WorldScene extends Phaser.Scene {
     const targetMoveX = activeInput.x;
     const targetMoveY = activeInput.y;
     const targetMag = activeInput.magnitude;
+
+    // 0B. Stand up cleanly if player initiates directional movement while seated on a lakeside bench
+    if (this.localSeatedBenchId && targetMag > 0.16) {
+      this.standUpFromBench(true);
+    }
 
     // 1. Handle active gathering animation, hit impacts & voluntary walk-cancel
     if (this.isGathering && this.currentGatheringNode) {
@@ -4706,8 +5939,13 @@ export class WorldScene extends Phaser.Scene {
 
     if (this.fishingState) {
       const fs = this.fishingState;
-      fs.elapsedMs += delta;
-      if (fs.phase === 'waiting') {
+      const clampedDelta = Math.min(50, Math.max(0, delta));
+      fs.elapsedMs += clampedDelta;
+      if (fs.pendingServerClaim) {
+        if (fs.elapsedMs >= fs.biteDurationMs + 3500) {
+          this.cancelFishing(true);
+        }
+      } else if (fs.phase === 'waiting') {
         if (fs.elapsedMs >= fs.waitDurationMs) {
           fs.phase = 'bite';
           fs.elapsedMs = 0;
@@ -4718,7 +5956,7 @@ export class WorldScene extends Phaser.Scene {
           this.emitFishingHudState(false);
         }
       } else {
-        fs.cursorPos += fs.cursorDir * (delta / 560);
+        fs.cursorPos += fs.cursorDir * (clampedDelta / 1280);
         if (fs.cursorPos >= 0.94) {
           fs.cursorPos = 0.94;
           fs.cursorDir = -1;
@@ -4904,21 +6142,53 @@ export class WorldScene extends Phaser.Scene {
     }
 
     // 3. Update Player Isometric Screen Position, Depth Sorting & Stride-Synced Ground Shadow
-    const { x: pScreenX, y: pScreenY } = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
-    const playerDepth = (this.playerTileX + this.playerTileY) * 100 + 52;
-    this.playerSprite.setPosition(pScreenX, pScreenY + 16);
-    this.playerSprite.setDepth(playerDepth);
-    this.syncLayerTransformsToBase(this.playerClothingLayerSlots, this.playerSprite, playerDepth);
+    let pScreenX: number;
+    let pScreenY: number;
+    let playerDepth: number;
+    const seatedBench = this.localSeatedBenchId ? getLakesideBenchById(this.localSeatedBenchId) : undefined;
 
-    if (this.playerShadow) {
-      const isPlayerStride = (this.isMoving && this.playerLastStep !== 0) || this.playerSettleMs > 30;
-      this.playerShadow.setPosition(pScreenX + 1.5, pScreenY + 16.5);
-      this.playerShadow.setDepth((this.playerTileX + this.playerTileY) * 100 + 21);
-      this.playerShadow.setScale(isPlayerStride ? 0.89 : 0.96, isPlayerStride ? 0.67 : 0.72);
-      this.playerShadow.setAlpha(isPlayerStride ? 0.44 : 0.5);
+    if (seatedBench) {
+      const benchWorld = MapSystem.tileToWorld(seatedBench.tileX, seatedBench.tileY);
+      const seatOffset = seatedBench.seatOffsets[this.localSeatedSeatIndex ?? 0];
+      pScreenX = benchWorld.x + seatOffset.dx;
+      pScreenY = benchWorld.y + seatOffset.dy;
+      playerDepth = (seatedBench.tileX + seatedBench.tileY) * 100 + 53;
+      this.playerDirection = seatedBench.facing;
+      this.playerSprite.setPosition(pScreenX, pScreenY + 16);
+      this.playerSprite.setDepth(playerDepth);
+      this.playerSprite.setScale(0.5, 0.46);
+      this.playerSprite.setAngle(0);
+      this.playerSprite.setFrame(this.getDirectionRowOffset(seatedBench.facing));
+      this.syncLayerTransformsToBase(this.playerClothingLayerSlots, this.playerSprite, playerDepth);
+
+      if (this.playerShadow) {
+        this.playerShadow.setPosition(pScreenX + 1.5, pScreenY + 16.5);
+        this.playerShadow.setDepth((seatedBench.tileX + seatedBench.tileY) * 100 + 21);
+        this.playerShadow.setScale(0.82, 0.56);
+        this.playerShadow.setAlpha(0.24);
+      }
+
+      this.playerNameText.setPosition(pScreenX, pScreenY - 30);
+    } else {
+      const wp = MapSystem.tileToWorld(this.playerTileX, this.playerTileY);
+      pScreenX = wp.x;
+      pScreenY = wp.y;
+      playerDepth = (this.playerTileX + this.playerTileY) * 100 + 52;
+      this.playerSprite.setPosition(pScreenX, pScreenY + 16);
+      this.playerSprite.setDepth(playerDepth);
+      this.playerSprite.setScale(0.5, 0.5);
+      this.syncLayerTransformsToBase(this.playerClothingLayerSlots, this.playerSprite, playerDepth);
+
+      if (this.playerShadow) {
+        const isPlayerStride = (this.isMoving && this.playerLastStep !== 0) || this.playerSettleMs > 30;
+        this.playerShadow.setPosition(pScreenX + 1.5, pScreenY + 16.5);
+        this.playerShadow.setDepth((this.playerTileX + this.playerTileY) * 100 + 21);
+        this.playerShadow.setScale(isPlayerStride ? 0.89 : 0.96, isPlayerStride ? 0.67 : 0.72);
+        this.playerShadow.setAlpha(isPlayerStride ? 0.44 : 0.5);
+      }
+
+      this.playerNameText.setPosition(pScreenX, pScreenY - 32);
     }
-
-    this.playerNameText.setPosition(pScreenX, pScreenY - 32);
 
     // 3A. Roof, Tall Tree Canopy & Tall Landmark Occlusion Peek-Through
     this.updateBuildingOcclusion(pScreenX, pScreenY + 16, playerDepth, dt);
@@ -4975,6 +6245,37 @@ export class WorldScene extends Phaser.Scene {
       const isPeerMoving = peer.isMoving || stepDist > 0.0025 || remainingDist > 0.04;
 
       const { x: rx, y: ry } = MapSystem.tileToWorld(peer.tileX, peer.tileY);
+      const rBench = peer.seatedBenchId ? getLakesideBenchById(peer.seatedBenchId) : undefined;
+
+      if (rBench) {
+        const bw = MapSystem.tileToWorld(rBench.tileX, rBench.tileY);
+        const sOffset = rBench.seatOffsets[peer.seatedSeatIndex ?? 0];
+        const sx = bw.x + sOffset.dx;
+        const sy = bw.y + sOffset.dy;
+        const rSeatedDepth = (rBench.tileX + rBench.tileY) * 100 + 53;
+
+        entry.gatherElapsedMs = 0;
+        entry.lastGatherStrike = 0;
+        entry.toolSprite.setVisible(false);
+        entry.sprite.setPosition(sx, sy + 16);
+        entry.sprite.setDepth(rSeatedDepth);
+        entry.sprite.setAngle(0);
+        entry.sprite.setScale(0.5, 0.46);
+        entry.sprite.setFrame(this.getDirectionRowOffset(rBench.facing));
+        entry.nameText.setPosition(sx, sy - 30);
+
+        this.syncLayerTransformsToBase(entry.clothingLayers, entry.sprite, rSeatedDepth);
+
+        const rShadow = this.remotePlayerShadows.get(id);
+        if (rShadow) {
+          rShadow.setPosition(sx + 1.5, sy + 16.5);
+          rShadow.setDepth((rBench.tileX + rBench.tileY) * 100 + 21);
+          rShadow.setScale(0.82, 0.56);
+          rShadow.setAlpha(0.24);
+        }
+        continue;
+      }
+
       entry.sprite.setPosition(rx, ry + 16);
       entry.sprite.setDepth((peer.tileX + peer.tileY) * 100 + 52);
       entry.nameText.setPosition(rx, ry - 30);
@@ -5316,13 +6617,49 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    // E. Nearby Resource Node & Zone Signposts
+    // E. Nearby Resource Node, Lakeside 2-Seater Bench, Zone Signposts & Farming Plots
     const nearbyNode = this.resourceSystem.getNearbyNode(ptx, pty, 1.65);
+    const nearestBenchHit = getNearestLakesideBench(ptx, pty, 1.85);
+    this.nearbyDoubleBench = nearestBenchHit ? nearestBenchHit.bench : null;
     this.nearbySignpost =
       ZONE_SIGNPOSTS.find((s) => Math.hypot(ptx - s.tileX, pty - s.tileY) <= 1.85) || null;
+    this.nearbyFarmPlot = getNearestInteractiveFarmPlot(ptx, pty, 1.55) || null;
+
+    const buildGatherPrompt = (node: ResourceNode) => {
+      let actionWord = 'ရိတ်သိမ်းမည်';
+      let subtitleWord = 'စတင်ရိတ်သိမ်းရန်';
+      let targetSuffix = '';
+      if (node.type === 'tree') actionWord = 'သစ်ခုတ်မည်';
+      else if (node.type === 'rock') actionWord = 'ကျောက်ခွဲမည်';
+      else if (node.type === 'bush') {
+        actionWord = node.spriteVariant === 'tall_grass' ? 'မြက်ပင်ရိတ်မည်' : 'အမျှင်ခူးမည်';
+      } else if (node.type === 'animal') actionWord = 'အမဲလိုက်မည်';
+      else if (node.type === 'lake_fish') {
+        const hasRod = this.inventorySystem.hasItem('rod_basic', 1);
+        targetSuffix = hasRod ? '_rod' : '_norod';
+        actionWord = hasRod ? 'ငါးမျှားမည်' : '🎣 ငါးမျှားတံ လိုအပ်သည်';
+        subtitleWord = hasRod ? 'စတင်ငါးမျှားရန်' : 'ဆိုင် (25🪙) သို့ ဖန်တီးခုံ';
+      }
+
+      this.emitInteractionPrompt({
+        type: 'gather',
+        title: actionWord,
+        subtitle: subtitleWord,
+        actionKey: 'E',
+        targetId: `node_${node.id}${targetSuffix}`,
+      });
+    };
 
     // Emit compact HUD prompt only when targetId changes
-    if (this.isNearShop) {
+    if (this.localSeatedBenchId) {
+      this.emitInteractionPrompt({
+        type: 'bench_stand',
+        title: 'ထိုင်ခုံမှ ထမည်',
+        subtitle: 'လမ်းလျှောက်ရန် သို့မဟုတ် [E] နှိပ်ပါ',
+        actionKey: 'E',
+        targetId: `bench_stand_${this.localSeatedBenchId}`,
+      });
+    } else if (this.isNearShop) {
       const shopId = distGrocery <= 2.05 ? 'shop_grocery' : distMarket <= 2.0 ? 'shop_market' : 'shop_general';
       const shopTitle =
         shopId === 'shop_grocery'
@@ -5386,29 +6723,35 @@ export class WorldScene extends Phaser.Scene {
         actionKey: 'E',
         targetId: `bld_${b.id}`,
       });
-    } else if (nearbyNode) {
-      let actionWord = 'ရိတ်သိမ်းမည်';
-      let subtitleWord = 'စတင်ရိတ်သိမ်းရန်';
-      let targetSuffix = '';
-      if (nearbyNode.type === 'tree') actionWord = 'သစ်ခုတ်မည်';
-      else if (nearbyNode.type === 'rock') actionWord = 'ကျောက်ခွဲမည်';
-      else if (nearbyNode.type === 'bush') {
-        actionWord = nearbyNode.spriteVariant === 'tall_grass' ? 'မြက်ပင်ရိတ်မည်' : 'အမျှင်ခူးမည်';
-      }
-      else if (nearbyNode.type === 'animal') actionWord = 'အမဲလိုက်မည်';
-      else if (nearbyNode.type === 'lake_fish') {
-        const hasRod = this.inventorySystem.hasItem('rod_basic', 1);
-        targetSuffix = hasRod ? '_rod' : '_norod';
-        actionWord = hasRod ? 'ငါးမျှားမည်' : '🎣 ငါးမျှားတံ လိုအပ်သည်';
-        subtitleWord = hasRod ? 'စတင်ငါးမျှားရန်' : 'ဆိုင် (25🪙) သို့ ဖန်တီးခုံ';
-      }
-
+    } else if (
+      this.nearbyDoubleBench &&
+      (!nearbyNode ||
+        (nearestBenchHit &&
+          nearestBenchHit.distance <
+            Math.hypot(nearbyNode.tileX - ptx, nearbyNode.tileY - pty)))
+    ) {
+      const bench = this.nearbyDoubleBench;
+      const seats = this.networkSystem.benchSeats.get(bench.id);
+      const occ = (seats?.[0] ? 1 : 0) + (seats?.[1] ? 1 : 0);
       this.emitInteractionPrompt({
-        type: 'gather',
-        title: actionWord,
-        subtitle: subtitleWord,
+        type: 'bench_sit',
+        title: bench.name,
+        subtitle: occ >= 2 ? 'နေရာပြည့်နေသည် (၂/၂)' : `၂ ဦးထိုင် နားနေခုံ (${occ}/2)`,
         actionKey: 'E',
-        targetId: `node_${nearbyNode.id}${targetSuffix}`,
+        targetId: `bench_${bench.id}_${occ}`,
+      });
+    } else if (nearbyNode) {
+      buildGatherPrompt(nearbyNode);
+    } else if (this.nearbyDoubleBench) {
+      const bench = this.nearbyDoubleBench;
+      const seats = this.networkSystem.benchSeats.get(bench.id);
+      const occ = (seats?.[0] ? 1 : 0) + (seats?.[1] ? 1 : 0);
+      this.emitInteractionPrompt({
+        type: 'bench_sit',
+        title: bench.name,
+        subtitle: occ >= 2 ? 'နေရာပြည့်နေသည် (၂/၂)' : `၂ ဦးထိုင် နားနေခုံ (${occ}/2)`,
+        actionKey: 'E',
+        targetId: `bench_${bench.id}_${occ}`,
       });
     } else if (this.isNearCampfire) {
       this.emitInteractionPrompt({
@@ -5433,6 +6776,26 @@ export class WorldScene extends Phaser.Scene {
         subtitle: 'လမ်းညွှန်ဖတ်ရန်',
         actionKey: 'E',
         targetId: `sign_${this.nearbySignpost.id}`,
+      });
+    } else if (this.nearbyFarmPlot) {
+      const owner = this.buildingSystem.farmPlotOwners[this.nearbyFarmPlot.id];
+      const effectiveUid = this.networkSystem.localPlayerId || this.playerProfile.name;
+      const isMine = Boolean(owner && owner.ownerId === effectiveUid);
+      const shortName = getShortFarmPlotName(this.nearbyFarmPlot);
+      this.emitInteractionPrompt({
+        type: 'farm_plot',
+        title: owner
+          ? `${shortName} (${owner.ownerName})`
+          : `${shortName} • 🪙 ${this.nearbyFarmPlot.purchasePrice.toLocaleString()}`,
+        subtitle: isMine
+          ? 'သင့်မြေကွက် စီမံရန်'
+          : owner
+          ? 'ပိုင်ဆိုင်မှု ကြည့်ရှုရန်'
+          : FARM_PLOT_PURCHASES_LOCKED
+          ? 'ဆိုင်းဘုတ်ကြည့်ရန် (ဝယ်ယူမှု ယာယီပိတ်)'
+          : 'ရွှေဖြင့် ဝယ်ယူရန်',
+        actionKey: 'E',
+        targetId: `farm_plot_${this.nearbyFarmPlot.id}_${owner ? owner.ownerId : 'free'}`,
       });
     } else {
       this.emitInteractionPrompt(null);

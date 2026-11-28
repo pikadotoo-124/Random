@@ -4,15 +4,17 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Ban, Loader2, Megaphone, X } from 'lucide-react';
 import { ChatBox } from './components/ChatBox';
 import { ActionPromptHUD } from './components/ActionPromptHUD';
+import { AdminPanelModal } from './components/AdminPanelModal';
 import { BuildingPlacementHUD } from './components/BuildingPlacementHUD';
 import { BuildingManageModal } from './components/BuildingManageModal';
 import { BuildMenuModal } from './components/BuildMenuModal';
 import { CharacterSelectModal } from './components/CharacterSelectModal';
 import { ClothingShopModal } from './components/ClothingShopModal';
 import { CraftingModal } from './components/CraftingModal';
+import { FarmPlotPurchaseModal } from './components/FarmPlotPurchaseModal';
 import { InventoryModal } from './components/InventoryModal';
 import { LoginScreen } from './components/LoginScreen';
 import { MobileControls } from './components/MobileControls';
@@ -25,7 +27,7 @@ import { UI_THEME } from './components/uiTheme';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import { auth } from './firebase/config';
 import { GameManager } from './game/GameManager';
-import { ChatMessage, ConnectionStatus } from './game/multiplayer/types';
+import { ActiveAnnouncement, ChatMessage, ConnectionStatus } from './game/multiplayer/types';
 import type { FishingHudState } from './game/scenes/WorldScene';
 import { SaveSystem } from './game/systems/SaveSystem';
 import { AtmosphereSnapshot, WorldAtmosphereSystem } from './game/systems/WorldAtmosphereSystem';
@@ -33,6 +35,8 @@ import {
   BuildingType,
   ClothingEquipmentSlot,
   EquippedClothingState,
+  FarmPlotDefinition,
+  FarmPlotOwnersMap,
   FenceRotation,
   MerchantGuideInfo,
   PlacedBuilding,
@@ -61,6 +65,10 @@ function GamePlay() {
     applyOfficialReset,
     registerBeforeSignOutSave,
     isSignOutInProgress,
+    isVerifiedOwner,
+    initialAnnouncement,
+    reportServerBan,
+    signOutUser,
   } = useAuth();
   const gameManagerRef = useRef<GameManager | null>(null);
   const officialResetInProgressRef = useRef<boolean>(false);
@@ -112,11 +120,13 @@ function GamePlay() {
 
   // Active Modals
   const [activeModal, setActiveModal] = useState<
-    'inventory' | 'crafting' | 'shop' | 'clothing_shop' | 'building' | 'map' | 'storage' | 'settings' | null
+    'inventory' | 'crafting' | 'shop' | 'clothing_shop' | 'building' | 'map' | 'storage' | 'settings' | 'admin' | null
   >(null);
 
   const [selectedStorageBuilding, setSelectedStorageBuilding] = useState<PlacedBuilding | null>(null);
   const [selectedManageBuilding, setSelectedManageBuilding] = useState<PlacedBuilding | null>(null);
+  const [selectedFarmPlot, setSelectedFarmPlot] = useState<FarmPlotDefinition | null>(null);
+  const [farmPlotOwners, setFarmPlotOwners] = useState<FarmPlotOwnersMap>({});
   const [activeBuildingPiece, setActiveBuildingPiece] = useState<BuildingType | null>(null);
   const [placementStatus, setPlacementStatus] = useState<{
     active: boolean;
@@ -127,17 +137,29 @@ function GamePlay() {
     rotation: FenceRotation;
     valid: boolean;
     reason?: string;
+    stockLabel?: string;
   } | null>(null);
+  const [placementNotice, setPlacementNotice] = useState<{
+    message: string;
+    tone: 'info' | 'warning' | 'error';
+  } | null>(null);
+  const placementNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [_, setInventoryVersion] = useState(0);
 
   // Multiplayer State
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [economyLedgersVerified, setEconomyLedgersVerified] = useState<boolean>(false);
   const [onlineCount, setOnlineCount] = useState<number>(1);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [roomFullNotice, setRoomFullNotice] = useState<boolean>(false);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
   const [isWorldReady, setIsWorldReady] = useState<boolean>(false);
+  const [activeAnnouncement, setActiveAnnouncement] = useState<ActiveAnnouncement | null>(
+    () => initialAnnouncement || null
+  );
+  const [dismissedAnnouncementId, setDismissedAnnouncementId] = useState<string | null>(null);
+  const [kickedNotice, setKickedNotice] = useState<{ reason: string } | null>(null);
 
   useEffect(() => {
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,6 +245,7 @@ function GamePlay() {
             positionY: gm.initialPosition.tileY,
             facingDirection: gm.initialPosition.facingDirection,
             equippedClothing: gm.playerProfile.equippedClothing,
+            coins: gm.inventorySystem.coins,
           },
           () => tokenGetter(true)
         );
@@ -246,6 +269,9 @@ function GamePlay() {
       gm.networkSystem.on('status_changed', (evt) => {
         const status = (evt.payload?.status || evt.payload) as ConnectionStatus;
         setConnectionStatus(status);
+        if (status !== 'connected') {
+          setEconomyLedgersVerified(false);
+        }
         if (typeof evt.payload?.playerCount === 'number') {
           setOnlineCount(evt.payload.playerCount);
         }
@@ -255,14 +281,27 @@ function GamePlay() {
       }),
       gm.networkSystem.on('room_state', (evt) => {
         const syncState = evt.payload;
+        setEconomyLedgersVerified(
+          Boolean(syncState?.goldLedgerVerified && syncState?.inventoryVerified)
+        );
         if (typeof syncState?.playerCount === 'number') {
           setOnlineCount(syncState.playerCount);
+        }
+        if (syncState?.farmPlotOwners) {
+          setFarmPlotOwners({ ...syncState.farmPlotOwners });
         }
         if (
           syncState?.officialResetEpoch &&
           gameState?.playerWorldChanges?.resetEpoch !== syncState.officialResetEpoch
         ) {
           void triggerOfficialResetReload(syncState.officialResetEpoch);
+        }
+      }),
+      gm.networkSystem.on('farm_plot_updated', (evt) => {
+        if (evt.payload?.farmPlotOwners) {
+          setFarmPlotOwners({ ...evt.payload.farmPlotOwners });
+        } else {
+          setFarmPlotOwners({ ...gm.networkSystem.farmPlotOwners });
         }
       }),
       gm.networkSystem.on('official_reset', (evt) => {
@@ -288,6 +327,21 @@ function GamePlay() {
           }
           return open;
         });
+      }),
+      gm.networkSystem.on('announcement', (evt) => {
+        const ann = (evt.payload?.announcement ?? null) as ActiveAnnouncement | null;
+        setActiveAnnouncement(ann);
+        if (!ann) {
+          setDismissedAnnouncementId(null);
+        }
+      }),
+      gm.networkSystem.on('kicked', (evt) => {
+        setKickedNotice({
+          reason: evt.payload?.reason || 'Admin မှ ဂိမ်းခန်းမှ ထုတ်ပယ်လိုက်ပါသည်။',
+        });
+      }),
+      gm.networkSystem.on('banned', (evt) => {
+        reportServerBan(evt.payload?.reason, evt.payload?.bannedAt);
       }),
     ];
 
@@ -350,8 +404,22 @@ function GamePlay() {
         }
       };
 
+      gm.worldScene.onPlacementNotice = (message, tone = 'warning') => {
+        setPlacementNotice({ message, tone });
+        if (placementNoticeTimerRef.current) {
+          clearTimeout(placementNoticeTimerRef.current);
+        }
+        placementNoticeTimerRef.current = setTimeout(() => {
+          setPlacementNotice(null);
+        }, 4200);
+      };
+
       gm.worldScene.onSelectPlacedBuilding = (building) => {
         setSelectedManageBuilding(building);
+      };
+
+      gm.worldScene.onSelectFarmPlot = (plot) => {
+        setSelectedFarmPlot(plot);
       };
 
       gm.worldScene.onResourceGathered = () => {
@@ -415,6 +483,7 @@ function GamePlay() {
     return () => {
       clearInterval(autoSaveTimer);
       if (zoneBannerTimerRef.current) clearTimeout(zoneBannerTimerRef.current);
+      if (placementNoticeTimerRef.current) clearTimeout(placementNoticeTimerRef.current);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageHide);
       window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -499,9 +568,16 @@ function GamePlay() {
 
   // Keep Phaser shortcut/movement input paused whenever a modal, chat, or dialog is open
   useEffect(() => {
-    const isBlocked = Boolean(activeModal || isChatOpen || selectedManageBuilding || roomFullNotice);
+    const isBlocked = Boolean(
+      activeModal ||
+        isChatOpen ||
+        selectedManageBuilding ||
+        selectedFarmPlot ||
+        roomFullNotice ||
+        kickedNotice
+    );
     gameManagerRef.current?.setUiOverlayOpen(isBlocked);
-  }, [activeModal, isChatOpen, selectedManageBuilding, roomFullNotice]);
+  }, [activeModal, isChatOpen, selectedManageBuilding, selectedFarmPlot, roomFullNotice, kickedNotice]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -514,12 +590,14 @@ function GamePlay() {
       }
 
       if (e.key === 't' || e.key === 'T') {
-        if (!activeModal && !selectedManageBuilding && !roomFullNotice) {
+        if (!activeModal && !selectedManageBuilding && !selectedFarmPlot && !roomFullNotice) {
           e.preventDefault();
           handleToggleChat();
         }
       } else if (e.key === 'Escape') {
-        if (selectedManageBuilding) {
+        if (selectedFarmPlot) {
+          setSelectedFarmPlot(null);
+        } else if (selectedManageBuilding) {
           setSelectedManageBuilding(null);
         } else if (isChatOpen) {
           setIsChatOpen(false);
@@ -531,7 +609,7 @@ function GamePlay() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModal, isChatOpen, selectedManageBuilding, roomFullNotice]);
+  }, [activeModal, isChatOpen, selectedManageBuilding, selectedFarmPlot, roomFullNotice]);
 
   // Reset Game
   const handleResetGame = () => {
@@ -595,7 +673,33 @@ function GamePlay() {
         unreadChatCount={unreadChatCount}
         onToggleChat={handleToggleChat}
         atmosphere={atmosphereState}
+        isVerifiedOwner={isVerifiedOwner}
       />
+
+      {/* 2A. Live Game Announcement Banner (takes zero space when no announcement is active) */}
+      {activeAnnouncement && activeAnnouncement.id !== dismissedAnnouncementId && (
+        <div className="fixed top-[62px] sm:top-[68px] left-1/2 -translate-x-1/2 z-20 max-w-xl w-[94%] pointer-events-auto">
+          <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl bg-[#241c12]/95 border border-amber-500/55 shadow-xl shadow-black/50 backdrop-blur-md">
+            <Megaphone size={16} className="text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-bold uppercase tracking-wide text-amber-300">
+                မြို့တော် ကြေညာချက်
+              </div>
+              <p className="text-xs sm:text-sm text-stone-100 leading-snug break-words">
+                {activeAnnouncement.message}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDismissedAnnouncementId(activeAnnouncement.id)}
+              aria-label="ကြေညာချက် ခဏပိတ်မည်"
+              className="p-1 rounded-lg text-[#b7ad9d] hover:text-white hover:bg-[#34291b] transition cursor-pointer shrink-0"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2B. Town Chat System (Hidden by default; opens via T key or TopNav button) */}
       <ChatBox
@@ -646,6 +750,59 @@ function GamePlay() {
                           positionY: playerCoords.y,
                           facingDirection: gameManagerRef.current?.playerProfile.facingDirection || 'down',
                           equippedClothing: gameManagerRef.current?.playerProfile.equippedClothing,
+                          coins: gameManagerRef.current?.inventorySystem.coins ?? coins,
+                        },
+                        () => user.getIdToken(true)
+                      );
+                    }
+                  });
+                }}
+                className={`px-4 py-2 min-h-[40px] text-xs font-bold rounded-xl ${UI_THEME.primaryAmberBtn}`}
+              >
+                ပြန်လည်ချိတ်ဆက်မည်
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kicked Notification Dialog */}
+      {kickedNotice && (
+        <div className={UI_THEME.backdrop}>
+          <div className={`${UI_THEME.panel} max-w-md p-5 sm:p-6 space-y-4`}>
+            <div className="flex items-center gap-3 text-rose-300">
+              <div className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/35 flex items-center justify-center text-lg shrink-0">
+                ⚠️
+              </div>
+              <h2 className="text-base sm:text-lg font-bold leading-snug">
+                ဂိမ်းခန်းမှ ယာယီထုတ်ပယ်ခံရပါသည်
+              </h2>
+            </div>
+            <p className="text-xs text-stone-200 leading-relaxed">{kickedNotice.reason}</p>
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => void signOutUser()}
+                className="px-4 py-2 min-h-[40px] text-xs font-semibold rounded-xl bg-[#27221b] border border-[#453c30] text-stone-200 hover:bg-[#342d24] transition cursor-pointer"
+              >
+                အကောင့်ထွက်မည်
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setKickedNotice(null);
+                  user?.getIdToken(true).then((token) => {
+                    if (token) {
+                      gameManagerRef.current?.networkSystem.connect(
+                        token,
+                        {
+                          name: playerProfile.name,
+                          gender: playerProfile.gender,
+                          positionX: playerCoords.x,
+                          positionY: playerCoords.y,
+                          facingDirection: gameManagerRef.current?.playerProfile.facingDirection || 'down',
+                          equippedClothing: gameManagerRef.current?.playerProfile.equippedClothing,
+                          coins: gameManagerRef.current?.inventorySystem.coins ?? coins,
                         },
                         () => user.getIdToken(true)
                       );
@@ -684,7 +841,9 @@ function GamePlay() {
         onOpenModal={(modal) => setActiveModal(modal)}
         hasNearbyInteraction={Boolean(interactionPrompt || fishingHudState?.active)}
         isBuildMode={isBuildActive}
-        isModalOpen={Boolean(activeModal || selectedManageBuilding || roomFullNotice)}
+        isModalOpen={Boolean(
+          activeModal || selectedManageBuilding || selectedFarmPlot || roomFullNotice || kickedNotice
+        )}
       />
 
       {/* 5. Inventory Modal */}
@@ -714,10 +873,7 @@ function GamePlay() {
           onGuideToCraftStation={() => {
             gameManagerRef.current?.worldScene?.showCraftingStationGuide();
           }}
-          onCrafted={() => {
-            gameManagerRef.current?.recordStat('totalCrafted', 1);
-            gameManagerRef.current?.saveCurrentState(false);
-          }}
+          onCraftRecipe={(recipeId) => gameManagerRef.current!.craftRecipe(recipeId)}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -726,10 +882,10 @@ function GamePlay() {
       {activeModal === 'shop' && gameManagerRef.current && gameManagerRef.current.worldScene?.isNearShop && (
         <ShopModal
           inventory={gameManagerRef.current.inventorySystem}
-          onSold={(goldEarned) => {
-            gameManagerRef.current?.recordStat('totalSoldGold', goldEarned);
-            gameManagerRef.current?.saveCurrentState(false);
-          }}
+          isOnlineShopAvailable={connectionStatus === 'connected' && economyLedgersVerified}
+          onExecuteTrade={(action, itemId, quantity) =>
+            gameManagerRef.current!.executeShopItemTrade(action, itemId, quantity)
+          }
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -743,6 +899,7 @@ function GamePlay() {
             gender={playerProfile.gender}
             ownedClothing={playerProfile.ownedClothing || []}
             equippedClothing={(playerProfile.equippedClothing || {}) as EquippedClothingState}
+            isOnlineShopAvailable={connectionStatus === 'connected' && economyLedgersVerified}
             onBuy={(itemId) => gameManagerRef.current!.buyClothing(itemId)}
             onEquip={(itemId) => gameManagerRef.current!.equipClothing(itemId)}
             onUnequip={(slot: ClothingEquipmentSlot) =>
@@ -770,6 +927,8 @@ function GamePlay() {
           currentZone={currentZone}
           mapSystem={gameManagerRef.current.mapSystem}
           placedBuildings={gameManagerRef.current.buildingSystem.buildings}
+          farmPlotOwners={farmPlotOwners}
+          currentUserId={user?.uid}
           resourceNodes={gameManagerRef.current.resourceSystem.nodes}
           onlinePlayers={gameManagerRef.current.networkSystem.getOnlinePlayers()}
           onClose={() => setActiveModal(null)}
@@ -781,6 +940,20 @@ function GamePlay() {
         <StorageBoxModal
           building={selectedStorageBuilding}
           inventory={gameManagerRef.current.inventorySystem}
+          onTransferItem={async (direction, itemId, quantity) => {
+            const res = await gameManagerRef.current!.transferStorageItem(
+              selectedStorageBuilding,
+              direction,
+              itemId,
+              quantity
+            );
+            if (res.ok && res.storage) {
+              setSelectedStorageBuilding((prev) =>
+                prev ? { ...prev, storage: res.storage } : prev
+              );
+            }
+            return res;
+          }}
           onStorageChanged={() => {
             gameManagerRef.current?.saveCurrentState(false);
           }}
@@ -813,6 +986,35 @@ function GamePlay() {
         />
       )}
 
+      {/* 11A. Owner-Only Admin Panel Modal */}
+      {activeModal === 'admin' && isVerifiedOwner && (
+        <AdminPanelModal
+          onClose={() => setActiveModal(null)}
+          connectionStatus={connectionStatus}
+          onAnnouncementChanged={(ann) => {
+            setActiveAnnouncement(ann);
+            if (!ann) {
+              setDismissedAnnouncementId(null);
+            }
+          }}
+        />
+      )}
+
+      {/* 11B. Placement Shortage / Land Ownership Rejection Notice */}
+      {placementNotice && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] pointer-events-none">
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-semibold shadow-2xl text-center backdrop-blur-md ${
+              placementNotice.tone === 'error'
+                ? 'bg-rose-950/92 border-rose-600/60 text-rose-100'
+                : 'bg-amber-950/92 border-amber-600/60 text-amber-100'
+            }`}
+          >
+            {placementNotice.message}
+          </div>
+        </div>
+      )}
+
       {/* 12. Building Placement HUD (Ghost Preview, Fence Rotation & Position Confirmation) */}
       {placementStatus && placementStatus.active && placementStatus.buildingType && (
         <BuildingPlacementHUD
@@ -823,6 +1025,7 @@ function GamePlay() {
           rotation={placementStatus.rotation}
           valid={placementStatus.valid}
           reason={placementStatus.reason}
+          stockLabel={placementStatus.stockLabel}
           onRotate={handleRotateBuildPreview}
           onConfirm={() => {
             gameManagerRef.current?.confirmBuildPlacement();
@@ -852,6 +1055,23 @@ function GamePlay() {
           onClose={() => setSelectedManageBuilding(null)}
         />
       )}
+
+      {/* 14. Farming Plot Ownership & Gold Purchase Modal */}
+      {selectedFarmPlot && gameManagerRef.current && (
+        <FarmPlotPurchaseModal
+          plot={selectedFarmPlot}
+          owner={farmPlotOwners[selectedFarmPlot.id]}
+          currentUserId={user?.uid}
+          playerCoins={coins}
+          connectionStatus={connectionStatus}
+          onPurchase={(plotId) => gameManagerRef.current!.purchaseFarmPlot(plotId)}
+          onBuildFence={() => {
+            setSelectedFarmPlot(null);
+            handleSelectBuildingPiece('fence_wood');
+          }}
+          onClose={() => setSelectedFarmPlot(null)}
+        />
+      )}
     </div>
   );
 }
@@ -866,13 +1086,14 @@ function RootContainer() {
     gameState,
     loading,
     cloudLoadError,
+    banStatus,
     retryInitialLoad,
     signOutUser,
     createProfileAndStart,
   } = useAuth();
 
   // 1. Wait for Auth AND Cloud Save hydration before mounting Character Select or GamePlay
-  if (loading || (user && profile && !gameState && !cloudLoadError)) {
+  if (loading || (user && !banStatus?.banned && profile && !gameState && !cloudLoadError)) {
     return (
       <div className="w-screen h-[100dvh] flex flex-col items-center justify-center bg-[#14120f] text-stone-200 gap-3 select-none px-4 text-center">
         <Loader2 size={36} className="animate-spin text-amber-400" />
@@ -886,6 +1107,35 @@ function RootContainer() {
   // 2. Unauthenticated: Display Google Login Screen
   if (!user) {
     return <LoginScreen />;
+  }
+
+  // 2A. Server-Enforced Banned Account Gate
+  if (banStatus?.banned) {
+    return (
+      <div className="w-screen h-[100dvh] flex items-center justify-center bg-[#14120f] px-4 select-none">
+        <div className={`${UI_THEME.panel} max-w-md w-full p-6 space-y-4 text-center`}>
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-500/15 border border-rose-500/35 flex items-center justify-center text-rose-300">
+            <Ban size={24} />
+          </div>
+          <h2 className="text-base sm:text-lg font-bold text-white">
+            အကောင့် ဝင်ခွင့် ပိတ်ပင်ထားပါသည်
+          </h2>
+          <p className="text-xs text-stone-300 leading-relaxed">{banStatus.reason}</p>
+          <div className="text-[11px] text-[#a99f8e]">
+            UID: <span className="font-mono text-stone-200">{user.uid}</span>
+          </div>
+          <div className="flex items-center justify-center pt-2">
+            <button
+              type="button"
+              onClick={() => signOutUser()}
+              className="px-5 py-2 min-h-[40px] text-xs font-bold rounded-xl bg-[#27221b] border border-[#453c30] text-stone-200 hover:bg-[#342d24] transition cursor-pointer"
+            >
+              အကောင့်ထွက်မည်
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // 2B. Safe Load Guard: Cloud fetch failed without local fallback — NEVER reset user into CharacterSelectModal!

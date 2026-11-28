@@ -480,7 +480,7 @@ export class PixelArtGenerator {
     });
   }
 
-  // 3. Stardew-Inspired Serene Crystal Water (Shallow, Mid, Deep + Emerald Glade Depth Gradient & Sky Reflections)
+  // 3. Stardew-Inspired Serene Crystal Water (Shallow, Mid, Deep + Feathered Caustics & Sky Reflections)
   private static createWaterTiles(textures: Phaser.Textures.TextureManager) {
     if (textures.exists('tile_water_0')) return;
 
@@ -492,6 +492,8 @@ export class PixelArtGenerator {
         ripple: string;
         glint: string;
         skyStreak?: string;
+        shallowPebbles?: boolean;
+        deepTone?: string;
         style: 0 | 1 | 2;
       }
     ) => {
@@ -504,40 +506,71 @@ export class PixelArtGenerator {
       this.clipIsoDiamond(ctx);
       this.drawIsoDiamond(ctx, 64, 32, opts.base);
 
-      // Soft organic underwater caustic / depth pool
-      ctx.fillStyle = opts.caustic;
-      ctx.beginPath();
-      ctx.ellipse(32 + (opts.style - 1) * 2, 16, 18, 7.5, opts.style === 1 ? 0.08 : -0.06, 0, Math.PI * 2);
-      ctx.fill();
+      // Feathered radial underwater caustic / depth pocket (avoids hard grid ellipse borders)
+      const cx = 32 + (opts.style - 1) * 3;
+      const cy = 16 + (opts.style === 2 ? 1 : -0.5);
+      const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, 22);
+      grad.addColorStop(0, opts.caustic);
+      grad.addColorStop(0.62, opts.deepTone || opts.caustic);
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 64, 32);
+
+      // Secondary feathered organic dapple (non-grid feel)
+      const secX = opts.style === 0 ? 41 : opts.style === 1 ? 22 : 34;
+      const secY = opts.style === 0 ? 19 : 13;
+      const grad2 = ctx.createRadialGradient(secX, secY, 1, secX, secY, 13);
+      grad2.addColorStop(0, opts.caustic);
+      grad2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad2;
+      ctx.fillRect(0, 0, 64, 32);
+
+      // Subtle visible submerged gravel/pebbles in shallow water
+      if (opts.shallowPebbles) {
+        const pebbles: Array<[number, number, number, number]> =
+          opts.style === 0
+            ? [[23, 15, 2.2, 1.2], [38, 18, 1.8, 1.0], [31, 21, 2.0, 1.1]]
+            : [[26, 13, 2.0, 1.1], [41, 16, 2.3, 1.2], [29, 19, 1.7, 1.0]];
+        ctx.fillStyle = 'rgba(15, 76, 98, 0.22)';
+        for (const [px, py, rx, ry] of pebbles) {
+          ctx.beginPath();
+          ctx.ellipse(px, py, rx, ry, 0.15, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
 
       // Gentle diagonal sky-light reflection wash (matching top-left sunlight)
       if (opts.skyStreak) {
-        ctx.fillStyle = opts.skyStreak;
+        const skyGrad = ctx.createLinearGradient(16, 9, 44, 21);
+        skyGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
+        skyGrad.addColorStop(0.45, opts.skyStreak);
+        skyGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = skyGrad;
         ctx.beginPath();
-        ctx.ellipse(26 + opts.style * 3, 13, 11, 3.2, -0.35, 0, Math.PI * 2);
+        ctx.ellipse(27 + opts.style * 2.5, 13.5, 13, 3.8, -0.32, 0, Math.PI * 2);
         ctx.fill();
       }
 
       // Soft broken water ripple waves
       ctx.strokeStyle = opts.ripple;
-      ctx.lineWidth = 1.15;
+      ctx.lineWidth = 1.05;
       ctx.lineCap = 'round';
       ctx.beginPath();
       if (opts.style === 0) {
-        ctx.moveTo(19, 12);
-        ctx.quadraticCurveTo(28, 10, 36, 11.8);
-        ctx.moveTo(27, 19);
-        ctx.quadraticCurveTo(36, 17.2, 46, 19);
+        ctx.moveTo(18, 12.5);
+        ctx.quadraticCurveTo(27, 10.4, 35, 12.2);
+        ctx.moveTo(28, 19.5);
+        ctx.quadraticCurveTo(37, 17.6, 46, 19.4);
       } else if (opts.style === 1) {
-        ctx.moveTo(22, 14);
-        ctx.quadraticCurveTo(32, 12, 42, 14);
-        ctx.moveTo(17, 20);
-        ctx.quadraticCurveTo(25, 18.4, 33, 20);
+        ctx.moveTo(21, 14);
+        ctx.quadraticCurveTo(31, 12.1, 41, 14.1);
+        ctx.moveTo(17, 20.2);
+        ctx.quadraticCurveTo(25, 18.6, 33, 20.1);
       } else {
-        ctx.moveTo(24, 11.5);
-        ctx.quadraticCurveTo(33, 9.8, 43, 12);
-        ctx.moveTo(21, 18.5);
-        ctx.quadraticCurveTo(31, 16.5, 41, 18.5);
+        ctx.moveTo(23, 11.8);
+        ctx.quadraticCurveTo(32, 10.1, 42, 12.2);
+        ctx.moveTo(20, 18.8);
+        ctx.quadraticCurveTo(30, 16.9, 40, 18.9);
       }
       ctx.stroke();
 
@@ -570,13 +603,14 @@ export class PixelArtGenerator {
       style: 1,
     });
 
-    // Shallow shore-adjacent crystal turquoise water
+    // Shallow shore-adjacent crystal turquoise water (subtle submerged pebble hints)
     makeWaterTile('tile_water_shallow_0', {
       base: '#2ba1cb',
       caustic: 'rgba(103, 232, 249, 0.24)',
       ripple: 'rgba(186, 230, 253, 0.65)',
       glint: 'rgba(240, 249, 255, 0.85)',
-      skyStreak: 'rgba(224, 242, 254, 0.20)',
+      skyStreak: 'rgba(224, 242, 254, 0.22)',
+      shallowPebbles: true,
       style: 0,
     });
     makeWaterTile('tile_water_shallow_1', {
@@ -584,14 +618,16 @@ export class PixelArtGenerator {
       caustic: 'rgba(94, 234, 212, 0.20)',
       ripple: 'rgba(186, 230, 253, 0.60)',
       glint: 'rgba(240, 249, 255, 0.80)',
-      skyStreak: 'rgba(224, 242, 254, 0.18)',
+      skyStreak: 'rgba(224, 242, 254, 0.19)',
+      shallowPebbles: true,
       style: 2,
     });
 
     // Deep open lake center rich indigo-cerulean water
     makeWaterTile('tile_water_deep_0', {
       base: '#166e97',
-      caustic: 'rgba(15, 86, 126, 0.62)',
+      caustic: 'rgba(15, 86, 126, 0.52)',
+      deepTone: 'rgba(11, 64, 96, 0.34)',
       ripple: 'rgba(94, 194, 230, 0.45)',
       glint: 'rgba(186, 230, 253, 0.65)',
       skyStreak: 'rgba(125, 211, 252, 0.12)',
@@ -599,7 +635,8 @@ export class PixelArtGenerator {
     });
     makeWaterTile('tile_water_deep_1', {
       base: '#156a92',
-      caustic: 'rgba(12, 74, 110, 0.58)',
+      caustic: 'rgba(12, 74, 110, 0.50)',
+      deepTone: 'rgba(9, 58, 88, 0.34)',
       ripple: 'rgba(125, 211, 252, 0.42)',
       glint: 'rgba(186, 230, 253, 0.62)',
       skyStreak: 'rgba(125, 211, 252, 0.10)',
@@ -609,7 +646,7 @@ export class PixelArtGenerator {
     // Emerald Glade Woodland Lake (Shallow, Mid, Deep)
     makeWaterTile('tile_water_2', {
       base: '#177a94',
-      caustic: 'rgba(17, 100, 122, 0.56)',
+      caustic: 'rgba(17, 100, 122, 0.48)',
       ripple: 'rgba(94, 234, 212, 0.52)',
       glint: 'rgba(204, 251, 241, 0.78)',
       skyStreak: 'rgba(153, 246, 228, 0.15)',
@@ -621,15 +658,69 @@ export class PixelArtGenerator {
       ripple: 'rgba(153, 246, 228, 0.60)',
       glint: 'rgba(240, 253, 250, 0.82)',
       skyStreak: 'rgba(204, 251, 241, 0.18)',
+      shallowPebbles: true,
       style: 0,
     });
     makeWaterTile('tile_water_glade_deep', {
       base: '#115e75',
-      caustic: 'rgba(11, 74, 94, 0.62)',
+      caustic: 'rgba(11, 74, 94, 0.54)',
+      deepTone: 'rgba(8, 56, 72, 0.36)',
       ripple: 'rgba(45, 212, 191, 0.44)',
       glint: 'rgba(153, 246, 228, 0.62)',
       skyStreak: 'rgba(94, 234, 212, 0.10)',
       style: 1,
+    });
+
+    // Silverbrook River Natural Channel (Shallow Bank, Mid Current, Deep Pool Grading)
+    makeWaterTile('tile_water_river_shallow', {
+      base: '#31a8cb',
+      caustic: 'rgba(125, 232, 248, 0.28)',
+      ripple: 'rgba(207, 245, 255, 0.68)',
+      glint: 'rgba(240, 249, 255, 0.86)',
+      skyStreak: 'rgba(224, 242, 254, 0.24)',
+      shallowPebbles: true,
+      style: 0,
+    });
+    makeWaterTile('tile_water_river_shallow_1', {
+      base: '#2da0c3',
+      caustic: 'rgba(94, 234, 212, 0.24)',
+      ripple: 'rgba(186, 230, 253, 0.64)',
+      glint: 'rgba(240, 249, 255, 0.82)',
+      skyStreak: 'rgba(224, 242, 254, 0.20)',
+      shallowPebbles: true,
+      style: 2,
+    });
+    makeWaterTile('tile_water_river_0', {
+      base: '#1e86af',
+      caustic: 'rgba(24, 126, 166, 0.48)',
+      ripple: 'rgba(147, 224, 252, 0.62)',
+      glint: 'rgba(224, 242, 254, 0.80)',
+      skyStreak: 'rgba(186, 230, 253, 0.18)',
+      style: 1,
+    });
+    makeWaterTile('tile_water_river_1', {
+      base: '#1b7fa7',
+      caustic: 'rgba(20, 110, 148, 0.52)',
+      ripple: 'rgba(125, 211, 252, 0.58)',
+      glint: 'rgba(240, 249, 255, 0.78)',
+      skyStreak: 'rgba(186, 230, 253, 0.16)',
+      style: 2,
+    });
+    makeWaterTile('tile_water_river_deep_0', {
+      base: '#14688f',
+      caustic: 'rgba(12, 82, 118, 0.62)',
+      ripple: 'rgba(94, 194, 230, 0.46)',
+      glint: 'rgba(186, 230, 253, 0.64)',
+      skyStreak: 'rgba(125, 211, 252, 0.11)',
+      style: 1,
+    });
+    makeWaterTile('tile_water_river_deep_1', {
+      base: '#126186',
+      caustic: 'rgba(10, 72, 106, 0.60)',
+      ripple: 'rgba(103, 212, 242, 0.44)',
+      glint: 'rgba(186, 230, 253, 0.60)',
+      skyStreak: 'rgba(125, 211, 252, 0.10)',
+      style: 2,
     });
   }
 
@@ -983,6 +1074,92 @@ export class PixelArtGenerator {
           ctx.fillRect(rx, ry, 3, 2);
           ctx.fillStyle = '#a8a29e';
           ctx.fillRect(rx, ry, 2, 1);
+        }
+      });
+    }
+
+    // --- 5. SILVERBROOK RIVER SUBMERGED STONES, DEEP POOL BLEND & CUTBANK MOSS ---
+    makeCanvas('fx_river_depth_pool', (ctx) => {
+      const grad = ctx.createRadialGradient(32, 16, 2, 32, 16, 26);
+      grad.addColorStop(0, 'rgba(11, 74, 110, 0.34)');
+      grad.addColorStop(0.6, 'rgba(14, 92, 132, 0.18)');
+      grad.addColorStop(1, 'rgba(14, 92, 132, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 64, 32);
+    });
+
+    for (const idx of [0, 1] as const) {
+      makeCanvas(`fx_river_submerged_stones_${idx}`, (ctx) => {
+        const stones: Array<[number, number, number, number]> =
+          idx === 0
+            ? [
+                [24, 15, 5.5, 2.8],
+                [38, 18, 4.2, 2.2],
+                [31, 11, 3.0, 1.6],
+              ]
+            : [
+                [28, 17, 5.0, 2.5],
+                [41, 13, 3.8, 2.0],
+                [21, 13, 3.2, 1.7],
+              ];
+        for (const [sx, sy, rx, ry] of stones) {
+          ctx.fillStyle = 'rgba(12, 54, 78, 0.32)';
+          ctx.beginPath();
+          ctx.ellipse(sx, sy, rx, ry, idx === 0 ? -0.18 : 0.15, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(56, 138, 168, 0.22)';
+          ctx.beginPath();
+          ctx.ellipse(sx - 0.6, sy - 0.5, rx * 0.55, ry * 0.5, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+
+    for (const dir of dirs) {
+      makeCanvas(`fx_river_moss_edge_${dir}`, (ctx) => {
+        this.setIsoUVTransform(ctx);
+        traceEdgeBand(ctx, dir, 3.3, 0.7, 1.3);
+        ctx.fillStyle = 'rgba(68, 64, 52, 0.56)';
+        ctx.fill();
+        traceEdgeBand(ctx, dir, 1.9, 0.55, 0.4);
+        ctx.fillStyle = 'rgba(63, 120, 48, 0.78)';
+        ctx.fill();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const tufts: Record<'nw' | 'ne' | 'se' | 'sw', Array<[number, number]>> = {
+          nw: [[24, 6], [15, 10], [9, 14]],
+          ne: [[39, 6], [48, 10], [54, 14]],
+          se: [[53, 19], [45, 23], [38, 27]],
+          sw: [[10, 19], [18, 23], [25, 27]],
+        };
+        for (const [mx, my] of tufts[dir]) {
+          ctx.fillStyle = '#4d7c0f';
+          ctx.fillRect(mx, my - 1, 2.2, 1.6);
+          ctx.fillStyle = '#84cc16';
+          ctx.fillRect(mx + 1, my - 2, 1.4, 1.4);
+        }
+      });
+
+      // --- 6. WET SAND & GRAVEL BANK TRANSITION ON LAND-SIDE SAND TILES BORDERING WATER ---
+      makeCanvas(`fx_sand_wet_edge_${dir}`, (ctx) => {
+        this.setIsoUVTransform(ctx);
+        traceEdgeBand(ctx, dir, 4.2, 0.9, 0.7);
+        ctx.fillStyle = 'rgba(146, 112, 64, 0.56)';
+        ctx.fill();
+        traceEdgeBand(ctx, dir, 2.1, 0.65, 1.9);
+        ctx.fillStyle = 'rgba(116, 86, 46, 0.68)';
+        ctx.fill();
+
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const pebbles: Record<'nw' | 'ne' | 'se' | 'sw', Array<[number, number]>> = {
+          nw: [[25, 5], [16, 10], [10, 13]],
+          ne: [[39, 5], [48, 10], [54, 13]],
+          se: [[53, 19], [46, 23], [38, 27]],
+          sw: [[10, 19], [18, 23], [26, 27]],
+        };
+        for (let i = 0; i < pebbles[dir].length; i++) {
+          const [px, py] = pebbles[dir][i];
+          ctx.fillStyle = i % 2 === 0 ? '#78716c' : '#a8a29e';
+          ctx.fillRect(px, py, 2, 1.3);
         }
       });
     }
@@ -2654,6 +2831,78 @@ export class PixelArtGenerator {
       }
     }
 
+    // 5B. Wooden Farm Plot Ownership Signboard (36x48)
+    if (!textures.exists('obj_farm_plot_sign')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 48;
+      const ctx = canvas.getContext('2d')!;
+
+      // Soft ground contact shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.38)';
+      ctx.beginPath();
+      ctx.ellipse(18, 42.5, 11.5, 4.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Earth & stone base footing
+      ctx.fillStyle = '#57534e';
+      ctx.beginPath();
+      ctx.roundRect(12, 36.5, 12, 5.5, 2.5);
+      ctx.fill();
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(12.5, 39, 4, 2);
+      ctx.fillRect(20, 38.5, 3, 2);
+
+      // Sturdy dark-oak timber post
+      ctx.fillStyle = '#451a03';
+      ctx.fillRect(15, 19, 6, 19);
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(16, 20, 3, 17);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(15, 33, 6, 2);
+
+      // Outer wooden frame of signboard
+      ctx.fillStyle = '#292524';
+      ctx.beginPath();
+      ctx.roundRect(3, 5, 30, 17, 2.5);
+      ctx.fill();
+
+      // Warm pine plank face
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.roundRect(4.5, 6.5, 27, 14, 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(5.5, 7.5, 25, 11.5);
+
+      // Top highlight plank bevel
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(6, 7.5, 24, 2);
+
+      // Plank seam + brass corner rivets
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(5.5, 13, 25, 1);
+      ctx.fillStyle = '#fde047';
+      ctx.fillRect(6.5, 8.5, 1.5, 1.5);
+      ctx.fillRect(28, 8.5, 1.5, 1.5);
+      ctx.fillRect(6.5, 16.5, 1.5, 1.5);
+      ctx.fillRect(28, 16.5, 1.5, 1.5);
+
+      // Small emerald sprout badge & carved inscription lines
+      ctx.fillStyle = '#15803d';
+      ctx.fillRect(9, 11, 3.5, 4);
+      ctx.fillStyle = '#86efac';
+      ctx.fillRect(8, 10, 2.5, 2);
+      ctx.fillRect(11, 9.5, 2.5, 2);
+
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(15, 10.5, 11, 1.6);
+      ctx.fillRect(15, 15, 9, 1.6);
+
+      textures.addCanvas('obj_farm_plot_sign', canvas);
+    }
+
     // 6. Animated Water Surface Shimmer & Soft Sky-Light Reflection Streak
     if (!textures.exists('fx_water_shimmer')) {
       const canvas = document.createElement('canvas');
@@ -2696,6 +2945,104 @@ export class PixelArtGenerator {
       ctx.quadraticCurveTo(28, 8.2, 42, 12.5);
       ctx.stroke();
       textures.addCanvas('fx_water_reflection', canvas);
+    }
+
+    // 6B. Step 32 Flowing River Current Streaks, Bend Swirls, Rock Wake Foam & Sun/Moon Glints
+    for (const idx of [0, 1] as const) {
+      const key = `fx_river_flow_streak_${idx}`;
+      if (!textures.exists(key)) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32;
+        canvas.height = 12;
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createLinearGradient(2, 6, 30, 6);
+        grad.addColorStop(0, 'rgba(186, 230, 253, 0)');
+        grad.addColorStop(0.35, idx === 0 ? 'rgba(207, 245, 255, 0.56)' : 'rgba(165, 232, 252, 0.52)');
+        grad.addColorStop(0.75, 'rgba(240, 249, 255, 0.68)');
+        grad.addColorStop(1, 'rgba(224, 242, 254, 0)');
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = idx === 0 ? 1.4 : 1.15;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        if (idx === 0) {
+          ctx.moveTo(3, 6);
+          ctx.quadraticCurveTo(16, 4.2, 29, 6);
+        } else {
+          ctx.moveTo(4, 4.5);
+          ctx.quadraticCurveTo(15, 6.2, 27, 4.8);
+          ctx.moveTo(9, 8.5);
+          ctx.quadraticCurveTo(18, 7.2, 26, 8.5);
+        }
+        ctx.stroke();
+        textures.addCanvas(key, canvas);
+      }
+    }
+
+    if (!textures.exists('fx_river_swirl')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 18;
+      const ctx = canvas.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.46)';
+      ctx.lineWidth = 1.15;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.ellipse(16, 9, 11, 5.2, 0.12, 0.35, Math.PI * 1.65);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.52)';
+      ctx.beginPath();
+      ctx.ellipse(16, 9, 6.2, 2.9, -0.1, 1.1, Math.PI * 2.25);
+      ctx.stroke();
+      textures.addCanvas('fx_river_swirl', canvas);
+    }
+
+    if (!textures.exists('fx_river_rock_foam')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 44;
+      canvas.height = 24;
+      const ctx = canvas.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.58)';
+      ctx.lineWidth = 1.3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.ellipse(22, 13, 17, 7.5, 0, 0.15, Math.PI * 1.85);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(248, 250, 252, 0.62)';
+      ctx.lineWidth = 1.05;
+      ctx.beginPath();
+      ctx.ellipse(22, 13, 12.5, 5.2, 0, Math.PI * 0.65, Math.PI * 1.55);
+      ctx.stroke();
+      textures.addCanvas('fx_river_rock_foam', canvas);
+    }
+
+    if (!textures.exists('fx_water_sun_glint')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 24;
+      canvas.height = 14;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = 'rgba(254, 249, 195, 0.32)';
+      ctx.beginPath();
+      ctx.ellipse(12, 7, 8, 2.6, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+      ctx.fillRect(10, 6.5, 4, 1);
+      ctx.fillRect(11.5, 5, 1, 4);
+      textures.addCanvas('fx_water_sun_glint', canvas);
+    }
+
+    if (!textures.exists('fx_water_moon_glint')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 14;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = 'rgba(186, 230, 253, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(14, 7, 10, 2.8, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(224, 242, 254, 0.82)';
+      ctx.fillRect(10, 6.5, 8, 1);
+      ctx.fillRect(13.5, 5.2, 1, 3.6);
+      textures.addCanvas('fx_water_moon_glint', canvas);
     }
 
     // 7. Animated Swimming Fish Sprites (Left & Right) for Lakes & Rivers (28x16)
@@ -2742,6 +3089,137 @@ export class PixelArtGenerator {
 
         textures.addCanvas(key, canvas);
       }
+    }
+
+    // 8. Step 35.5 Natural Creek Cascade Step, Riffle Froth & Phase 5 Jumping Fish / Splash Sprites
+    if (!textures.exists('fx_river_cascade')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 36;
+      const ctx = canvas.getContext('2d')!;
+      // Low stepped creek rock shelf
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(32, 22, 21, 7.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const [sx, sy, rx, ry, col] of [
+        [20, 17, 7, 3.6, '#475569'],
+        [33, 16, 8, 4.0, '#64748b'],
+        [45, 18, 6.2, 3.2, '#475569'],
+      ] as const) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, rx, ry, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#94a3b8';
+        ctx.beginPath();
+        ctx.ellipse(sx - 1, sy - 1, rx * 0.55, ry * 0.45, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Subtle cascading whitewater ribbons over rock shelf
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.78)';
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
+      for (const [x0, y0, x1, y1] of [
+        [21, 16, 25, 22],
+        [31, 15, 36, 23],
+        [41, 17, 45, 23],
+      ] as const) {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.quadraticCurveTo((x0 + x1) * 0.5 + 1.5, y0 + 3, x1, y1);
+        ctx.stroke();
+      }
+      // Soft foam droplets at shelf base
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.85)';
+      for (const [fx, fy] of [[24, 23], [35, 24], [38, 23], [44, 24], [28, 22]] as const) {
+        ctx.fillRect(fx, fy, 2.2, 1.3);
+      }
+      textures.addCanvas('fx_river_cascade', canvas);
+    }
+
+    if (!textures.exists('fx_river_riffle')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 44;
+      canvas.height = 22;
+      const ctx = canvas.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.64)';
+      ctx.lineWidth = 1.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(8, 9);
+      ctx.quadraticCurveTo(16, 6.8, 24, 9.2);
+      ctx.moveTo(18, 13.5);
+      ctx.quadraticCurveTo(27, 11.4, 36, 13.8);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.72)';
+      ctx.fillRect(15, 8, 2, 1);
+      ctx.fillRect(28, 12.5, 2.2, 1);
+      textures.addCanvas('fx_river_riffle', canvas);
+    }
+
+    for (const idx of [0, 1] as const) {
+      const key = `obj_jumping_fish_${idx}`;
+      if (!textures.exists(key)) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 24;
+        canvas.height = 18;
+        const ctx = canvas.getContext('2d')!;
+        ctx.save();
+        ctx.translate(12, 9);
+        ctx.rotate(idx === 0 ? -0.48 : 0.45);
+        // Silver-amber leaping body
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 6.8, 3.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.ellipse(0, -0.3, 6.0, 2.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#bae6fd';
+        ctx.beginPath();
+        ctx.ellipse(0.6, 0.6, 4.5, 1.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Tail fin
+        ctx.fillStyle = '#0284c7';
+        ctx.beginPath();
+        ctx.moveTo(-5.2, 0);
+        ctx.lineTo(-9.5, -3.2);
+        ctx.lineTo(-9.5, 3.2);
+        ctx.closePath();
+        ctx.fill();
+        // Sunlit highlight & eye
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(-1.5, -1.6, 4.5, 1);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(3.6, -0.8, 1.3, 1.3);
+        ctx.restore();
+        textures.addCanvas(key, canvas);
+      }
+    }
+
+    if (!textures.exists('fx_fish_splash_ring')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 36;
+      canvas.height = 22;
+      const ctx = canvas.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(240, 249, 255, 0.88)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.ellipse(18, 14, 13, 5.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.65)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(18, 14, 7.5, 3.0, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Tiny splash droplets
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.92)';
+      ctx.fillRect(13, 7, 1.6, 2.2);
+      ctx.fillRect(18, 4.5, 1.6, 2.6);
+      ctx.fillRect(22.5, 7.5, 1.6, 2.2);
+      textures.addCanvas('fx_fish_splash_ring', canvas);
     }
   }
 
@@ -2936,6 +3414,134 @@ export class PixelArtGenerator {
 
     textures.addCanvas('res_rock', canvas);
     textures.addCanvas('obj_rock', canvas);
+
+    // Additional Whispering Forest Rock Variants (obj_rock_1 faceted slate, obj_rock_2 moss-flecked twin boulder)
+    if (!textures.exists('obj_rock_1')) {
+      const c1 = document.createElement('canvas');
+      c1.width = 50;
+      c1.height = 42;
+      const g1 = c1.getContext('2d')!;
+      const sh1 = g1.createRadialGradient(26, 34, 3, 26, 34, 18);
+      sh1.addColorStop(0, 'rgba(15, 23, 42, 0.36)');
+      sh1.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      g1.fillStyle = sh1;
+      g1.beginPath();
+      g1.ellipse(26, 34, 18, 6.5, 0, 0, Math.PI * 2);
+      g1.fill();
+
+      g1.fillStyle = '#334155';
+      g1.beginPath();
+      g1.moveTo(9, 29);
+      g1.lineTo(13, 17);
+      g1.lineTo(24, 9);
+      g1.lineTo(36, 13);
+      g1.lineTo(41, 26);
+      g1.lineTo(31, 34);
+      g1.lineTo(14, 34);
+      g1.closePath();
+      g1.fill();
+
+      g1.fillStyle = '#64748b';
+      g1.beginPath();
+      g1.moveTo(12, 27);
+      g1.lineTo(15, 17);
+      g1.lineTo(24, 11);
+      g1.lineTo(35, 15);
+      g1.lineTo(38, 25);
+      g1.lineTo(28, 31);
+      g1.closePath();
+      g1.fill();
+
+      g1.fillStyle = '#94a3b8';
+      g1.beginPath();
+      g1.moveTo(15, 17);
+      g1.lineTo(24, 11);
+      g1.lineTo(34, 14);
+      g1.lineTo(24, 21);
+      g1.closePath();
+      g1.fill();
+
+      g1.fillStyle = '#cbd5e1';
+      g1.beginPath();
+      g1.moveTo(22, 12);
+      g1.lineTo(30, 14);
+      g1.lineTo(25, 16);
+      g1.closePath();
+      g1.fill();
+
+      textures.addCanvas('obj_rock_1', c1);
+    }
+
+    if (!textures.exists('obj_rock_2')) {
+      const c2 = document.createElement('canvas');
+      c2.width = 50;
+      c2.height = 42;
+      const g2 = c2.getContext('2d')!;
+      const sh2 = g2.createRadialGradient(26, 34, 3, 26, 34, 19);
+      sh2.addColorStop(0, 'rgba(15, 23, 42, 0.36)');
+      sh2.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      g2.fillStyle = sh2;
+      g2.beginPath();
+      g2.ellipse(26, 34, 19, 7, 0, 0, Math.PI * 2);
+      g2.fill();
+
+      // Secondary lower boulder
+      g2.fillStyle = '#44403c';
+      g2.beginPath();
+      g2.moveTo(26, 32);
+      g2.lineTo(30, 21);
+      g2.lineTo(40, 20);
+      g2.lineTo(44, 29);
+      g2.lineTo(37, 34);
+      g2.closePath();
+      g2.fill();
+      g2.fillStyle = '#78716c';
+      g2.beginPath();
+      g2.moveTo(29, 29);
+      g2.lineTo(31, 22);
+      g2.lineTo(39, 21);
+      g2.lineTo(41, 28);
+      g2.closePath();
+      g2.fill();
+
+      // Main moss-topped rock
+      g2.fillStyle = '#3f3f46';
+      g2.beginPath();
+      g2.moveTo(8, 30);
+      g2.lineTo(12, 16);
+      g2.lineTo(22, 11);
+      g2.lineTo(32, 16);
+      g2.lineTo(33, 30);
+      g2.lineTo(19, 34);
+      g2.closePath();
+      g2.fill();
+      g2.fillStyle = '#71717a';
+      g2.beginPath();
+      g2.moveTo(11, 28);
+      g2.lineTo(14, 17);
+      g2.lineTo(22, 13);
+      g2.lineTo(30, 17);
+      g2.lineTo(29, 28);
+      g2.closePath();
+      g2.fill();
+      g2.fillStyle = '#a1a1aa';
+      g2.beginPath();
+      g2.moveTo(14, 17);
+      g2.lineTo(22, 13);
+      g2.lineTo(28, 17);
+      g2.lineTo(21, 20);
+      g2.closePath();
+      g2.fill();
+
+      g2.fillStyle = '#4d7c0f';
+      g2.beginPath();
+      g2.arc(17, 15, 3.5, 0, Math.PI * 2);
+      g2.arc(21, 14, 2.8, 0, Math.PI * 2);
+      g2.arc(33, 27, 2.6, 0, Math.PI * 2);
+      g2.fill();
+
+      textures.addCanvas('obj_rock_2', c2);
+    }
   }
 
   // 9. Lush Wild Flowering Berry Bush (SE Cast Shadow)
@@ -3300,8 +3906,20 @@ export class PixelArtGenerator {
     hasDormer?: boolean;
     hasTimberBeams?: boolean;
     chimneySide?: 'back' | 'right' | 'none';
+    chimneyStyle?: 'brick' | 'stone' | 'forge_stack';
     footprintScale?: number;
     signType?: 'bakery' | 'general' | 'grocery' | 'blacksmith' | 'florist' | 'clothing' | 'none';
+    roofStyle?:
+      | 'gable_shingle'
+      | 'hip_manor'
+      | 'villa_cupola'
+      | 'terracotta_barrel'
+      | 'forge_monitor'
+      | 'conservatory'
+      | 'boutique_mansard'
+      | 'market_eave';
+    wallStyle?: 'log_timber' | 'tudor_brick' | 'dressed_stone' | 'soot_masonry' | 'painted_clapboard';
+    hasPorchSconce?: boolean;
   }): HTMLCanvasElement {
     const {
       canvasW,
@@ -3327,8 +3945,12 @@ export class PixelArtGenerator {
       hasDormer = false,
       hasTimberBeams = true,
       chimneySide = 'back',
+      chimneyStyle = chimneySide === 'right' ? 'forge_stack' : 'brick',
       footprintScale = 0.94,
       signType = 'none',
+      roofStyle = 'gable_shingle',
+      wallStyle = 'log_timber',
+      hasPorchSconce = true,
     } = opts;
 
     const canvas = document.createElement('canvas');
@@ -3350,13 +3972,36 @@ export class PixelArtGenerator {
       y: a.y + (b.y - a.y) * t + yOff,
     });
 
+    const fillIsoQuad = (
+      pA: { x: number; y: number },
+      pB: { x: number; y: number },
+      t0: number,
+      t1: number,
+      yBot: number,
+      yTop: number,
+      fill: string | CanvasGradient
+    ) => {
+      const a0 = lerpPt(pA, pB, t0, -yBot);
+      const a1 = lerpPt(pA, pB, t1, -yBot);
+      const b1 = lerpPt(pA, pB, t1, -yTop);
+      const b0 = lerpPt(pA, pB, t0, -yTop);
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(a0.x, a0.y);
+      ctx.lineTo(a1.x, a1.y);
+      ctx.lineTo(b1.x, b1.y);
+      ctx.lineTo(b0.x, b0.y);
+      ctx.closePath();
+      ctx.fill();
+    };
+
     // 1. Directional Cast Ground Shadow (bottom-right offset matching morning top-left sunlight)
     ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
     ctx.beginPath();
     ctx.moveTo(left.x + 4, left.y + 4);
-    ctx.lineTo(top.x + 14, top.y + 7);
-    ctx.lineTo(right.x + 16, right.y + 8);
-    ctx.lineTo(bottom.x + 12, bottom.y + 9);
+    ctx.lineTo(top.x + 15, top.y + 7);
+    ctx.lineTo(right.x + 17, right.y + 9);
+    ctx.lineTo(bottom.x + 13, bottom.y + 10);
     ctx.closePath();
     ctx.fill();
 
@@ -3370,43 +4015,34 @@ export class PixelArtGenerator {
     ctx.closePath();
     ctx.fill();
 
-    // 2. Stone Masonry Foundation Plinth (height 11px) with stone courses & mossy tufts
+    // 2. High-Detail Staggered Stone Masonry Foundation Plinth (height 11px)
     const plinthH = 11;
-    // Left plinth face
-    ctx.fillStyle = '#57534e';
-    ctx.beginPath();
-    ctx.moveTo(left.x, left.y);
-    ctx.lineTo(bottom.x, bottom.y);
-    ctx.lineTo(bottom.x, bottom.y - plinthH);
-    ctx.lineTo(left.x, left.y - plinthH);
-    ctx.closePath();
-    ctx.fill();
-    // Right plinth face (darker)
-    ctx.fillStyle = '#44403c';
-    ctx.beginPath();
-    ctx.moveTo(bottom.x, bottom.y);
-    ctx.lineTo(right.x, right.y);
-    ctx.lineTo(right.x, right.y - plinthH);
-    ctx.lineTo(bottom.x, bottom.y - plinthH);
-    ctx.closePath();
-    ctx.fill();
+    fillIsoQuad(left, bottom, 0, 1, 0, plinthH, '#57534e');
+    fillIsoQuad(bottom, right, 0, 1, 0, plinthH, '#44403c');
 
-    // Subtle stone block joints on plinth
-    ctx.strokeStyle = 'rgba(28, 25, 23, 0.45)';
-    ctx.lineWidth = 1;
-    for (let st = 0.2; st <= 0.8; st += 0.2) {
-      const pL = lerpPt(left, bottom, st);
-      ctx.beginPath();
-      ctx.moveTo(pL.x, pL.y);
-      ctx.lineTo(pL.x, pL.y - plinthH);
-      ctx.stroke();
-
-      const pR = lerpPt(bottom, right, st);
-      ctx.beginPath();
-      ctx.moveTo(pR.x, pR.y);
-      ctx.lineTo(pR.x, pR.y - plinthH);
-      ctx.stroke();
+    // Alternating ashlar foundation block tints for crisp texture
+    const leftPlinthBlocks = [
+      [0.02, 0.24, 0.5, 5.2, '#68635e'],
+      [0.46, 0.68, 0.5, 5.2, '#625d57'],
+      [0.14, 0.38, 5.8, 10.2, '#78716c'],
+      [0.72, 0.94, 5.8, 10.2, '#6c6660'],
+    ] as const;
+    for (const [t0, t1, y0, y1, col] of leftPlinthBlocks) {
+      fillIsoQuad(left, bottom, t0, t1, y0, y1, col);
     }
+    const rightPlinthBlocks = [
+      [0.06, 0.30, 0.5, 5.2, '#524d49'],
+      [0.54, 0.78, 0.5, 5.2, '#4d4843'],
+      [0.24, 0.48, 5.8, 10.2, '#5e5853'],
+      [0.68, 0.92, 5.8, 10.2, '#3a3633'],
+    ] as const;
+    for (const [t0, t1, y0, y1, col] of rightPlinthBlocks) {
+      fillIsoQuad(bottom, right, t0, t1, y0, y1, col);
+    }
+
+    // Staggered stone mortar seams on plinth
+    ctx.strokeStyle = 'rgba(28, 25, 23, 0.55)';
+    ctx.lineWidth = 1;
     const midL0 = lerpPt(left, bottom, 0, -5.5);
     const midL1 = lerpPt(left, bottom, 1, -5.5);
     const midR1 = lerpPt(bottom, right, 1, -5.5);
@@ -3416,8 +4052,55 @@ export class PixelArtGenerator {
     ctx.lineTo(midR1.x, midR1.y);
     ctx.stroke();
 
-    // Stone cap bevel
-    ctx.strokeStyle = '#a8a29e';
+    for (const st of [0.24, 0.48, 0.72]) {
+      const pL = lerpPt(left, bottom, st);
+      ctx.beginPath();
+      ctx.moveTo(pL.x, pL.y);
+      ctx.lineTo(pL.x, pL.y - 5.5);
+      ctx.stroke();
+      const pLTop = lerpPt(left, bottom, Math.min(0.95, st + 0.12));
+      ctx.beginPath();
+      ctx.moveTo(pLTop.x, pLTop.y - 5.5);
+      ctx.lineTo(pLTop.x, pLTop.y - plinthH);
+      ctx.stroke();
+
+      const pR = lerpPt(bottom, right, st);
+      ctx.beginPath();
+      ctx.moveTo(pR.x, pR.y);
+      ctx.lineTo(pR.x, pR.y - 5.5);
+      ctx.stroke();
+      const pRTop = lerpPt(bottom, right, Math.min(0.95, st + 0.12));
+      ctx.beginPath();
+      ctx.moveTo(pRTop.x, pRTop.y - 5.5);
+      ctx.lineTo(pRTop.x, pRTop.y - plinthH);
+      ctx.stroke();
+    }
+
+    // Subtle cellar vent / iron grate on right plinth for larger 2-story residences & shops
+    if (tileW >= 3 && upperH > 0) {
+      fillIsoQuad(bottom, right, 0.66, 0.84, 2, 8.5, '#1c1917');
+      ctx.strokeStyle = '#78716c';
+      ctx.lineWidth = 0.9;
+      for (const gt of [0.70, 0.75, 0.80]) {
+        const g0 = lerpPt(bottom, right, gt, -2.5);
+        const g1 = lerpPt(bottom, right, gt, -8);
+        ctx.beginPath();
+        ctx.moveTo(g0.x, g0.y);
+        ctx.lineTo(g1.x, g1.y);
+        ctx.stroke();
+      }
+    }
+
+    // Chamfered limestone plinth ledge + under-ledge shadow
+    ctx.strokeStyle = 'rgba(28, 25, 23, 0.45)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y - plinthH + 1.2);
+    ctx.lineTo(bottom.x, bottom.y - plinthH + 1.2);
+    ctx.lineTo(right.x, right.y - plinthH + 1.2);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#d6d3d1';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
     ctx.moveTo(left.x, left.y - plinthH);
@@ -3425,68 +4108,180 @@ export class PixelArtGenerator {
     ctx.lineTo(right.x, right.y - plinthH);
     ctx.stroke();
 
-    // Mossy ground contact clusters along plinth corners
+    // Mossy ground contact clusters, stepping pebbles & tiny grass flecks
     for (const [a, b, t] of [
-      [left, bottom, 0.12],
-      [left, bottom, 0.44],
-      [bottom, right, 0.22],
-      [bottom, right, 0.72],
+      [left, bottom, 0.10],
+      [left, bottom, 0.42],
+      [bottom, right, 0.18],
+      [bottom, right, 0.68],
+      [bottom, right, 0.92],
     ] as const) {
-      const mp = lerpPt(a, b, t, 0);
+      const mp = lerpPt(a, b, t, 0.5);
       ctx.fillStyle = '#4d7c0f';
       ctx.beginPath();
-      ctx.ellipse(mp.x, mp.y + 0.5, 4.5, 2.2, 0, 0, Math.PI * 2);
+      ctx.ellipse(mp.x, mp.y, 4.5, 2.1, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#7bb846';
-      ctx.fillRect(mp.x - 2, mp.y - 2, 1.5, 2);
-      ctx.fillRect(mp.x + 1, mp.y - 1.5, 1.5, 2);
+      ctx.fillRect(mp.x - 2, mp.y - 2.2, 1.5, 2);
+      ctx.fillRect(mp.x + 1, mp.y - 1.6, 1.5, 2);
     }
 
-    // 3. Main Ground-Floor Walls
+    // 3. Main Ground-Floor Walls with Material-Specific Architectural Detailing
     const totalWallTopOffset = wallH;
-    // Left Wall Face (Sunlit side)
     const lGrad = ctx.createLinearGradient(left.x, left.y - wallH, bottom.x, bottom.y);
     lGrad.addColorStop(0, wallLeftColor);
     lGrad.addColorStop(1, wallLeftColor);
-    ctx.fillStyle = lGrad;
-    ctx.beginPath();
-    ctx.moveTo(left.x, left.y - plinthH);
-    ctx.lineTo(bottom.x, bottom.y - plinthH);
-    ctx.lineTo(bottom.x, bottom.y - totalWallTopOffset);
-    ctx.lineTo(left.x, left.y - totalWallTopOffset);
-    ctx.closePath();
-    ctx.fill();
+    fillIsoQuad(left, bottom, 0, 1, plinthH, totalWallTopOffset, lGrad);
+    fillIsoQuad(bottom, right, 0, 1, plinthH, totalWallTopOffset, wallRightColor);
 
-    // Horizontal siding plank lines on Left wall
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
-    ctx.lineWidth = 1;
-    for (let h = plinthH + 6; h < totalWallTopOffset - 2; h += 6) {
-      ctx.beginPath();
-      ctx.moveTo(left.x, left.y - h);
-      ctx.lineTo(bottom.x, bottom.y - h);
-      ctx.stroke();
-    }
+    const drawWallTexture = (pA: { x: number; y: number }, pB: { x: number; y: number }, isSunlit: boolean) => {
+      if (wallStyle === 'log_timber') {
+        // Overlapping horizontal logs with sunlit upper rim & subtle vertical wood grain ticks
+        for (let h = plinthH + 5; h < totalWallTopOffset - 2; h += 5.5) {
+          ctx.strokeStyle = isSunlit ? 'rgba(69, 26, 3, 0.24)' : 'rgba(28, 25, 23, 0.30)';
+          ctx.lineWidth = 1.1;
+          ctx.beginPath();
+          const a0 = lerpPt(pA, pB, 0, -h);
+          const a1 = lerpPt(pA, pB, 1, -h);
+          ctx.moveTo(a0.x, a0.y);
+          ctx.lineTo(a1.x, a1.y);
+          ctx.stroke();
 
-    // Right Wall Face (Shaded side)
-    ctx.fillStyle = wallRightColor;
-    ctx.beginPath();
-    ctx.moveTo(bottom.x, bottom.y - plinthH);
-    ctx.lineTo(right.x, right.y - plinthH);
-    ctx.lineTo(right.x, right.y - totalWallTopOffset);
-    ctx.lineTo(bottom.x, bottom.y - totalWallTopOffset);
-    ctx.closePath();
-    ctx.fill();
+          if (isSunlit) {
+            ctx.strokeStyle = 'rgba(254, 243, 199, 0.16)';
+            ctx.lineWidth = 0.8;
+            ctx.beginPath();
+            ctx.moveTo(a0.x, a0.y - 1.2);
+            ctx.lineTo(a1.x, a1.y - 1.2);
+            ctx.stroke();
+          }
+        }
+        // Subtle vertical log-joint / knot grain accents
+        ctx.fillStyle = 'rgba(69, 26, 3, 0.22)';
+        for (const [gt, gh] of [[0.22, plinthH + 14], [0.51, plinthH + 25], [0.81, plinthH + 17]] as const) {
+          if (gh < totalWallTopOffset - 4) {
+            const gp = lerpPt(pA, pB, gt, -gh);
+            ctx.fillRect(gp.x, gp.y, 2.2, 1.4);
+          }
+        }
+      } else if (wallStyle === 'tudor_brick') {
+        // Warm brick lower wainscot + crisp plaster upper band + diagonal timber braces
+        const dadoH = plinthH + 14;
+        fillIsoQuad(pA, pB, 0, 1, plinthH, dadoH, isSunlit ? 'rgba(153, 27, 27, 0.22)' : 'rgba(127, 29, 29, 0.28)');
+        ctx.strokeStyle = 'rgba(69, 26, 3, 0.22)';
+        ctx.lineWidth = 0.9;
+        for (let h = plinthH + 4; h <= dadoH; h += 4) {
+          const a0 = lerpPt(pA, pB, 0, -h);
+          const a1 = lerpPt(pA, pB, 1, -h);
+          ctx.beginPath();
+          ctx.moveTo(a0.x, a0.y);
+          ctx.lineTo(a1.x, a1.y);
+          ctx.stroke();
+        }
+        // Horizontal dado rail
+        const dL = lerpPt(pA, pB, 0, -dadoH);
+        const dR = lerpPt(pA, pB, 1, -dadoH);
+        ctx.strokeStyle = trimColor;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(dL.x, dL.y);
+        ctx.lineTo(dR.x, dR.y);
+        ctx.stroke();
 
-    for (let h = plinthH + 6; h < totalWallTopOffset - 2; h += 6) {
-      ctx.beginPath();
-      ctx.moveTo(bottom.x, bottom.y - h);
-      ctx.lineTo(right.x, right.y - h);
-      ctx.stroke();
-    }
+        // Diagonal Tudor corner braces on side panels
+        ctx.strokeStyle = trimColor;
+        ctx.lineWidth = 1.5;
+        for (const [t0, t1] of [[0.03, 0.14], [0.86, 0.97]] as const) {
+          const b0 = lerpPt(pA, pB, t0, -(totalWallTopOffset - 2));
+          const b1 = lerpPt(pA, pB, t1, -dadoH);
+          ctx.beginPath();
+          ctx.moveTo(b0.x, b0.y);
+          ctx.lineTo(b1.x, b1.y);
+          ctx.stroke();
+        }
+      } else if (wallStyle === 'dressed_stone' || wallStyle === 'soot_masonry') {
+        // Staggered ashlar masonry courses + stone block joints
+        const seamCol = wallStyle === 'soot_masonry' ? 'rgba(15, 23, 42, 0.42)' : 'rgba(87, 83, 78, 0.28)';
+        const hiCol = wallStyle === 'soot_masonry' ? 'rgba(148, 163, 184, 0.14)' : 'rgba(255, 255, 255, 0.22)';
+        let rowIdx = 0;
+        for (let h = plinthH + 7; h < totalWallTopOffset - 2; h += 7) {
+          const a0 = lerpPt(pA, pB, 0, -h);
+          const a1 = lerpPt(pA, pB, 1, -h);
+          ctx.strokeStyle = seamCol;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(a0.x, a0.y);
+          ctx.lineTo(a1.x, a1.y);
+          ctx.stroke();
+          if (isSunlit) {
+            ctx.strokeStyle = hiCol;
+            ctx.beginPath();
+            ctx.moveTo(a0.x, a0.y - 1);
+            ctx.lineTo(a1.x, a1.y - 1);
+            ctx.stroke();
+          }
+          const offset = (rowIdx % 2) * 0.11;
+          for (let st = 0.14 + offset; st < 0.94; st += 0.22) {
+            const v0 = lerpPt(pA, pB, st, -(h - 7));
+            const v1 = lerpPt(pA, pB, st, -h);
+            ctx.strokeStyle = seamCol;
+            ctx.beginPath();
+            ctx.moveTo(v0.x, v0.y);
+            ctx.lineTo(v1.x, v1.y);
+            ctx.stroke();
+          }
+          rowIdx++;
+        }
+        // Corner stone quoins (dressed stone) or riveted iron tie-plates (soot masonry)
+        for (let qh = plinthH + 3; qh < totalWallTopOffset - 6; qh += 8) {
+          if (wallStyle === 'dressed_stone') {
+            fillIsoQuad(pA, pB, 0.01, 0.06, qh, qh + 5, isSunlit ? '#e7e5e4' : '#cbd5e1');
+            fillIsoQuad(pA, pB, 0.94, 0.99, qh, qh + 5, isSunlit ? '#d6d3d1' : '#94a3b8');
+          } else if (qh === plinthH + 19) {
+            const pT1 = lerpPt(pA, pB, 0.08, -qh);
+            const pT2 = lerpPt(pA, pB, 0.92, -qh);
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(pT1.x - 1.5, pT1.y - 3, 3, 6);
+            ctx.fillRect(pT2.x - 1.5, pT2.y - 3, 3, 6);
+          }
+        }
+        if (wallStyle === 'soot_masonry') {
+          // Subtle forge soot gradient near top of wall
+          fillIsoQuad(pA, pB, 0.55, 0.98, totalWallTopOffset - 14, totalWallTopOffset, 'rgba(15, 23, 42, 0.22)');
+        }
+      } else if (wallStyle === 'painted_clapboard') {
+        // Painted wood weatherboard siding + painted lower wainscoting band
+        fillIsoQuad(pA, pB, 0, 1, plinthH, plinthH + 10, 'rgba(15, 23, 42, 0.14)');
+        for (let h = plinthH + 5; h < totalWallTopOffset - 2; h += 4.5) {
+          const a0 = lerpPt(pA, pB, 0, -h);
+          const a1 = lerpPt(pA, pB, 1, -h);
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+          ctx.lineWidth = 0.9;
+          ctx.beginPath();
+          ctx.moveTo(a0.x, a0.y);
+          ctx.lineTo(a1.x, a1.y);
+          ctx.stroke();
+          if (isSunlit) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+            ctx.lineWidth = 0.7;
+            ctx.beginPath();
+            ctx.moveTo(a0.x, a0.y - 0.9);
+            ctx.lineTo(a1.x, a1.y - 0.9);
+            ctx.stroke();
+          }
+        }
+      }
 
-    // Structural Corner Timber Posts & Under-Eave Belt Trim
-    ctx.strokeStyle = trimColor;
-    ctx.lineWidth = 2.8;
+      // Under-eave cast shadow across upper 4.5px of ground-floor wall
+      fillIsoQuad(pA, pB, 0, 1, totalWallTopOffset - 4.5, totalWallTopOffset, 'rgba(15, 23, 42, 0.22)');
+    };
+
+    drawWallTexture(left, bottom, true);
+    drawWallTexture(bottom, right, false);
+
+    // Structural Corner Timber Posts / Pilasters
+    ctx.strokeStyle = wallStyle === 'dressed_stone' ? '#78716c' : trimColor;
+    ctx.lineWidth = wallStyle === 'dressed_stone' ? 2.2 : 2.8;
     ctx.beginPath();
     ctx.moveTo(left.x + 1, left.y - plinthH);
     ctx.lineTo(left.x + 1, left.y - totalWallTopOffset);
@@ -3496,7 +4291,15 @@ export class PixelArtGenerator {
     ctx.lineTo(right.x - 1, right.y - totalWallTopOffset);
     ctx.stroke();
 
-    // Isometric Window Helper with Wooden Shutters
+    // Subtle sunlit highlight line on center-front corner post
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bottom.x - 1, bottom.y - plinthH - 1);
+    ctx.lineTo(bottom.x - 1, bottom.y - totalWallTopOffset + 2);
+    ctx.stroke();
+
+    // Isometric Window Helper with Projecting Sill, Louvered Shutters, Glass Glint & Flowerbox
     const drawIsoWindow = (
       pA: { x: number; y: number },
       pB: { x: number; y: number },
@@ -3511,24 +4314,35 @@ export class PixelArtGenerator {
       const b1 = lerpPt(pA, pB, t1, -(yBot + winH));
       const b0 = lerpPt(pA, pB, t0, -(yBot + winH));
 
-      // Side wooden shutters
+      // Under-window drop shadow
+      fillIsoQuad(pA, pB, t0 - 0.03, t1 + 0.03, yBot - 3.5, yBot, 'rgba(15, 23, 42, 0.24)');
+
+      // Louvered wooden side shutters with hinge pins
       const shutterW = 0.045;
+      const shutterColor =
+        signType === 'florist' || signType === 'grocery'
+          ? '#166534'
+          : signType === 'clothing'
+          ? '#701a75'
+          : wallStyle === 'dressed_stone'
+          ? '#1e3a5f'
+          : '#5c2d12';
       for (const [st0, st1] of [[t0 - shutterW, t0], [t1, t1 + shutterW]] as const) {
-        const s0 = lerpPt(pA, pB, st0, -yBot);
-        const s1 = lerpPt(pA, pB, st1, -yBot);
-        const su1 = lerpPt(pA, pB, st1, -(yBot + winH));
-        const su0 = lerpPt(pA, pB, st0, -(yBot + winH));
-        ctx.fillStyle = '#5c2d12';
-        ctx.beginPath();
-        ctx.moveTo(s0.x, s0.y);
-        ctx.lineTo(s1.x, s1.y);
-        ctx.lineTo(su1.x, su1.y);
-        ctx.lineTo(su0.x, su0.y);
-        ctx.closePath();
-        ctx.fill();
+        fillIsoQuad(pA, pB, st0, st1, yBot, yBot + winH, shutterColor);
+        // Horizontal louver slats
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.42)';
+        ctx.lineWidth = 0.8;
+        for (let sy = yBot + 2.5; sy < yBot + winH - 1.5; sy += 2.8) {
+          const sl0 = lerpPt(pA, pB, st0 + 0.005, -sy);
+          const sl1 = lerpPt(pA, pB, st1 - 0.005, -sy);
+          ctx.beginPath();
+          ctx.moveTo(sl0.x, sl0.y);
+          ctx.lineTo(sl1.x, sl1.y);
+          ctx.stroke();
+        }
       }
 
-      // Dark wood frame
+      // Crisp dark wood window casing
       ctx.fillStyle = '#292524';
       ctx.beginPath();
       ctx.moveTo(a0.x, a0.y);
@@ -3539,13 +4353,14 @@ export class PixelArtGenerator {
       ctx.fill();
 
       // Warm glowing interior glass
-      const m0 = lerpPt(pA, pB, t0 + 0.015, -(yBot + 1.5));
-      const m1 = lerpPt(pA, pB, t1 - 0.015, -(yBot + 1.5));
-      const n1 = lerpPt(pA, pB, t1 - 0.015, -(yBot + winH - 1.5));
-      const n0 = lerpPt(pA, pB, t0 + 0.015, -(yBot + winH - 1.5));
+      const m0 = lerpPt(pA, pB, t0 + 0.014, -(yBot + 1.4));
+      const m1 = lerpPt(pA, pB, t1 - 0.014, -(yBot + 1.4));
+      const n1 = lerpPt(pA, pB, t1 - 0.014, -(yBot + winH - 1.4));
+      const n0 = lerpPt(pA, pB, t0 + 0.014, -(yBot + winH - 1.4));
       const wGrad = ctx.createLinearGradient(n0.x, n0.y, m1.x, m1.y);
-      wGrad.addColorStop(0, '#fef08a');
-      wGrad.addColorStop(1, '#f59e0b');
+      wGrad.addColorStop(0, '#fef9c3');
+      wGrad.addColorStop(0.55, '#fde047');
+      wGrad.addColorStop(1, '#d97706');
       ctx.fillStyle = wGrad;
       ctx.beginPath();
       ctx.moveTo(m0.x, m0.y);
@@ -3554,6 +4369,30 @@ export class PixelArtGenerator {
       ctx.lineTo(n0.x, n0.y);
       ctx.closePath();
       ctx.fill();
+
+      // Diagonal daytime glass reflection glint
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.lineWidth = 1.2;
+      const gA = lerpPt(m0, n0, 0.72);
+      const gB = lerpPt(m0, m1, 0.36);
+      ctx.beginPath();
+      ctx.moveTo(gA.x, gA.y);
+      ctx.lineTo(gB.x, gB.y);
+      ctx.stroke();
+
+      // Blacksmith security window iron grille bars
+      if (signType === 'blacksmith') {
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1.1;
+        for (const gt of [0.28, 0.72]) {
+          const bTop = lerpPt(n0, n1, gt);
+          const bBot = lerpPt(m0, m1, gt);
+          ctx.beginPath();
+          ctx.moveTo(bTop.x, bTop.y);
+          ctx.lineTo(bBot.x, bBot.y);
+          ctx.stroke();
+        }
+      }
 
       // Window mullions
       const midTop = lerpPt(b0, b1, 0.5);
@@ -3569,25 +4408,45 @@ export class PixelArtGenerator {
       ctx.lineTo(midR.x, midR.y);
       ctx.stroke();
 
-      // Flower box under window
+      // Projecting window sill
+      const sill0 = lerpPt(pA, pB, t0 - 0.022, -(yBot - 0.6));
+      const sill1 = lerpPt(pA, pB, t1 + 0.022, -(yBot - 0.6));
+      ctx.strokeStyle = '#d6d3d1';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.moveTo(sill0.x, sill0.y);
+      ctx.lineTo(sill1.x, sill1.y);
+      ctx.stroke();
+
+      // Lush flower box under window
       if (withFlowerBox) {
-        const fb0 = lerpPt(pA, pB, t0 - 0.025, -(yBot - 2));
-        const fb1 = lerpPt(pA, pB, t1 + 0.025, -(yBot - 2));
+        const fb0 = lerpPt(pA, pB, t0 - 0.025, -(yBot - 2.6));
+        const fb1 = lerpPt(pA, pB, t1 + 0.025, -(yBot - 2.6));
         ctx.strokeStyle = '#78350f';
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 4.2;
         ctx.beginPath();
         ctx.moveTo(fb0.x, fb0.y);
         ctx.lineTo(fb1.x, fb1.y);
         ctx.stroke();
 
-        // Lush box greenery & tiny blooms
+        // Wooden box slat rim highlight
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(fb0.x, fb0.y - 1.5);
+        ctx.lineTo(fb1.x, fb1.y - 1.5);
+        ctx.stroke();
+
         for (let k = 0; k < 4; k++) {
-          const fp = lerpPt(fb0, fb1, 0.15 + k * 0.24, -2.5);
-          ctx.fillStyle = '#4d7c0f';
+          const fp = lerpPt(fb0, fb1, 0.14 + k * 0.24, -2.8);
+          ctx.fillStyle = '#15803d';
           ctx.beginPath();
-          ctx.arc(fp.x, fp.y + 1, 2.2, 0, Math.PI * 2);
+          ctx.arc(fp.x, fp.y + 1, 2.3, 0, Math.PI * 2);
           ctx.fill();
-          ctx.fillStyle = k % 2 === 1 ? '#facc15' : '#ef4444';
+          ctx.fillStyle =
+            signType === 'clothing'
+              ? k % 2 === 0 ? '#f472b6' : '#c084fc'
+              : k % 2 === 1 ? '#facc15' : '#ef4444';
           ctx.beginPath();
           ctx.arc(fp.x, fp.y, 1.8, 0, Math.PI * 2);
           ctx.fill();
@@ -3595,7 +4454,7 @@ export class PixelArtGenerator {
       }
     };
 
-    // Isometric Front Door Helper (proportioned cleanly above the 32x44 player character)
+    // Isometric Front Door Helper with Glass Transom, Iron Hinges, Bracketed Hood & Stepped Stoop
     const drawIsoDoor = (pA: { x: number; y: number }, pB: { x: number; y: number }, t0: number, t1: number) => {
       const doorH = Math.min(26, wallH - 12);
       const d0 = lerpPt(pA, pB, t0, -plinthH);
@@ -3613,12 +4472,12 @@ export class PixelArtGenerator {
       ctx.closePath();
       ctx.fill();
 
-      // Oak door panel + vertical planks
+      // Carved oak door panel
       const i0 = lerpPt(pA, pB, t0 + 0.015, -(plinthH + 0.5));
       const i1 = lerpPt(pA, pB, t1 - 0.015, -(plinthH + 0.5));
       const v1 = lerpPt(pA, pB, t1 - 0.015, -(plinthH + doorH - 1.5));
       const v0 = lerpPt(pA, pB, t0 + 0.015, -(plinthH + doorH - 1.5));
-      ctx.fillStyle = '#78350f';
+      ctx.fillStyle = signType === 'clothing' ? '#701a75' : wallStyle === 'dressed_stone' ? '#5c2d12' : '#78350f';
       ctx.beginPath();
       ctx.moveTo(i0.x, i0.y);
       ctx.lineTo(i1.x, i1.y);
@@ -3627,43 +4486,70 @@ export class PixelArtGenerator {
       ctx.closePath();
       ctx.fill();
 
-      // Transom highlight & plank line
+      // Vertical plank seams
       const midTop = lerpPt(v0, v1, 0.5);
       const midBot = lerpPt(i0, i1, 0.5);
-      ctx.strokeStyle = 'rgba(41, 37, 36, 0.45)';
+      ctx.strokeStyle = 'rgba(28, 25, 23, 0.45)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(midTop.x, midTop.y);
       ctx.lineTo(midBot.x, midBot.y);
       ctx.stroke();
 
-      // Small porch lintel hood above door
-      const hoodL = lerpPt(pA, pB, t0 - 0.03, -(plinthH + doorH + 1));
-      const hoodR = lerpPt(pA, pB, t1 + 0.03, -(plinthH + doorH + 1));
+      // Warm upper window pane in door
+      fillIsoQuad(pA, pB, t0 + 0.045, t1 - 0.045, plinthH + doorH * 0.56, plinthH + doorH * 0.84, '#fef08a');
+      const dpM0 = lerpPt(pA, pB, t0 + 0.045, -(plinthH + doorH * 0.70));
+      const dpM1 = lerpPt(pA, pB, t1 - 0.045, -(plinthH + doorH * 0.70));
+      ctx.strokeStyle = '#451a03';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(dpM0.x, dpM0.y);
+      ctx.lineTo(dpM1.x, dpM1.y);
+      ctx.stroke();
+
+      // Iron strap hinges on left door stile
+      ctx.fillStyle = '#1e293b';
+      for (const hh of [0.24, 0.74]) {
+        const hPt = lerpPt(i0, i1, 0.14, -doorH * hh);
+        ctx.fillRect(hPt.x - 1, hPt.y - 0.8, 3.5, 1.6);
+      }
+
+      // Under-hood door shadow
+      fillIsoQuad(pA, pB, t0 - 0.02, t1 + 0.02, plinthH + doorH - 2, plinthH + doorH + 1, 'rgba(15, 23, 42, 0.28)');
+
+      // Bracketed porch lintel hood above door
+      const hoodL = lerpPt(pA, pB, t0 - 0.035, -(plinthH + doorH + 1));
+      const hoodR = lerpPt(pA, pB, t1 + 0.035, -(plinthH + doorH + 1));
       ctx.fillStyle = roofDarkColor;
       ctx.beginPath();
-      ctx.moveTo(hoodL.x, hoodL.y - 3);
-      ctx.lineTo(hoodR.x, hoodR.y - 3);
-      ctx.lineTo(hoodR.x - 4, hoodR.y + 3);
-      ctx.lineTo(hoodL.x - 4, hoodL.y + 3);
+      ctx.moveTo(hoodL.x, hoodL.y - 3.5);
+      ctx.lineTo(hoodR.x, hoodR.y - 3.5);
+      ctx.lineTo(hoodR.x - 4.5, hoodR.y + 3.2);
+      ctx.lineTo(hoodL.x - 4.5, hoodL.y + 3.2);
       ctx.closePath();
       ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(hoodL.x, hoodL.y - 3.2);
+      ctx.lineTo(hoodR.x, hoodR.y - 3.2);
+      ctx.stroke();
 
       // Brass knob
-      const knob = lerpPt(i0, i1, 0.78, -doorH * 0.44);
+      const knob = lerpPt(i0, i1, 0.78, -doorH * 0.40);
       ctx.fillStyle = '#fbbf24';
       ctx.beginPath();
-      ctx.arc(knob.x, knob.y, 1.5, 0, Math.PI * 2);
+      ctx.arc(knob.x, knob.y, 1.6, 0, Math.PI * 2);
       ctx.fill();
 
-      // Two-stepped stone porch stoop extending out
-      const stepExt = 5;
-      ctx.fillStyle = '#78716c';
+      // Two-stepped stone porch stoop extending out + welcome mat
+      const stepExt = 5.5;
+      ctx.fillStyle = '#57534e';
       ctx.beginPath();
       ctx.moveTo(d0.x, d0.y + 10);
       ctx.lineTo(d1.x, d1.y + 10);
-      ctx.lineTo(d1.x - stepExt, d1.y + 14);
-      ctx.lineTo(d0.x - stepExt, d0.y + 14);
+      ctx.lineTo(d1.x - stepExt, d1.y + 14.5);
+      ctx.lineTo(d0.x - stepExt, d0.y + 14.5);
       ctx.closePath();
       ctx.fill();
 
@@ -3671,10 +4557,20 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.moveTo(d0.x, d0.y + 8);
       ctx.lineTo(d1.x, d1.y + 8);
-      ctx.lineTo(d1.x - 3, d1.y + 11);
-      ctx.lineTo(d0.x - 3, d0.y + 11);
+      ctx.lineTo(d1.x - 3.2, d1.y + 11.2);
+      ctx.lineTo(d0.x - 3.2, d0.y + 11.2);
       ctx.closePath();
       ctx.fill();
+
+      // Coir welcome mat strip
+      const mat0 = lerpPt(d0, d1, 0.22, 9.2);
+      const mat1 = lerpPt(d0, d1, 0.78, 9.2);
+      ctx.strokeStyle = '#92400e';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.moveTo(mat0.x - 1.5, mat0.y);
+      ctx.lineTo(mat1.x - 1.5, mat1.y);
+      ctx.stroke();
     };
 
     // Door & Windows on Ground Floor
@@ -3689,10 +4585,9 @@ export class PixelArtGenerator {
       drawIsoWindow(left, bottom, 0.56, 0.82, plinthH + 7, winH, hasFlowerBoxes);
     }
 
-    // Boutique Showcase Window Display Items (Clothes, Hat, Shoes) for Aunty Gyi Clothing Shop
+    // Shop-Specific Window Display Details (matching getBuildingLightAnchors positions)
     if (signType === 'clothing') {
       const lw = lerpPt(left, bottom, 0.29, -(plinthH + 7 + winH / 2));
-      // Mini mannequin dress (coral-pink) & straw sun hat inside left display window
       ctx.fillStyle = '#e11d48';
       ctx.fillRect(lw.x - 3, lw.y - 2, 4, 4);
       ctx.fillStyle = '#fb7185';
@@ -3703,31 +4598,67 @@ export class PixelArtGenerator {
       ctx.lineTo(lw.x - 3, lw.y + 1);
       ctx.closePath();
       ctx.fill();
-      // Tiny golden sunhat beside dress
       ctx.fillStyle = '#d97706';
       ctx.fillRect(lw.x + 1.5, lw.y - 4.5, 5, 1.8);
       ctx.fillStyle = '#facc15';
       ctx.fillRect(lw.x + 2.5, lw.y - 6.2, 3, 2);
 
       const rw = lerpPt(bottom, right, 0.405, -(plinthH + 7 + winH / 2));
-      // Mini teal boutique coat/t-shirt + brown leather boots in right display window
       ctx.fillStyle = '#0284c7';
       ctx.fillRect(rw.x - 4.5, rw.y - 4, 5, 5.5);
       ctx.fillStyle = '#38bdf8';
       ctx.fillRect(rw.x - 5.5, rw.y - 3.5, 1.5, 3);
       ctx.fillRect(rw.x + 0.2, rw.y - 3.5, 1.5, 3);
-      // Pair of crisp brown shoes/boots
       ctx.fillStyle = '#451a03';
       ctx.fillRect(rw.x + 1.5, rw.y + 1.5, 2.5, 3.2);
       ctx.fillRect(rw.x + 4.5, rw.y + 1.5, 2.5, 3.2);
+    } else if (signType === 'bakery') {
+      const lw = lerpPt(left, bottom, 0.29, -(plinthH + 7 + winH / 2));
+      // Warm pastry loaves & berry tart visible inside bakery front window
+      ctx.fillStyle = '#b45309';
+      ctx.beginPath();
+      ctx.ellipse(lw.x - 3.2, lw.y + 3, 3.2, 1.8, 0, 0, Math.PI * 2);
+      ctx.ellipse(lw.x + 2.8, lw.y + 3.5, 2.8, 1.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#dc2626';
+      ctx.fillRect(lw.x + 1.8, lw.y + 2.5, 2, 1.3);
+    } else if (signType === 'grocery') {
+      const lw = lerpPt(left, bottom, 0.29, -(plinthH + 7 + winH / 2));
+      // Stacked apples & leafy greens inside grocery window
+      ctx.fillStyle = '#dc2626';
+      ctx.fillRect(lw.x - 4, lw.y + 1.5, 2.4, 2.4);
+      ctx.fillStyle = '#16a34a';
+      ctx.fillRect(lw.x - 0.5, lw.y + 1.5, 2.6, 2.4);
+      ctx.fillStyle = '#f97316';
+      ctx.fillRect(lw.x + 2.8, lw.y + 2.0, 2.2, 2.2);
+    } else if (signType === 'general') {
+      const lw = lerpPt(left, bottom, 0.29, -(plinthH + 7 + winH / 2));
+      // Supply bottle & amber jar inside general store window
+      ctx.fillStyle = '#06b6d4';
+      ctx.fillRect(lw.x - 3.5, lw.y + 0.5, 2.5, 4);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(lw.x + 0.5, lw.y + 1.2, 3.5, 3.3);
+    } else if (signType === 'florist') {
+      const lw = lerpPt(left, bottom, 0.29, -(plinthH + 7 + winH / 2));
+      ctx.fillStyle = '#15803d';
+      ctx.beginPath();
+      ctx.arc(lw.x, lw.y - 1.5, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ec4899';
+      ctx.fillRect(lw.x - 2, lw.y - 3, 2, 2);
+      ctx.fillStyle = '#facc15';
+      ctx.fillRect(lw.x + 1, lw.y - 2, 2, 2);
     }
 
-    // Blacksmith Glowing Forge Hearth on Right Wall
+    // Blacksmith Glowing Forge Hearth on Right Wall with Iron Stone Archway & Chimney Flue Hood
     if (hasForgeHearth) {
       const f0 = lerpPt(bottom, right, 0.62, -plinthH);
       const f1 = lerpPt(bottom, right, 0.88, -plinthH);
-      const fu1 = lerpPt(bottom, right, 0.88, -(plinthH + 19));
-      const fu0 = lerpPt(bottom, right, 0.62, -(plinthH + 19));
+      const fu1 = lerpPt(bottom, right, 0.88, -(plinthH + 20));
+      const fu0 = lerpPt(bottom, right, 0.62, -(plinthH + 20));
+      // Stone arch surround
+      fillIsoQuad(bottom, right, 0.59, 0.91, plinthH, plinthH + 23, '#334155');
+      // Dark interior firebox
       ctx.fillStyle = '#1c1917';
       ctx.beginPath();
       ctx.moveTo(f0.x, f0.y);
@@ -3737,21 +4668,35 @@ export class PixelArtGenerator {
       ctx.closePath();
       ctx.fill();
       // Glowing embers inside
-      const fg = ctx.createRadialGradient((f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 5, 1, (f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 5, 10);
-      fg.addColorStop(0, '#fef08a');
-      fg.addColorStop(0.5, '#f97316');
+      const hCx = (f0.x + f1.x) / 2;
+      const hCy = (f0.y + f1.y) / 2 - 6;
+      const fg = ctx.createRadialGradient(hCx, hCy, 1, hCx, hCy, 10);
+      fg.addColorStop(0, '#fef9c3');
+      fg.addColorStop(0.45, '#f97316');
       fg.addColorStop(1, 'rgba(220, 38, 38, 0.25)');
       ctx.fillStyle = fg;
       ctx.beginPath();
-      ctx.arc((f0.x + f1.x) / 2, (f0.y + f1.y) / 2 - 5, 7, 0, Math.PI * 2);
+      ctx.arc(hCx, hCy, 7.5, 0, Math.PI * 2);
       ctx.fill();
+      // Iron grate lip & hood flue
+      fillIsoQuad(bottom, right, 0.62, 0.88, plinthH + 17, plinthH + 22, '#0f172a');
     }
 
-    // Optional Striped Shop Awning along Left-Front Wall
+    // Optional Striped Shop Awning along Left-Front Wall (with underside drop shadow & scalloped fringe)
     if (hasAwning) {
       const aL = lerpPt(left, bottom, 0.08, -(wallH - 6));
       const aR = lerpPt(left, bottom, 0.50, -(wallH - 6));
       const awSteps = 6;
+      // Underside wall shadow
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+      ctx.beginPath();
+      ctx.moveTo(aL.x - 5, aL.y + 9);
+      ctx.lineTo(aR.x - 5, aR.y + 9);
+      ctx.lineTo(aR.x - 2, aR.y + 13);
+      ctx.lineTo(aL.x - 2, aL.y + 13);
+      ctx.closePath();
+      ctx.fill();
+
       for (let i = 0; i < awSteps; i++) {
         const s0 = lerpPt(aL, aR, i / awSteps);
         const s1 = lerpPt(aL, aR, (i + 1) / awSteps);
@@ -3763,10 +4708,15 @@ export class PixelArtGenerator {
         ctx.lineTo(s0.x - 6, s0.y + 9);
         ctx.closePath();
         ctx.fill();
+
+        // Crisp scalloped trim
+        ctx.beginPath();
+        ctx.arc((s0.x + s1.x) / 2 - 6, (s0.y + s1.y) / 2 + 9, 3.2, 0, Math.PI);
+        ctx.fill();
       }
     }
 
-    // 4. Optional Second Story (Tudor Timber-Framed Upper Level)
+    // 4. Optional Second Story (Timber-Framed / Stucco Upper Level with Jetty Corbels)
     let eaveBase = wallH;
     if (upperH > 0) {
       const uBot = wallH;
@@ -3793,6 +4743,10 @@ export class PixelArtGenerator {
       ctx.closePath();
       ctx.fill();
 
+      // Cast under-eave shadow on upper story
+      fillIsoQuad(left, bottom, 0, 1, uTop - 4, uTop, 'rgba(15, 23, 42, 0.18)');
+      fillIsoQuad(bottom, right, 0, 1, uTop - 4, uTop, 'rgba(15, 23, 42, 0.22)');
+
       if (hasTimberBeams) {
         ctx.strokeStyle = trimColor;
         ctx.lineWidth = 2.2;
@@ -3809,51 +4763,100 @@ export class PixelArtGenerator {
         ctx.moveTo(bottom.x, bottom.y - uBot + 1);
         ctx.lineTo(bottom.x, bottom.y - uTop + 1);
         ctx.stroke();
+
+        // Decorative floor-joist jetty corbel pegs along belt line
+        ctx.fillStyle = trimColor;
+        for (const ct of [0.16, 0.34, 0.66, 0.84]) {
+          const cp = lerpPt(left, bottom, ct, -uBot + 1.5);
+          ctx.fillRect(cp.x - 1, cp.y, 2, 3);
+        }
       }
 
-      // Upper story windows
+      // Upper story windows (centered accurately at getBuildingLightAnchors coordinates)
       const upWinH = Math.max(9, upperH - 9);
       drawIsoWindow(left, bottom, 0.18, 0.40, uBot + 4, upWinH, false);
       drawIsoWindow(left, bottom, 0.58, 0.80, uBot + 4, upWinH, false);
       drawIsoWindow(bottom, right, 0.34, 0.66, uBot + 4, upWinH, false);
     }
 
-    // 5. Brick / Stone Chimney (drawn behind roof ridge)
+    // 5. Stepped Brick / Stone / Forge Chimney (drawn behind roof ridge)
     if (chimneySide !== 'none') {
       const chBase = chimneySide === 'back'
         ? lerpPt(top, right, 0.35, -(eaveBase + roofH * 0.55))
         : lerpPt(bottom, right, 0.55, -(eaveBase + roofH * 0.65));
-      ctx.fillStyle = chimneySide === 'back' ? '#991b1b' : '#57534e';
-      ctx.fillRect(chBase.x - 6, chBase.y - 20, 12, 24);
-      ctx.fillStyle = chimneySide === 'back' ? '#7f1d1d' : '#44403c';
-      ctx.fillRect(chBase.x, chBase.y - 20, 6, 24);
-      ctx.fillStyle = '#b91c1c';
-      ctx.fillRect(chBase.x - 7, chBase.y - 22, 14, 3);
-      // Soft rising smoke puffs
-      ctx.fillStyle = 'rgba(241, 245, 249, 0.65)';
-      ctx.beginPath();
-      ctx.arc(chBase.x + 1, chBase.y - 27, 3.4, 0, Math.PI * 2);
-      ctx.arc(chBase.x + 4, chBase.y - 33, 4.4, 0, Math.PI * 2);
-      ctx.fill();
+
+      if (chimneyStyle === 'forge_stack') {
+        // Heavy dark quarry-stone furnace flue with iron strap bands & forge smoke
+        ctx.fillStyle = '#44403c';
+        ctx.fillRect(chBase.x - 7, chBase.y - 24, 14, 28);
+        ctx.fillStyle = '#292524';
+        ctx.fillRect(chBase.x, chBase.y - 24, 7, 28);
+        // Iron straps
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(chBase.x - 7.5, chBase.y - 18, 15, 2);
+        ctx.fillRect(chBase.x - 7.5, chBase.y - 10, 15, 2);
+        // Corbeled cap
+        ctx.fillStyle = '#57534e';
+        ctx.fillRect(chBase.x - 8.5, chBase.y - 27, 17, 3.5);
+        // Rising forge smoke & warm sparks
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.68)';
+        ctx.beginPath();
+        ctx.arc(chBase.x + 1, chBase.y - 32, 4.0, 0, Math.PI * 2);
+        ctx.arc(chBase.x + 4, chBase.y - 39, 5.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fb923c';
+        ctx.fillRect(chBase.x - 1, chBase.y - 31, 1.5, 1.5);
+        ctx.fillRect(chBase.x + 3, chBase.y - 35, 1.4, 1.4);
+      } else {
+        const lightBrick = chimneyStyle === 'stone' ? '#78716c' : '#991b1b';
+        const darkBrick = chimneyStyle === 'stone' ? '#57534e' : '#7f1d1d';
+        const capCol = chimneyStyle === 'stone' ? '#a8a29e' : '#b91c1c';
+        ctx.fillStyle = lightBrick;
+        ctx.fillRect(chBase.x - 6, chBase.y - 20, 12, 24);
+        ctx.fillStyle = darkBrick;
+        ctx.fillRect(chBase.x, chBase.y - 20, 6, 24);
+        // Brick/stone mortar lines
+        ctx.fillStyle = 'rgba(28, 25, 23, 0.35)';
+        ctx.fillRect(chBase.x - 6, chBase.y - 14, 12, 1);
+        ctx.fillRect(chBase.x - 6, chBase.y - 8, 12, 1);
+        // Stepped chimney cap + terracotta clay flue pot
+        ctx.fillStyle = capCol;
+        ctx.fillRect(chBase.x - 7.5, chBase.y - 22.5, 15, 3);
+        ctx.fillStyle = '#ea580c';
+        ctx.fillRect(chBase.x - 2.5, chBase.y - 26, 5, 3.5);
+        // Layered drifting smoke wisps
+        ctx.fillStyle = 'rgba(241, 245, 249, 0.68)';
+        ctx.beginPath();
+        ctx.arc(chBase.x + 0.5, chBase.y - 30, 3.2, 0, Math.PI * 2);
+        ctx.arc(chBase.x + 3.8, chBase.y - 36, 4.4, 0, Math.PI * 2);
+        ctx.arc(chBase.x + 7.2, chBase.y - 42, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
-    // 6. Pitched Isometric Gable Roof (ridge runs along left->bottom axis for crisp silhouette)
+    // 6. Distinct Roof Shapes & Layered Pixel-Art Shingles
     const eaveOver = 6;
     const eaveLeft = { x: left.x - eaveOver, y: left.y - eaveBase + 3 };
     const eaveBot = { x: bottom.x, y: bottom.y - eaveBase + 5 };
     const eaveRight = { x: right.x + eaveOver, y: right.y - eaveBase + 3 };
     const eaveTop = { x: top.x, y: top.y - eaveBase - 1 };
 
-    const ridgeBack = {
+    const isHipped = roofStyle === 'hip_manor' || roofStyle === 'villa_cupola';
+    const hipInset = roofStyle === 'villa_cupola' ? 0.24 : 0.18;
+
+    const rawRidgeBack = {
       x: (eaveLeft.x + eaveTop.x) / 2,
       y: (eaveLeft.y + eaveTop.y) / 2 - roofH,
     };
-    const ridgeFront = {
+    const rawRidgeFront = {
       x: (eaveBot.x + eaveRight.x) / 2,
       y: (eaveBot.y + eaveRight.y) / 2 - roofH,
     };
 
-    // Back-top roof slope (visible slightly at top)
+    const ridgeBack = isHipped ? lerpPt(rawRidgeBack, rawRidgeFront, hipInset) : rawRidgeBack;
+    const ridgeFront = isHipped ? lerpPt(rawRidgeBack, rawRidgeFront, 1 - hipInset) : rawRidgeFront;
+
+    // Back-top roof slope
     ctx.fillStyle = roofDarkColor;
     ctx.beginPath();
     ctx.moveTo(eaveTop.x, eaveTop.y);
@@ -3863,30 +4866,78 @@ export class PixelArtGenerator {
     ctx.closePath();
     ctx.fill();
 
-    // Right Gable Triangle Wall (eaveBot -> eaveRight -> ridgeFront)
-    ctx.fillStyle = roofGableColor;
-    ctx.beginPath();
-    ctx.moveTo(bottom.x, bottom.y - eaveBase + 1);
-    ctx.lineTo(right.x, right.y - eaveBase);
-    ctx.lineTo(ridgeFront.x, ridgeFront.y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = trimColor;
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
+    if (isHipped) {
+      // Hipped right roof slope (instead of open gable triangle)
+      const hipRightGrad = ctx.createLinearGradient(ridgeFront.x, ridgeFront.y, eaveRight.x, eaveRight.y);
+      hipRightGrad.addColorStop(0, roofLightColor);
+      hipRightGrad.addColorStop(1, roofDarkColor);
+      ctx.fillStyle = hipRightGrad;
+      ctx.beginPath();
+      ctx.moveTo(eaveBot.x, eaveBot.y);
+      ctx.lineTo(eaveRight.x, eaveRight.y);
+      ctx.lineTo(ridgeFront.x, ridgeFront.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = trimColor;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
 
-    // Decorative Attic Vent inside Gable Triangle
-    const gableCx = (bottom.x + right.x + ridgeFront.x) / 3;
-    const gableCy = (bottom.y - eaveBase + right.y - eaveBase + ridgeFront.y) / 3;
-    ctx.fillStyle = trimColor;
-    ctx.beginPath();
-    ctx.arc(gableCx, gableCy, 3.2, 0, Math.PI * 2);
-    ctx.fill();
+      // Subtle shingle lines on right hip
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.20)';
+      ctx.lineWidth = 1;
+      for (const hr of [0.35, 0.65]) {
+        const hp0 = lerpPt(ridgeFront, eaveBot, hr);
+        const hp1 = lerpPt(ridgeFront, eaveRight, hr);
+        ctx.beginPath();
+        ctx.moveTo(hp0.x, hp0.y);
+        ctx.lineTo(hp1.x, hp1.y);
+        ctx.stroke();
+      }
+    } else {
+      // Right Gable Triangle Wall (eaveBot -> eaveRight -> ridgeFront)
+      ctx.fillStyle = roofGableColor;
+      ctx.beginPath();
+      ctx.moveTo(bottom.x, bottom.y - eaveBase + 1);
+      ctx.lineTo(right.x, right.y - eaveBase);
+      ctx.lineTo(ridgeFront.x, ridgeFront.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = trimColor;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
 
-    // Front-Left Sunlit Roof Slope (eaveLeft -> eaveBot -> ridgeFront -> ridgeBack)
+      // Decorative Louvered Attic Vent / Medallion inside Gable Triangle
+      const gableCx = (bottom.x + right.x + ridgeFront.x) / 3;
+      const gableCy = (bottom.y - eaveBase + right.y - eaveBase + ridgeFront.y) / 3;
+      if (roofStyle === 'boutique_mansard') {
+        ctx.fillStyle = '#fdf2f8';
+        ctx.strokeStyle = '#db2777';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(gableCx, gableCy, 4.0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = trimColor;
+        ctx.beginPath();
+        ctx.arc(gableCx, gableCy, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1c1917';
+        ctx.fillRect(gableCx - 2, gableCy - 1, 4, 0.9);
+        ctx.fillRect(gableCx - 2, gableCy + 0.8, 4, 0.9);
+      }
+    }
+
+    // Front-Left Sunlit Roof Slope
     const roofGrad = ctx.createLinearGradient(ridgeBack.x, ridgeBack.y, eaveBot.x, eaveBot.y);
-    roofGrad.addColorStop(0, roofLightColor);
-    roofGrad.addColorStop(1, roofDarkColor);
+    if (roofStyle === 'conservatory') {
+      roofGrad.addColorStop(0, '#bbf7d0');
+      roofGrad.addColorStop(0.5, '#86efac');
+      roofGrad.addColorStop(1, '#22c55e');
+    } else {
+      roofGrad.addColorStop(0, roofLightColor);
+      roofGrad.addColorStop(1, roofDarkColor);
+    }
     ctx.fillStyle = roofGrad;
     ctx.beginPath();
     ctx.moveTo(eaveLeft.x, eaveLeft.y);
@@ -3896,16 +4947,137 @@ export class PixelArtGenerator {
     ctx.closePath();
     ctx.fill();
 
-    // Crisp Layered Roof Shingle Courses
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
-    ctx.lineWidth = 1.1;
-    for (let r = 0.2; r <= 0.82; r += 0.2) {
-      const p0 = lerpPt(ridgeBack, eaveLeft, r);
-      const p1 = lerpPt(ridgeFront, eaveBot, r);
+    // Style-specific roof surface texture
+    if (roofStyle === 'terracotta_barrel') {
+      // Curved barrel-tile ribs running ridge -> eave + scalloped horizontal overlaps
+      ctx.strokeStyle = 'rgba(124, 45, 18, 0.42)';
+      ctx.lineWidth = 1.2;
+      for (let c = 0.1; c <= 0.92; c += 0.1) {
+        const tPt = lerpPt(ridgeBack, ridgeFront, c);
+        const bPt = lerpPt(eaveLeft, eaveBot, c);
+        ctx.beginPath();
+        ctx.moveTo(tPt.x, tPt.y);
+        ctx.lineTo(bPt.x, bPt.y);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(254, 215, 170, 0.35)';
+      ctx.lineWidth = 1;
+      for (let r = 0.25; r <= 0.78; r += 0.26) {
+        const p0 = lerpPt(ridgeBack, eaveLeft, r);
+        const p1 = lerpPt(ridgeFront, eaveBot, r);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    } else if (roofStyle === 'conservatory') {
+      // Botanical skylight glass panes + climbing blooming vine along eave
+      const g0 = lerpPt(ridgeBack, eaveLeft, 0.18);
+      const g1 = lerpPt(ridgeFront, eaveBot, 0.18);
+      const g2 = lerpPt(ridgeFront, eaveBot, 0.78);
+      const g3 = lerpPt(ridgeBack, eaveLeft, 0.78);
+      const skyGrad = ctx.createLinearGradient(g0.x, g0.y, g2.x, g2.y);
+      skyGrad.addColorStop(0, '#e0f2fe');
+      skyGrad.addColorStop(1, '#38bdf8');
+      ctx.fillStyle = skyGrad;
       ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
+      ctx.moveTo(lerpPt(g0, g1, 0.12).x, lerpPt(g0, g1, 0.12).y);
+      ctx.lineTo(lerpPt(g0, g1, 0.88).x, lerpPt(g0, g1, 0.88).y);
+      ctx.lineTo(lerpPt(g3, g2, 0.88).x, lerpPt(g3, g2, 0.88).y);
+      ctx.lineTo(lerpPt(g3, g2, 0.12).x, lerpPt(g3, g2, 0.12).y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 1.4;
       ctx.stroke();
+      // Glass ribs
+      for (const rt of [0.37, 0.63]) {
+        const rTop = lerpPt(g0, g1, rt);
+        const rBot = lerpPt(g3, g2, rt);
+        ctx.beginPath();
+        ctx.moveTo(rTop.x, rTop.y);
+        ctx.lineTo(rBot.x, rBot.y);
+        ctx.stroke();
+      }
+      // Blooming pink/yellow climbing flowers along sunlit eave corner
+      for (const [vt, col] of [[0.14, '#ec4899'], [0.22, '#facc15'], [0.80, '#f43f5e'], [0.88, '#facc15']] as const) {
+        const vp = lerpPt(eaveLeft, eaveBot, vt, -1);
+        ctx.fillStyle = '#15803d';
+        ctx.beginPath();
+        ctx.arc(vp.x, vp.y, 3.0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(vp.x, vp.y - 0.5, 1.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Crisp Layered Roof Shingle Courses with subtle staggered shingle notches
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.24)';
+      ctx.lineWidth = 1.1;
+      for (let r = 0.2; r <= 0.82; r += 0.2) {
+        const p0 = lerpPt(ridgeBack, eaveLeft, r);
+        const p1 = lerpPt(ridgeFront, eaveBot, r);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+
+        // Staggered shingle teeth ticks
+        const tickOffset = Math.round(r * 10) % 2 === 0 ? 0.08 : 0.16;
+        for (let st = tickOffset; st < 0.92; st += 0.16) {
+          const sp = lerpPt(p0, p1, st);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+          ctx.fillRect(sp.x, sp.y - 2.2, 2.2, 1.4);
+        }
+      }
+    }
+
+    // French Mansard Ornamental Cresting (Boutique)
+    if (roofStyle === 'boutique_mansard') {
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.4;
+      for (let rt = 0.12; rt <= 0.88; rt += 0.15) {
+        const rp = lerpPt(ridgeBack, ridgeFront, rt);
+        ctx.beginPath();
+        ctx.moveTo(rp.x, rp.y);
+        ctx.lineTo(rp.x, rp.y - 4);
+        ctx.stroke();
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(rp.x - 0.8, rp.y - 5, 1.6, 1.6);
+      }
+    }
+
+    // Blacksmith Raised Forge Monitor Clerestory Vent along Roof Ridge
+    if (roofStyle === 'forge_monitor') {
+      const mB = lerpPt(ridgeBack, ridgeFront, 0.24, -8);
+      const mF = lerpPt(ridgeBack, ridgeFront, 0.76, -8);
+      const bB = lerpPt(ridgeBack, ridgeFront, 0.24, 1);
+      const bF = lerpPt(ridgeBack, ridgeFront, 0.76, 1);
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.moveTo(bB.x, bB.y);
+      ctx.lineTo(bF.x, bF.y);
+      ctx.lineTo(mF.x, mF.y + 4);
+      ctx.lineTo(mB.x, mB.y + 4);
+      ctx.closePath();
+      ctx.fill();
+      // Warm glowing forge vent slats inside monitor
+      ctx.strokeStyle = '#f97316';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(lerpPt(bB, bF, 0.15, -2.5).x, lerpPt(bB, bF, 0.15, -2.5).y);
+      ctx.lineTo(lerpPt(bB, bF, 0.85, -2.5).x, lerpPt(bB, bF, 0.85, -2.5).y);
+      ctx.stroke();
+      // Monitor cap roof
+      ctx.fillStyle = '#475569';
+      ctx.beginPath();
+      ctx.moveTo(mB.x - 3, mB.y + 4);
+      ctx.lineTo(mF.x + 3, mF.y + 4);
+      ctx.lineTo(mF.x, mF.y);
+      ctx.lineTo(mB.x, mB.y);
+      ctx.closePath();
+      ctx.fill();
     }
 
     // Overhang Eaves Trim & Ridge Cap Highlight
@@ -3918,18 +5090,55 @@ export class PixelArtGenerator {
     ctx.lineTo(eaveRight.x, eaveRight.y);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
     ctx.lineWidth = 1.8;
     ctx.beginPath();
     ctx.moveTo(ridgeBack.x, ridgeBack.y);
     ctx.lineTo(ridgeFront.x, ridgeFront.y);
     ctx.stroke();
 
-    // Optional Dormer Window on Roof (for Manor / Grand Villa)
-    if (hasDormer) {
+    // Roof Dormers / Grand Villa Cupola
+    if (roofStyle === 'villa_cupola') {
+      // Twin dormers flanking central cupola turret
+      for (const dt of [0.27, 0.73]) {
+        const dm = lerpPt(lerpPt(ridgeBack, ridgeFront, dt), lerpPt(eaveLeft, eaveBot, dt), 0.48);
+        ctx.fillStyle = upperLeftColor;
+        ctx.fillRect(dm.x - 7, dm.y - 8, 14, 10);
+        ctx.fillStyle = roofDarkColor;
+        ctx.beginPath();
+        ctx.moveTo(dm.x - 9, dm.y - 8);
+        ctx.lineTo(dm.x, dm.y - 15);
+        ctx.lineTo(dm.x + 9, dm.y - 8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(dm.x - 3.5, dm.y - 6, 7, 6);
+      }
+      // Central Cupola Lantern Turret + Copper Spire Finial
+      const cup = lerpPt(ridgeBack, ridgeFront, 0.5);
+      ctx.fillStyle = upperLeftColor;
+      ctx.fillRect(cup.x - 9, cup.y - 14, 18, 15);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(cup.x - 6, cup.y - 11, 5, 7);
+      ctx.fillRect(cup.x + 1, cup.y - 11, 5, 7);
+      ctx.fillStyle = roofDarkColor;
+      ctx.beginPath();
+      ctx.moveTo(cup.x - 11, cup.y - 14);
+      ctx.lineTo(cup.x, cup.y - 25);
+      ctx.lineTo(cup.x + 11, cup.y - 14);
+      ctx.closePath();
+      ctx.fill();
+      // Gold finial spire
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(cup.x - 1, cup.y - 30, 2, 6);
+      ctx.fillRect(cup.x - 2, cup.y - 29, 4, 1.2);
+    } else if (hasDormer) {
       const dm = lerpPt(lerpPt(ridgeBack, ridgeFront, 0.5), lerpPt(eaveLeft, eaveBot, 0.5), 0.45);
       ctx.fillStyle = upperLeftColor;
       ctx.fillRect(dm.x - 8, dm.y - 9, 16, 12);
+      ctx.strokeStyle = trimColor;
+      ctx.lineWidth = 1.1;
+      ctx.strokeRect(dm.x - 8, dm.y - 9, 16, 12);
       ctx.fillStyle = roofDarkColor;
       ctx.beginPath();
       ctx.moveTo(dm.x - 10, dm.y - 9);
@@ -3939,16 +5148,32 @@ export class PixelArtGenerator {
       ctx.fill();
       ctx.fillStyle = '#fef08a';
       ctx.fillRect(dm.x - 4.5, dm.y - 7, 9, 7);
+      // Tiny window mullion & dormer flower sill
+      ctx.fillStyle = trimColor;
+      ctx.fillRect(dm.x - 0.5, dm.y - 7, 1, 7);
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(dm.x - 3, dm.y + 1, 2, 1.5);
+      ctx.fillStyle = '#facc15';
+      ctx.fillRect(dm.x + 1, dm.y + 1, 2, 1.5);
     }
 
-    // 7. Hanging Shop Signboard & Porch Lantern Sconce near front corner
-    if (signType !== 'none') {
+    // 7. Porch Wall Lantern Sconce (all houses & shops matching WorldAtmosphereSystem.getBuildingLightAnchors)
+    if (hasPorchSconce && doorSide === 'left') {
       const sconcePos = lerpPt(left, bottom, 0.49, -(plinthH + 22));
+      // Wrought iron wall arm & cap
       ctx.fillStyle = '#1c1917';
-      ctx.fillRect(sconcePos.x - 1.5, sconcePos.y - 3, 3, 5);
+      ctx.fillRect(sconcePos.x - 2, sconcePos.y - 4, 4, 6);
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(sconcePos.x - 2.5, sconcePos.y - 4.5, 5, 1.2);
+      // Glowing glass lantern core
       ctx.fillStyle = '#fbbf24';
-      ctx.fillRect(sconcePos.x - 1, sconcePos.y - 1.5, 2, 2.5);
+      ctx.fillRect(sconcePos.x - 1.2, sconcePos.y - 2, 2.4, 3);
+      ctx.fillStyle = '#fef9c3';
+      ctx.fillRect(sconcePos.x - 0.6, sconcePos.y - 1.4, 1.2, 1.6);
+    }
 
+    // 8. Hanging Shop Signboard near front corner
+    if (signType !== 'none') {
       const sp = lerpPt(left, bottom, 0.88, -(wallH - 9));
       // Wrought-iron hanging bracket & chain hooks
       ctx.fillStyle = '#1e293b';
@@ -4003,7 +5228,6 @@ export class PixelArtGenerator {
         ctx.fillStyle = '#facc15';
         ctx.fillRect(sp.x - 0.9, sp.y + 4.3, 1.8, 1.8);
       } else if (signType === 'clothing') {
-        // Boutique wooden hanger & rose-magenta tunic/dress emblem on hanging sign
         ctx.strokeStyle = '#78350f';
         ctx.lineWidth = 1.1;
         ctx.beginPath();
@@ -4046,6 +5270,10 @@ export class PixelArtGenerator {
       doorSide: 'left',
       hasFlowerBoxes: true,
       chimneySide: 'back',
+      chimneyStyle: 'brick',
+      roofStyle: 'gable_shingle',
+      wallStyle: 'log_timber',
+      hasPorchSconce: true,
       footprintScale: 0.94,
     });
     textures.addCanvas('bld_house_small', canvas);
@@ -4076,6 +5304,10 @@ export class PixelArtGenerator {
       hasDormer: true,
       hasTimberBeams: true,
       chimneySide: 'back',
+      chimneyStyle: 'brick',
+      roofStyle: 'hip_manor',
+      wallStyle: 'tudor_brick',
+      hasPorchSconce: true,
       footprintScale: 0.94,
     });
     textures.addCanvas('bld_house_medium', canvas);
@@ -4106,149 +5338,192 @@ export class PixelArtGenerator {
       hasDormer: true,
       hasTimberBeams: true,
       chimneySide: 'back',
+      chimneyStyle: 'stone',
+      roofStyle: 'villa_cupola',
+      wallStyle: 'dressed_stone',
+      hasPorchSconce: true,
       footprintScale: 0.95,
     });
     textures.addCanvas('bld_house_large', canvas);
     textures.addCanvas('obj_house_large', canvas);
   }
 
-  // 13. Clean Isometric Grid-Aligned Wooden Fence (4 rotations: 0=NW-SE, 1=NE-SW, 2=NW-SE Braced, 3=NE-SW Braced)
+  // 13. Auto-Connected Isometric Wooden Fence Suite (16 neighbor bitmasks + braced variants)
+  // Bitmask: NW=1 (tx-1,ty), NE=2 (tx,ty-1), SE=4 (tx+1,ty), SW=8 (tx,ty+1)
   private static createFenceSprite(textures: Phaser.Textures.TextureManager) {
-    if (textures.exists('obj_fence_wood_0')) return;
+    if (textures.exists('obj_fence_wood_m5')) return;
 
     // 64x56 canvas centered on tile diamond at (32, 38) -> originY = 38 / 56
-    // Diamond edge midpoints:
-    //   NW-SE axis (along tx): Left-Top edge (16, 30) <-> Right-Bottom edge (48, 46)
-    //   NE-SW axis (along ty): Right-Top edge (48, 30) <-> Left-Bottom edge (16, 46)
-    const drawFenceCanvas = (rot: 0 | 1 | 2 | 3) => {
+    const drawFenceCanvas = (mask: number, braced: boolean) => {
       const canvas = document.createElement('canvas');
       canvas.width = 64;
       canvas.height = 56;
       const ctx = canvas.getContext('2d')!;
 
-      const isAxisX = rot % 2 === 0; // 0 & 2 align along tx (NW -> SE); 1 & 3 align along ty (NE -> SW)
-      const isBracedVariant = rot >= 2;
-
-      const startX = isAxisX ? 16 : 48;
-      const startY = 30;
-      const endX = isAxisX ? 48 : 16;
-      const endY = 46;
       const midX = 32;
       const midY = 38;
+      const endpoints = {
+        nw: { x: 16, y: 30 },
+        ne: { x: 48, y: 30 },
+        se: { x: 48, y: 46 },
+        sw: { x: 16, y: 46 },
+      };
 
-      // Ground contact shadow along isometric line
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.32)';
+      const hasNW = (mask & 1) !== 0;
+      const hasNE = (mask & 2) !== 0;
+      const hasSE = (mask & 4) !== 0;
+      const hasSW = (mask & 8) !== 0;
+
+      // Ground contact shadows along active isometric arms
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.30)';
       ctx.lineWidth = 6;
       ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(startX, startY + 2);
-      ctx.lineTo(endX, endY + 2);
-      ctx.stroke();
-
-      // Helper to draw a shaded vertical post anchored at ground (px, py)
-      const drawPost = (px: number, py: number, height: number, width = 5) => {
-        const halfW = Math.floor(width / 2);
-        // Shadow side
-        ctx.fillStyle = '#5c2808';
-        ctx.fillRect(px - halfW, py - height, width, height);
-        // Lit side (sun from top-left)
-        ctx.fillStyle = isAxisX ? '#854d0e' : '#9a5b13';
-        ctx.fillRect(px - halfW, py - height, Math.max(2, width - 2), height);
-        // Beveled wooden cap
-        ctx.fillStyle = '#d97706';
-        ctx.fillRect(px - halfW - 1, py - height - 2, width + 2, 3);
-        ctx.fillStyle = '#f59e0b';
-        ctx.fillRect(px - halfW - 1, py - height - 2, width, 1);
-      };
-
-      // Back post first (upper in isometric depth)
-      drawPost(startX, startY, 17, 5);
-
-      // Isometric sloped horizontal rails (edge-to-edge seamless connection!)
-      const drawRail = (offsetY: number, thickness: number, color: string, highlight: string) => {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = thickness;
-        ctx.lineCap = 'butt';
+      const drawShadowArm = (ex: number, ey: number) => {
         ctx.beginPath();
-        ctx.moveTo(startX, startY - offsetY);
-        ctx.lineTo(endX, endY - offsetY);
-        ctx.stroke();
-
-        // Top bevel highlight
-        ctx.strokeStyle = highlight;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(startX, startY - offsetY - thickness / 2);
-        ctx.lineTo(endX, endY - offsetY - thickness / 2);
+        ctx.moveTo(midX, midY + 2);
+        ctx.lineTo(ex, ey + 2);
         ctx.stroke();
       };
-
-      // Bottom rail & Top rail
-      drawRail(6, 3.5, '#78350f', '#b45309');
-      drawRail(13, 3.5, '#92400e', '#d97706');
-
-      if (isBracedVariant) {
-        // Diagonal cross-brace / picket detail to visually distinguish rotations 2 & 3
-        ctx.strokeStyle = '#b45309';
-        ctx.lineWidth = 2;
+      if (hasNW) drawShadowArm(endpoints.nw.x, endpoints.nw.y);
+      if (hasNE) drawShadowArm(endpoints.ne.x, endpoints.ne.y);
+      if (hasSE) drawShadowArm(endpoints.se.x, endpoints.se.y);
+      if (hasSW) drawShadowArm(endpoints.sw.x, endpoints.sw.y);
+      if (!hasNW && !hasNE && !hasSE && !hasSW) {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.30)';
         ctx.beginPath();
-        ctx.moveTo(startX + (endX - startX) * 0.2, startY + (endY - startY) * 0.2 - 12);
-        ctx.lineTo(endX - (endX - startX) * 0.2, endY - (endY - startY) * 0.2 - 5);
-        ctx.stroke();
+        ctx.ellipse(midX, midY + 2, 7, 3.5, 0, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Center post
-      drawPost(midX, midY, isBracedVariant ? 20 : 18, isBracedVariant ? 6 : 5);
+      const drawPost = (px: number, py: number, height: number, width = 5, warmLit = true) => {
+        const halfW = Math.floor(width / 2);
+        // Dark timber post outline & shaded right face
+        ctx.fillStyle = '#451a03';
+        ctx.fillRect(px - halfW - 0.5, py - height, width + 1, height);
+        ctx.fillStyle = '#5c2808';
+        ctx.fillRect(px - halfW, py - height, width, height);
+        // Sunlit left plank face & wood grain tick
+        ctx.fillStyle = warmLit ? '#854d0e' : '#9a5b13';
+        ctx.fillRect(px - halfW, py - height, Math.max(2, width - 2), height);
+        ctx.fillStyle = 'rgba(28, 25, 23, 0.35)';
+        ctx.fillRect(px - halfW + 1, py - height + 4, 1, Math.max(2, height - 8));
+        // Pyramidal beveled post cap
+        ctx.fillStyle = '#b45309';
+        ctx.fillRect(px - halfW - 1, py - height - 2, width + 2, 3);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(px - halfW - 1, py - height - 2, width, 1.2);
+        ctx.fillStyle = '#fde68a';
+        ctx.fillRect(px - halfW, py - height - 3, Math.max(2, width - 2), 1);
+        // Tiny mossy grass tuft at post footing
+        ctx.fillStyle = '#65a30d';
+        ctx.fillRect(px - halfW - 1, py - 1, 2, 1.5);
+      };
 
-      // Front post last (closest to viewer)
-      drawPost(endX, endY, 17, 5);
+      const drawArmRails = (sx: number, sy: number, ex: number, ey: number) => {
+        const drawRail = (offsetY: number, thickness: number, color: string, highlight: string) => {
+          ctx.strokeStyle = 'rgba(28, 25, 23, 0.45)';
+          ctx.lineWidth = thickness + 1.2;
+          ctx.lineCap = 'butt';
+          ctx.beginPath();
+          ctx.moveTo(sx, sy - offsetY + 0.5);
+          ctx.lineTo(ex, ey - offsetY + 0.5);
+          ctx.stroke();
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = thickness;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy - offsetY);
+          ctx.lineTo(ex, ey - offsetY);
+          ctx.stroke();
+
+          ctx.strokeStyle = highlight;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy - offsetY - thickness / 2);
+          ctx.lineTo(ex, ey - offsetY - thickness / 2);
+          ctx.stroke();
+
+          // Forged iron nail dots near rail joints
+          ctx.fillStyle = '#1e293b';
+          const n1x = sx + (ex - sx) * 0.16;
+          const n1y = sy + (ey - sy) * 0.16 - offsetY;
+          const n2x = sx + (ex - sx) * 0.84;
+          const n2y = sy + (ey - sy) * 0.84 - offsetY;
+          ctx.fillRect(n1x - 0.8, n1y - 0.8, 1.5, 1.5);
+          ctx.fillRect(n2x - 0.8, n2y - 0.8, 1.5, 1.5);
+        };
+
+        drawRail(6, 3.5, '#78350f', '#b45309');
+        drawRail(13, 3.5, '#92400e', '#d97706');
+
+        if (braced) {
+          ctx.strokeStyle = '#b45309';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(sx + (ex - sx) * 0.18, sy + (ey - sy) * 0.18 - 12);
+          ctx.lineTo(ex - (ex - sx) * 0.18, ey - (ey - sy) * 0.18 - 5);
+          ctx.stroke();
+        }
+      };
+
+      // Painters order depth: Back posts -> Back rails -> Center post -> Front rails -> Front posts
+      if (hasNW) drawPost(endpoints.nw.x, endpoints.nw.y, 16, 4, true);
+      if (hasNE) drawPost(endpoints.ne.x, endpoints.ne.y, 16, 4, false);
+
+      if (hasNW) drawArmRails(endpoints.nw.x, endpoints.nw.y, midX, midY);
+      if (hasNE) drawArmRails(endpoints.ne.x, endpoints.ne.y, midX, midY);
+
+      drawPost(midX, midY, braced ? 20 : 18, braced ? 6 : 5, true);
+
+      if (hasSE) drawArmRails(midX, midY, endpoints.se.x, endpoints.se.y);
+      if (hasSW) drawArmRails(midX, midY, endpoints.sw.x, endpoints.sw.y);
+
+      if (hasSE) drawPost(endpoints.se.x, endpoints.se.y, 16, 4, true);
+      if (hasSW) drawPost(endpoints.sw.x, endpoints.sw.y, 16, 4, false);
 
       return canvas;
     };
 
-    const c0 = drawFenceCanvas(0);
-    const c1 = drawFenceCanvas(1);
-    const c2 = drawFenceCanvas(2);
-    const c3 = drawFenceCanvas(3);
+    for (let mask = 0; mask < 16; mask++) {
+      textures.addCanvas(`obj_fence_wood_m${mask}`, drawFenceCanvas(mask, false));
+      textures.addCanvas(`obj_fence_wood_b_m${mask}`, drawFenceCanvas(mask, true));
+    }
 
-    textures.addCanvas('obj_fence_wood_0', c0);
-    textures.addCanvas('obj_fence_wood_1', c1);
-    textures.addCanvas('obj_fence_wood_2', c2);
-    textures.addCanvas('obj_fence_wood_3', c3);
-    textures.addCanvas('bld_fence_wood', c0);
-    textures.addCanvas('obj_fence_wood', c0);
+    // Legacy aliases for UI icons & fallbacks
+    textures.addCanvas('obj_fence_wood_0', textures.get('obj_fence_wood_m5').getSourceImage() as HTMLCanvasElement);
+    textures.addCanvas('obj_fence_wood_1', textures.get('obj_fence_wood_m10').getSourceImage() as HTMLCanvasElement);
+    textures.addCanvas('obj_fence_wood_2', textures.get('obj_fence_wood_b_m5').getSourceImage() as HTMLCanvasElement);
+    textures.addCanvas('obj_fence_wood_3', textures.get('obj_fence_wood_b_m10').getSourceImage() as HTMLCanvasElement);
+    textures.addCanvas('bld_fence_wood', textures.get('obj_fence_wood_m5').getSourceImage() as HTMLCanvasElement);
+    textures.addCanvas('obj_fence_wood', textures.get('obj_fence_wood_m5').getSourceImage() as HTMLCanvasElement);
   }
 
   // 14. Campfire (Lit & Unlit)
   private static createCampfireSprites(textures: Phaser.Textures.TextureManager) {
-    // Lit Campfire
-    if (!textures.exists('bld_campfire_lit')) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 48;
-      canvas.height = 44;
-      const ctx = canvas.getContext('2d')!;
-
-      // Ambient warm light glow
-      const glow = ctx.createRadialGradient(24, 28, 4, 24, 28, 22);
-      glow.addColorStop(0, 'rgba(245, 158, 11, 0.45)');
-      glow.addColorStop(1, 'rgba(245, 158, 11, 0)');
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.ellipse(24, 28, 22, 10, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Stone ring
-      ctx.fillStyle = '#57534e';
-      const stones = [[12, 28], [17, 32], [24, 34], [31, 32], [36, 28], [33, 24], [24, 22], [15, 24]];
+    const drawFacetedStoneRing = (ctx: CanvasRenderingContext2D) => {
+      const stones = [
+        [12, 28], [17, 32], [24, 34], [31, 32], [36, 28], [33, 24], [24, 22], [15, 24],
+      ];
       for (const [sx, sy] of stones) {
+        ctx.fillStyle = '#292524';
         ctx.beginPath();
-        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+        ctx.arc(sx, sy + 0.8, 3.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#57534e';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#a8a29e';
+        ctx.beginPath();
+        ctx.arc(sx - 0.8, sy - 0.9, 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
+    };
 
-      // Crossed logs
-      ctx.strokeStyle = '#451a03';
-      ctx.lineWidth = 4;
+    const drawCrossedLogs = (ctx: CanvasRenderingContext2D) => {
+      ctx.strokeStyle = '#3f1904';
+      ctx.lineWidth = 4.6;
+      ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(16, 24);
       ctx.lineTo(32, 32);
@@ -4256,18 +5531,55 @@ export class PixelArtGenerator {
       ctx.lineTo(16, 32);
       ctx.stroke();
 
-      // Burning ember center
-      ctx.fillStyle = '#ef4444';
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
-      ctx.arc(24, 28, 5, 0, Math.PI * 2);
+      ctx.moveTo(16, 23.5);
+      ctx.lineTo(32, 31.5);
+      ctx.moveTo(32, 23.5);
+      ctx.lineTo(16, 31.5);
+      ctx.stroke();
+
+      // Split heartwood ends
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(15, 23, 2, 2);
+      ctx.fillRect(31, 31, 2, 2);
+    };
+
+    // Lit Campfire
+    if (!textures.exists('bld_campfire_lit')) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 48;
+      canvas.height = 44;
+      const ctx = canvas.getContext('2d')!;
+
+      const glow = ctx.createRadialGradient(24, 28, 4, 24, 28, 22);
+      glow.addColorStop(0, 'rgba(245, 158, 11, 0.48)');
+      glow.addColorStop(1, 'rgba(245, 158, 11, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(24, 28, 22, 10, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Stylized dancing fire tongues
+      drawFacetedStoneRing(ctx);
+      drawCrossedLogs(ctx);
+
+      // Glowing ember coal bed
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(24, 28, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.arc(24, 27.5, 3.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Stylized dancing fire tongues + crisp ember sparks
       ctx.fillStyle = '#f97316';
       ctx.beginPath();
       ctx.moveTo(18, 27);
-      ctx.quadraticCurveTo(24, 12, 22, 8);
-      ctx.quadraticCurveTo(25, 16, 28, 12);
+      ctx.quadraticCurveTo(23, 11, 22, 7);
+      ctx.quadraticCurveTo(25, 15, 28, 11);
       ctx.quadraticCurveTo(31, 18, 30, 27);
       ctx.closePath();
       ctx.fill();
@@ -4275,13 +5587,19 @@ export class PixelArtGenerator {
       ctx.fillStyle = '#fef08a';
       ctx.beginPath();
       ctx.moveTo(21, 26);
-      ctx.quadraticCurveTo(24, 16, 23, 13);
-      ctx.quadraticCurveTo(26, 20, 27, 26);
+      ctx.quadraticCurveTo(24, 15, 23, 12);
+      ctx.quadraticCurveTo(26, 19, 27, 26);
       ctx.closePath();
       ctx.fill();
 
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(23.5, 20, 1.5, 4);
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(20, 12, 1.5, 1.5);
+      ctx.fillRect(27, 9, 1.5, 1.5);
+
       textures.addCanvas('bld_campfire_lit', canvas);
-      textures.addCanvas('bld_campfire', canvas); // alias
+      textures.addCanvas('bld_campfire', canvas);
       textures.addCanvas('obj_campfire', canvas);
       textures.addCanvas('obj_campfire_lit', canvas);
     }
@@ -4293,36 +5611,18 @@ export class PixelArtGenerator {
       canvas.height = 44;
       const ctx = canvas.getContext('2d')!;
 
-      // Stone ring
-      ctx.fillStyle = '#57534e';
-      const stones = [[12, 28], [17, 32], [24, 34], [31, 32], [36, 28], [33, 24], [24, 22], [15, 24]];
-      for (const [sx, sy] of stones) {
-        ctx.beginPath();
-        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Cold ash
+      drawFacetedStoneRing(ctx);
       ctx.fillStyle = '#292524';
       ctx.beginPath();
       ctx.arc(24, 28, 6, 0, Math.PI * 2);
       ctx.fill();
-
-      // Wood logs
-      ctx.strokeStyle = '#451a03';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(16, 24);
-      ctx.lineTo(32, 32);
-      ctx.moveTo(32, 24);
-      ctx.lineTo(16, 32);
-      ctx.stroke();
+      drawCrossedLogs(ctx);
 
       textures.addCanvas('bld_campfire_off', canvas);
     }
   }
 
-  // 15. Sturdy Cedar Storage Chest
+  // 15. Sturdy Isometric Cedar Storage Chest (44x40)
   private static createStorageBoxSprite(textures: Phaser.Textures.TextureManager) {
     if (textures.exists('bld_storage_box')) return;
     const canvas = document.createElement('canvas');
@@ -4330,35 +5630,60 @@ export class PixelArtGenerator {
     canvas.height = 40;
     const ctx = canvas.getContext('2d')!;
 
-    // Shadow
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    // SE Drop Shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.36)';
     ctx.beginPath();
-    ctx.ellipse(22, 34, 16, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(22.5, 34, 16.5, 5.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Chest box body
-    ctx.fillStyle = '#78350f';
+    // Chest outer dark timber frame
+    ctx.fillStyle = '#451a03';
     ctx.beginPath();
-    ctx.roundRect(8, 16, 28, 18, 3);
+    ctx.roundRect(7, 13, 30, 21.5, 3);
     ctx.fill();
 
-    // Cedar wood tone
-    ctx.fillStyle = '#92400e';
-    ctx.fillRect(10, 18, 24, 14);
-
-    // Brass corner braces and trim
+    // Sunlit slatted arched lid
+    ctx.fillStyle = '#b45309';
+    ctx.beginPath();
+    ctx.roundRect(8, 14, 28, 9, [3, 3, 1, 1]);
+    ctx.fill();
     ctx.fillStyle = '#d97706';
-    ctx.fillRect(8, 16, 4, 18);
-    ctx.fillRect(32, 16, 4, 18);
-    ctx.fillRect(8, 24, 28, 3);
+    ctx.fillRect(9, 14.8, 26, 2.5);
+    ctx.strokeStyle = 'rgba(69, 26, 3, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(8, 18.5);
+    ctx.lineTo(36, 18.5);
+    ctx.stroke();
 
-    // Front Brass Keyhole Clasp
+    // Cedar front plank panel
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(8.5, 23, 27, 10.5);
+    ctx.strokeStyle = 'rgba(41, 37, 36, 0.42)';
+    ctx.beginPath();
+    ctx.moveTo(8.5, 28.5);
+    ctx.lineTo(35.5, 28.5);
+    ctx.stroke();
+
+    // Forged iron corner straps & bright brass rivets
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(8, 14, 4, 19.5);
+    ctx.fillRect(32, 14, 4, 19.5);
+    ctx.fillRect(8, 22, 28, 2.5);
+    ctx.fillStyle = '#fbbf24';
+    for (const [rx, ry] of [[9.5, 16], [9.5, 30], [33.5, 16], [33.5, 30]] as const) {
+      ctx.fillRect(rx, ry, 1.4, 1.4);
+    }
+
+    // Ornate Brass Keyhole Clasp
     ctx.fillStyle = '#fbbf24';
     ctx.beginPath();
-    ctx.roundRect(19, 21, 6, 7, 2);
+    ctx.roundRect(19, 20.5, 6, 7.5, 2);
     ctx.fill();
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(20, 21.5, 4, 1.2);
     ctx.fillStyle = '#1c1917';
-    ctx.fillRect(21.5, 24, 1.5, 2.5);
+    ctx.fillRect(21.3, 24, 1.5, 2.5);
 
     textures.addCanvas('bld_storage_box', canvas);
     textures.addCanvas('obj_storage_box', canvas);
@@ -4372,10 +5697,9 @@ export class PixelArtGenerator {
     canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
 
-    // Soft SE ground contact shadow + warm light spill aligned to y=57 (originY=0.9)
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.32)';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
     ctx.beginPath();
-    ctx.ellipse(29, 57.5, 9.5, 3.8, 0, 0, Math.PI * 2);
+    ctx.ellipse(29, 57.5, 10, 4, 0, 0, Math.PI * 2);
     ctx.fill();
 
     const halo = ctx.createRadialGradient(27, 56, 2, 27, 56, 24);
@@ -4386,44 +5710,61 @@ export class PixelArtGenerator {
     ctx.ellipse(27, 56, 24, 9, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Base stone/iron footing anchored flush at y=58 (0.9 * 64 = 57.6)
-    ctx.fillStyle = '#1c1917';
-    ctx.fillRect(23, 53, 8, 5);
+    // Stepped stone & iron footing anchored flush at y=58 (0.9 * 64 = 57.6)
     ctx.fillStyle = '#44403c';
-    ctx.fillRect(24, 53, 6, 2);
+    ctx.fillRect(21.5, 54, 11, 4);
+    ctx.fillStyle = '#78716c';
+    ctx.fillRect(22.5, 52.5, 9, 2.5);
+    ctx.fillStyle = '#1c1917';
+    ctx.fillRect(24, 50.5, 6, 2.5);
 
-    // Timber / Iron Post with sunlit left edge
-    ctx.fillStyle = '#451a03';
-    ctx.fillRect(25.5, 24, 3, 30);
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(25.5, 25, 1.3, 28);
+    // Fluted timber & iron post with sunlit left bevel
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(25.2, 22, 3.6, 29);
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(25.4, 23, 1.3, 27);
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(24.5, 35, 5, 2);
 
-    // Hanging cross-bracket & top cap
-    ctx.fillStyle = '#292524';
-    ctx.fillRect(22, 22, 14, 3);
-    ctx.fillRect(32, 25, 2, 4);
+    // Scrolled wrought-iron cross-bracket & top finial
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(21.5, 21, 15, 2.6);
+    ctx.fillRect(32.5, 23.5, 1.8, 4);
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(27.5, 28);
+    ctx.quadraticCurveTo(31, 24, 32, 22.5);
+    ctx.stroke();
 
-    // Lantern Glass & Flame
+    // Copper-Capped Multi-Pane Glass Lantern
+    ctx.fillStyle = '#92400e';
+    ctx.beginPath();
+    ctx.moveTo(28.5, 28);
+    ctx.lineTo(37.5, 28);
+    ctx.lineTo(33, 25);
+    ctx.closePath();
+    ctx.fill();
     ctx.fillStyle = '#1c1917';
     ctx.beginPath();
     ctx.roundRect(29, 28, 8, 12, 2);
     ctx.fill();
-    ctx.fillStyle = '#57534e';
-    ctx.fillRect(30, 28, 6, 1.2);
 
-    // Glowing amber glass
+    // Glowing amber glass + pane mullions + filament
     ctx.fillStyle = '#fbbf24';
-    ctx.fillRect(30.5, 30, 5, 8);
-
-    // Core bright wick
+    ctx.fillRect(30.4, 29.8, 5.2, 8.4);
+    ctx.fillStyle = '#fef9c3';
+    ctx.fillRect(31.5, 31.5, 3, 5);
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(32, 33, 2, 2);
+    ctx.fillRect(32.2, 33, 1.6, 2);
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(32.6, 29.8, 0.8, 8.4);
 
     textures.addCanvas('bld_lantern', canvas);
     textures.addCanvas('obj_lantern', canvas);
   }
 
-  // 17. Vibrant Market Shop Stall
+  // 17. Vibrant Market Shop Stall (84x76)
   private static createShopStallSprite(textures: Phaser.Textures.TextureManager) {
     if (textures.exists('obj_shop_stall')) return;
     const canvas = document.createElement('canvas');
@@ -4437,33 +5778,70 @@ export class PixelArtGenerator {
     ctx.ellipse(42, 66, 34, 9, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Wooden counter table
+    // Planked wooden counter + decorative burgundy cloth runner
+    ctx.fillStyle = '#5c280b';
+    ctx.fillRect(17, 42, 50, 22);
     ctx.fillStyle = '#78350f';
-    ctx.fillRect(18, 42, 48, 22);
-    ctx.fillStyle = '#92400e';
-    ctx.fillRect(16, 40, 52, 6);
+    ctx.fillRect(19, 43, 46, 20);
+    ctx.strokeStyle = 'rgba(41, 37, 36, 0.45)';
+    ctx.lineWidth = 1;
+    for (let px = 27; px <= 57; px += 10) {
+      ctx.beginPath();
+      ctx.moveTo(px, 44);
+      ctx.lineTo(px, 63);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#9f1239';
+    ctx.fillRect(34, 44, 16, 15);
+    ctx.fillStyle = '#fde047';
+    ctx.fillRect(34, 57, 16, 1.5);
+
+    // Sunlit counter top plank
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(15, 39.5, 54, 5.5);
+    ctx.fillStyle = '#d97706';
+    ctx.fillRect(15, 39.5, 54, 1.6);
 
     // Crates & Goods on Counter
-    // Fruit crate (apples)
     ctx.fillStyle = '#a16207';
-    ctx.fillRect(20, 34, 14, 8);
+    ctx.fillRect(19, 33.5, 14, 7.5);
+    ctx.strokeStyle = '#713f12';
+    ctx.strokeRect(19, 33.5, 14, 7.5);
     ctx.fillStyle = '#dc2626';
     ctx.beginPath();
-    ctx.arc(24, 34, 2, 0, Math.PI * 2);
-    ctx.arc(28, 33, 2, 0, Math.PI * 2);
-    ctx.arc(31, 35, 2, 0, Math.PI * 2);
+    ctx.arc(23, 33.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(27, 32.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(30.5, 34, 2.1, 0, Math.PI * 2);
     ctx.fill();
 
-    // Glass potion flasks
+    // Glass potion flasks + brass lantern jar
     ctx.fillStyle = '#06b6d4';
-    ctx.fillRect(40, 33, 4, 7);
+    ctx.fillRect(39, 32, 4, 7.5);
+    ctx.fillStyle = '#bae6fd';
+    ctx.fillRect(40, 31, 2, 1.5);
     ctx.fillStyle = '#10b981';
-    ctx.fillRect(47, 33, 4, 7);
+    ctx.fillRect(46, 32.5, 4, 7);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(54, 33, 6, 6.5);
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillRect(55, 34, 4, 4);
 
-    // Corner Support Poles
+    // Corner Support Poles + diagonal timber knee-braces
     ctx.fillStyle = '#451a03';
-    ctx.fillRect(16, 12, 3, 30);
-    ctx.fillRect(65, 12, 3, 30);
+    ctx.fillRect(16, 12, 3.2, 29);
+    ctx.fillRect(64.8, 12, 3.2, 29);
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(19, 29);
+    ctx.lineTo(25, 24);
+    ctx.moveTo(65, 29);
+    ctx.lineTo(59, 24);
+    ctx.stroke();
+
+    // Cast awning shadow on poles
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+    ctx.fillRect(16, 27, 52, 4);
 
     // Striped Canvas Awning (Burgundy & Cream)
     const stripes = ['#881337', '#fef08a', '#881337', '#fef08a', '#881337', '#fef08a', '#881337'];
@@ -4478,7 +5856,6 @@ export class PixelArtGenerator {
       ctx.closePath();
       ctx.fill();
 
-      // Scalloped bottom fringe
       ctx.beginPath();
       ctx.arc(16 + i * sw + sw / 2, 28, sw / 2, 0, Math.PI);
       ctx.fill();
@@ -4487,7 +5864,7 @@ export class PixelArtGenerator {
     textures.addCanvas('obj_shop_stall', canvas);
   }
 
-  // 18. Town Crafting Workbench & Anvil
+  // 18. Town Crafting Workbench & Anvil (68x56)
   private static createCraftingBenchSprite(textures: Phaser.Textures.TextureManager) {
     if (textures.exists('obj_craft_bench')) return;
     const canvas = document.createElement('canvas');
@@ -4495,41 +5872,62 @@ export class PixelArtGenerator {
     canvas.height = 56;
     const ctx = canvas.getContext('2d')!;
 
-    // Shadow
     ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
     ctx.beginPath();
     ctx.ellipse(34, 46, 26, 8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Wooden workbench table
-    ctx.fillStyle = '#593207';
-    ctx.fillRect(14, 30, 28, 16);
+    // Mortised oak workbench frame & lower tool shelf
+    ctx.fillStyle = '#451a03';
+    ctx.fillRect(14, 30, 3, 16);
+    ctx.fillRect(38, 30, 3, 16);
+    ctx.fillStyle = '#5c280b';
+    ctx.fillRect(15, 38, 25, 3);
     ctx.fillStyle = '#78350f';
-    ctx.fillRect(12, 26, 32, 6);
+    ctx.fillRect(13, 30, 29, 7);
+    // Sunlit benchtop with wood vise
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(11, 25, 34, 6);
+    ctx.fillStyle = '#d97706';
+    ctx.fillRect(11, 25, 34, 1.5);
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(14, 30, 5, 3.5);
 
-    // Carpenter's hand saw & hammer on table
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 1.5;
+    // Rolled blueprint & carpenter's saw/hammer on benchtop
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillRect(14, 24, 9, 4);
+    ctx.fillStyle = '#0284c7';
+    ctx.fillRect(15, 25, 7, 2);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(16, 25);
-    ctx.lineTo(24, 25);
+    ctx.moveTo(27, 25.5);
+    ctx.lineTo(36, 25.5);
     ctx.stroke();
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(36, 24.5, 4, 2.5);
 
-    // Heavy Iron Anvil on Tree Stump
+    // Ringed oak tree stump + Heavy Sculpted Iron Anvil
     ctx.fillStyle = '#451a03';
     ctx.fillRect(44, 32, 14, 14);
-
-    // Cast Iron Anvil
-    ctx.fillStyle = '#334155';
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(45.5, 32, 4, 13.5);
+    ctx.fillStyle = '#d97706';
     ctx.beginPath();
-    ctx.moveTo(42, 26);
-    ctx.lineTo(58, 26);
+    ctx.ellipse(51, 32.5, 7, 2.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(41, 26);
+    ctx.lineTo(59, 26);
     ctx.lineTo(56, 30);
     ctx.lineTo(44, 30);
     ctx.closePath();
     ctx.fill();
-
     ctx.fillStyle = '#64748b';
+    ctx.fillRect(43, 25.5, 13, 1.5);
+    ctx.fillStyle = '#475569';
     ctx.fillRect(47, 30, 6, 3);
     ctx.fillRect(45, 33, 10, 2);
 
@@ -4544,7 +5942,6 @@ export class PixelArtGenerator {
     canvas.height = 72;
     const ctx = canvas.getContext('2d')!;
 
-    // Soft SE cast ground shadow
     ctx.fillStyle = 'rgba(15, 23, 42, 0.40)';
     ctx.beginPath();
     ctx.ellipse(40.5, 59.5, 32, 11, 0, 0, Math.PI * 2);
@@ -4560,13 +5957,24 @@ export class PixelArtGenerator {
     ctx.ellipse(38, 47, 29, 13.5, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // Radial stone block joint seams around basin wall
+    ctx.strokeStyle = 'rgba(28, 25, 23, 0.42)';
+    ctx.lineWidth = 1;
+    for (const bx of [18, 27, 38, 49, 58]) {
+      ctx.beginPath();
+      ctx.moveTo(bx, 50);
+      ctx.lineTo(bx, 57);
+      ctx.stroke();
+    }
+
     // Subtle moss flecks along stone footing
     ctx.fillStyle = '#65a30d';
     ctx.fillRect(15, 53, 4, 2);
     ctx.fillRect(54, 54, 4, 2);
+    ctx.fillRect(35, 58, 5, 1.8);
 
     // Chiseled limestone basin rim
-    ctx.fillStyle = '#d6d3d1';
+    ctx.fillStyle = '#e7e5e4';
     ctx.beginPath();
     ctx.ellipse(38, 44.5, 26.5, 11.8, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -4577,7 +5985,7 @@ export class PixelArtGenerator {
 
     // Shimmering turquoise water pool
     const poolGrad = ctx.createRadialGradient(38, 44, 2, 38, 45, 23);
-    poolGrad.addColorStop(0, '#38bdf8');
+    poolGrad.addColorStop(0, '#7dd3fc');
     poolGrad.addColorStop(0.65, '#06b6d4');
     poolGrad.addColorStop(1, '#0e7490');
     ctx.fillStyle = poolGrad;
@@ -4594,7 +6002,7 @@ export class PixelArtGenerator {
     ctx.beginPath();
     ctx.ellipse(38, 28.5, 13, 5.5, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#d6d3d1';
+    ctx.fillStyle = '#e7e5e4';
     ctx.beginPath();
     ctx.ellipse(38, 26.5, 12, 4.8, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -4606,7 +6014,7 @@ export class PixelArtGenerator {
     // Top finial spire
     ctx.fillStyle = '#78716c';
     ctx.fillRect(36, 17, 4, 9);
-    ctx.fillStyle = '#e7e5e4';
+    ctx.fillStyle = '#f5f5f4';
     ctx.beginPath();
     ctx.arc(38, 16, 2.8, 0, Math.PI * 2);
     ctx.fill();
@@ -4625,7 +6033,7 @@ export class PixelArtGenerator {
     ctx.quadraticCurveTo(48, 34, 49, 44);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(224, 242, 254, 0.8)';
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.85)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.ellipse(38, 45, 12.5, 5, 0, 0, Math.PI * 2);
@@ -4815,6 +6223,10 @@ export class PixelArtGenerator {
         hasFlowerBoxes: true,
         hasTimberBeams: true,
         chimneySide: 'back',
+        chimneyStyle: 'stone',
+        roofStyle: 'gable_shingle',
+        wallStyle: 'dressed_stone',
+        hasPorchSconce: true,
         footprintScale: 0.94,
       });
       textures.addCanvas('obj_town_house', canvas);
@@ -4828,55 +6240,57 @@ export class PixelArtGenerator {
       canvas.height = 56;
       const ctx = canvas.getContext('2d')!;
 
-      // Drop shadow
       ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
       ctx.beginPath();
       ctx.ellipse(32, 49, 28, 6, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Wooden counter & shelves
-      ctx.fillStyle = '#78350f';
+      // Planked counter & linen skirt trim
+      ctx.fillStyle = '#5c280b';
       ctx.fillRect(10, 32, 44, 18);
-      ctx.fillStyle = '#92400e';
-      ctx.fillRect(8, 30, 48, 4);
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(11.5, 33, 41, 16);
+      ctx.fillStyle = '#fef3c7';
+      ctx.fillRect(12, 34, 40, 2.5);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(8, 29.5, 48, 4.5);
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(8, 29.5, 48, 1.4);
 
       // Fresh bakery goods on counter
-      // Braided golden challah bread
       ctx.fillStyle = '#d97706';
       ctx.beginPath();
-      ctx.ellipse(18, 28, 6, 3, 0, 0, Math.PI * 2);
+      ctx.ellipse(18, 27.5, 6, 3, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fef3c7';
-      ctx.fillRect(16, 27, 4, 1.5);
+      ctx.fillRect(16, 26.5, 4, 1.5);
 
-      // Crusty golden baguettes
       ctx.fillStyle = '#b45309';
-      ctx.fillRect(28, 24, 3, 8);
-      ctx.fillRect(32, 23, 3, 9);
+      ctx.fillRect(28, 23.5, 3, 8);
+      ctx.fillRect(32, 22.5, 3, 9);
       ctx.fillStyle = '#fef08a';
-      ctx.fillRect(28.5, 25, 2, 2);
-      ctx.fillRect(32.5, 24, 2, 2);
+      ctx.fillRect(28.5, 24.5, 2, 2);
+      ctx.fillRect(32.5, 23.5, 2, 2);
 
-      // Round rustic berry pies
       ctx.fillStyle = '#9a3412';
       ctx.beginPath();
-      ctx.ellipse(44, 28, 5, 2.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(44, 27.5, 5, 2.5, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#dc2626'; // berry center
-      ctx.fillRect(43, 27, 2, 2);
+      ctx.fillStyle = '#dc2626';
+      ctx.fillRect(43, 26.5, 2, 2);
 
-      // Wooden support poles
+      // Support poles + knee braces + canopy shadow
       ctx.fillStyle = '#451a03';
       ctx.fillRect(10, 10, 3, 22);
       ctx.fillRect(51, 10, 3, 22);
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
+      ctx.fillRect(10, 21, 44, 3);
 
-      // Scalloped striped canopy (Warm Terracotta & Buttercream)
       const canopyStripes = ['#c2410c', '#fef9c3', '#c2410c', '#fef9c3', '#c2410c', '#fef9c3'];
       const cw = 48 / canopyStripes.length;
       for (let i = 0; i < canopyStripes.length; i++) {
         ctx.fillStyle = canopyStripes[i];
         ctx.fillRect(8 + i * cw, 10, cw, 12);
-        // Scallop bottom
         ctx.beginPath();
         ctx.arc(8 + i * cw + cw / 2, 22, cw / 2, 0, Math.PI);
         ctx.fill();
@@ -4919,6 +6333,86 @@ export class PixelArtGenerator {
 
       textures.addCanvas('obj_bench', canvas);
     }
+
+    // 3B. Lakeside 2-Seater Isometric Natural Cedar Benches (nw_se & ne_sw) — 58x38
+    const drawDoubleBench = (key: string, mirrorX: boolean) => {
+      if (textures.exists(key)) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = 58;
+      canvas.height = 38;
+      const ctx = canvas.getContext('2d')!;
+
+      ctx.save();
+      if (mirrorX) {
+        ctx.translate(58, 0);
+        ctx.scale(-1, 1);
+      }
+
+      // Isometric cast shadow along NW->SE axis
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
+      ctx.beginPath();
+      ctx.ellipse(29, 28, 22, 7.5, 0.44, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cast-iron rear & middle support legs
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(11, 14, 2.5, 9);
+      ctx.fillRect(28, 19, 2.5, 9);
+      ctx.fillRect(43, 25, 2.5, 9);
+
+      // Backrest angled wooden slats (two rich cedar rails)
+      const drawIsoPlank = (x1: number, y1: number, x2: number, y2: number, w: number, fill: string, hi: string) => {
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = w;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = hi;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1 - w * 0.45);
+        ctx.lineTo(x2, y2 - w * 0.45);
+        ctx.stroke();
+      };
+
+      // Backrest uprights
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(13, 5, 2.2, 13);
+      ctx.fillRect(29, 10, 2.2, 13);
+      ctx.fillRect(44, 15, 2.2, 13);
+
+      // Backrest top & mid planks
+      drawIsoPlank(12, 7, 45, 18, 3.6, '#b45309', '#f59e0b');
+      drawIsoPlank(12, 12, 45, 23, 3.4, '#92400e', '#d97706');
+
+      // Deep 2-seater bench cushion planks (front & back plank for generous 2-person seat)
+      drawIsoPlank(11, 16.5, 44, 27.5, 4.2, '#9a3412', '#d97706');
+      drawIsoPlank(9, 19, 42, 30, 4.0, '#7c2d12', '#c2410c');
+
+      // Curved cast-iron front legs + armrests on left, center divider peg, right
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(8.5, 20, 2.6, 8.5);
+      ctx.fillRect(40.5, 30, 2.6, 8);
+      // Curved armrests
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(13, 12);
+      ctx.lineTo(8.5, 16);
+      ctx.moveTo(44, 22);
+      ctx.lineTo(39.5, 26);
+      ctx.stroke();
+
+      ctx.restore();
+      textures.addCanvas(key, canvas);
+    };
+
+    drawDoubleBench('obj_double_bench_nw_se', false);
+    drawDoubleBench('obj_double_bench_ne_sw', true);
 
     // 4. Barrel Planter with Blooming Flowers (28x32)
     if (!textures.exists('obj_flower_pot')) {
@@ -5153,7 +6647,7 @@ export class PixelArtGenerator {
 
   // 21B. Integrated Village Shop Buildings (3x2 & 2x2) + Front Display Shelves/Racks
   private static createVillageShopBuildings(textures: Phaser.Textures.TextureManager) {
-    // 1. Village Bakery House (3x2)
+    // 1. Village Bakery House (3x2) — Terracotta Barrel Roof & Tudor-Brick Walls
     if (!textures.exists('obj_house_bakery')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 208,
@@ -5172,13 +6666,17 @@ export class PixelArtGenerator {
         hasAwning: { colors: ['#ea580c', '#fef3c7'] },
         hasFlowerBoxes: true,
         chimneySide: 'back',
+        chimneyStyle: 'brick',
+        roofStyle: 'terracotta_barrel',
+        wallStyle: 'tudor_brick',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'bakery',
       });
       textures.addCanvas('obj_house_bakery', canvas);
     }
 
-    // 2. General Store (3x2)
+    // 2. General Store (3x2) — Market Eave & Painted Clapboard Storefront
     if (!textures.exists('obj_house_general')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 208,
@@ -5200,13 +6698,16 @@ export class PixelArtGenerator {
         hasAwning: { colors: ['#881337', '#fef08a'] },
         hasFlowerBoxes: false,
         chimneySide: 'none',
+        roofStyle: 'market_eave',
+        wallStyle: 'painted_clapboard',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'general',
       });
       textures.addCanvas('obj_house_general', canvas);
     }
 
-    // 3. Fresh Grocery Shop (3x2)
+    // 3. Fresh Grocery Shop (3x2) — Market Eave & Mint Painted Clapboard
     if (!textures.exists('obj_house_grocery')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 208,
@@ -5225,13 +6726,16 @@ export class PixelArtGenerator {
         hasAwning: { colors: ['#16a34a', '#ffffff'] },
         hasFlowerBoxes: true,
         chimneySide: 'none',
+        roofStyle: 'market_eave',
+        wallStyle: 'painted_clapboard',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'grocery',
       });
       textures.addCanvas('obj_house_grocery', canvas);
     }
 
-    // 4. Blacksmith Forge Shop (3x2)
+    // 4. Blacksmith Forge Shop (3x2) — Raised Forge Monitor Roof & Soot Quarry Masonry
     if (!textures.exists('obj_house_blacksmith')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 208,
@@ -5251,13 +6755,17 @@ export class PixelArtGenerator {
         hasFlowerBoxes: false,
         hasForgeHearth: true,
         chimneySide: 'right',
+        chimneyStyle: 'forge_stack',
+        roofStyle: 'forge_monitor',
+        wallStyle: 'soot_masonry',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'blacksmith',
       });
       textures.addCanvas('obj_house_blacksmith', canvas);
     }
 
-    // 5. Charming Flower Shop (2x2)
+    // 5. Charming Flower Shop (2x2) — Botanical Conservatory Glass Roof & Painted Clapboard
     if (!textures.exists('obj_house_florist')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 164,
@@ -5276,13 +6784,16 @@ export class PixelArtGenerator {
         hasAwning: { colors: ['#ec4899', '#fdf2f8'] },
         hasFlowerBoxes: true,
         chimneySide: 'none',
+        roofStyle: 'conservatory',
+        wallStyle: 'painted_clapboard',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'florist',
       });
       textures.addCanvas('obj_house_florist', canvas);
     }
 
-    // 5B. Aunty Gyi Clothing Boutique (2x2)
+    // 5B. Aunty Gyi Clothing Boutique (2x2) — Plum Mansard Cresting Roof & Lavender Clapboard
     if (!textures.exists('obj_house_aunty_gyi')) {
       const canvas = this.drawIsoBuildingCanvas({
         canvasW: 164,
@@ -5302,6 +6813,9 @@ export class PixelArtGenerator {
         hasAwning: { colors: ['#be185d', '#fdf2f8'] },
         hasFlowerBoxes: true,
         chimneySide: 'none',
+        roofStyle: 'boutique_mansard',
+        wallStyle: 'painted_clapboard',
+        hasPorchSconce: true,
         footprintScale: 0.94,
         signType: 'clothing',
       });
@@ -5318,23 +6832,31 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(24, 36, 18, 5, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#5c280b';
+      ctx.fillRect(7.5, 11, 33, 25);
       ctx.fillStyle = '#78350f';
-      ctx.fillRect(8, 12, 32, 24);
-      ctx.fillStyle = '#92400e';
+      ctx.fillRect(9, 12, 30, 23);
+      ctx.fillStyle = '#b45309';
       ctx.fillRect(10, 14, 28, 8);
       ctx.fillRect(10, 25, 28, 8);
-      // Croissants & loaves
-      ctx.fillStyle = '#f59e0b';
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(8, 10, 32, 2.5);
+      // Croissants & crusty loaves
       for (const bx of [14, 21, 28, 34]) {
+        ctx.fillStyle = '#f59e0b';
         ctx.beginPath();
-        ctx.ellipse(bx, 18, 3, 2, 0, 0, Math.PI * 2);
+        ctx.ellipse(bx, 18, 3.1, 2.1, 0, 0, Math.PI * 2);
         ctx.fill();
+        ctx.fillStyle = '#fef3c7';
+        ctx.fillRect(bx - 1, 17, 2, 1);
       }
       ctx.fillStyle = '#d97706';
       ctx.fillRect(13, 27, 9, 4);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(15, 28, 5, 1);
       ctx.fillStyle = '#dc2626';
       ctx.beginPath();
-      ctx.arc(31, 29, 3, 0, Math.PI * 2);
+      ctx.arc(31, 29, 3.2, 0, Math.PI * 2);
       ctx.fill();
       textures.addCanvas('obj_shelf_bakery', c);
     }
@@ -5349,8 +6871,12 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(24, 36, 18, 5, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#5c280b';
+      ctx.fillRect(7.5, 13, 33, 23);
       ctx.fillStyle = '#78350f';
-      ctx.fillRect(8, 14, 32, 22);
+      ctx.fillRect(9, 14, 30, 21);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(8, 12, 32, 2.5);
       // Upper bin: Red apples & carrots
       ctx.fillStyle = '#dc2626';
       ctx.beginPath();
@@ -5359,6 +6885,8 @@ export class PixelArtGenerator {
       ctx.fill();
       ctx.fillStyle = '#f97316';
       ctx.fillRect(26, 16, 9, 3);
+      ctx.fillStyle = '#16a34a';
+      ctx.fillRect(35, 16.5, 2, 2);
       // Lower bin: Crisp cabbages & lemons
       ctx.fillStyle = '#22c55e';
       ctx.beginPath();
@@ -5384,19 +6912,25 @@ export class PixelArtGenerator {
       ctx.ellipse(24, 38, 17, 5, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#451a03';
-      ctx.fillRect(10, 10, 3, 28);
-      ctx.fillRect(35, 10, 3, 28);
-      ctx.fillRect(10, 10, 28, 3);
-      ctx.fillRect(10, 26, 28, 4);
-      // Hanging iron sword & hammer
-      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(10, 10, 3.5, 28);
+      ctx.fillRect(34.5, 10, 3.5, 28);
+      ctx.fillRect(10, 10, 28, 3.2);
+      ctx.fillRect(10, 26, 28, 4.2);
+      // Hanging iron broadsword & forged warhammer
+      ctx.fillStyle = '#cbd5e1';
       ctx.fillRect(17, 13, 3, 12);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(15.5, 14, 6, 1.5);
+      ctx.fillStyle = '#94a3b8';
       ctx.fillRect(25, 13, 3, 10);
-      ctx.fillStyle = '#475569';
+      ctx.fillStyle = '#334155';
       ctx.fillRect(23, 20, 7, 4);
-      // Stacked iron ingots on shelf
+      // Stacked iron & copper ingots on shelf
       ctx.fillStyle = '#64748b';
       ctx.fillRect(15, 22, 6, 4);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(15.5, 22.5, 5, 1.2);
+      ctx.fillStyle = '#b45309';
       ctx.fillRect(28, 22, 6, 4);
       textures.addCanvas('obj_rack_blacksmith', c);
     }
@@ -5411,12 +6945,14 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(24, 38, 18, 5, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#78350f';
+      ctx.fillStyle = '#5c280b';
       ctx.fillRect(8, 18, 32, 18);
       ctx.fillStyle = '#92400e';
       ctx.fillRect(10, 14, 28, 5);
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(9, 26, 30, 3);
       // Lush greenery & vibrant floral buckets
-      ctx.fillStyle = '#16a34a';
+      ctx.fillStyle = '#15803d';
       ctx.beginPath();
       ctx.arc(16, 14, 5, 0, Math.PI * 2);
       ctx.arc(24, 13, 5.5, 0, Math.PI * 2);
@@ -5444,41 +6980,71 @@ export class PixelArtGenerator {
 
   // 22. Agricultural & Farm Environment Sprites (Stone Well, Hay Bales, Scarecrow, Wheat, Cabbage, Pumpkin)
   private static createFarmEnvironmentSprites(textures: Phaser.Textures.TextureManager) {
-    // 1. Village Stone Water Well (48x56)
+    // 1. Village Cobblestone Water Well with Windlass & Shingle Roof (48x56)
     if (!textures.exists('obj_water_well')) {
       const canvas = document.createElement('canvas');
       canvas.width = 48;
       canvas.height = 56;
       const ctx = canvas.getContext('2d')!;
 
-      // SE Drop shadow
       ctx.fillStyle = 'rgba(15, 23, 42, 0.40)';
       ctx.beginPath();
       ctx.ellipse(25.5, 48.5, 20, 6, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Cobblestone well basin
-      ctx.fillStyle = '#57534e';
+      // Cobblestone well basin + staggered stone seams + mossy base
+      ctx.fillStyle = '#44403c';
       ctx.beginPath();
       ctx.roundRect(10, 32, 28, 16, 4);
       ctx.fill();
-      ctx.fillStyle = '#78716c';
+      ctx.fillStyle = '#57534e';
       ctx.beginPath();
-      ctx.ellipse(24, 32, 13, 5, 0, 0, Math.PI * 2);
+      ctx.roundRect(11, 32, 18, 15, 3);
       ctx.fill();
+      ctx.strokeStyle = 'rgba(28, 25, 23, 0.48)';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(10, 38);
+      ctx.lineTo(38, 38);
+      ctx.moveTo(10, 43);
+      ctx.lineTo(38, 43);
+      ctx.moveTo(18, 32);
+      ctx.lineTo(18, 38);
+      ctx.moveTo(29, 32);
+      ctx.lineTo(29, 38);
+      ctx.moveTo(23, 38);
+      ctx.lineTo(23, 43);
+      ctx.stroke();
 
-      // Deep clear water inside basin
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(12, 46, 5, 2);
+      ctx.fillRect(29, 46.5, 4, 1.5);
+
+      // Chiseled stone rim + deep water pool
+      ctx.fillStyle = '#a8a29e';
+      ctx.beginPath();
+      ctx.ellipse(24, 32, 13.5, 5.2, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#0284c7';
       ctx.beginPath();
       ctx.ellipse(24, 32, 10, 3.5, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#7dd3fc';
+      ctx.fillRect(19, 31, 6, 1.2);
 
-      // Timber support posts
+      // Timber support posts & iron windlass crank
+      ctx.fillStyle = '#5c280b';
+      ctx.fillRect(11, 14, 3.2, 20);
+      ctx.fillRect(33.8, 14, 3.2, 20);
       ctx.fillStyle = '#78350f';
-      ctx.fillRect(11, 14, 3, 20);
-      ctx.fillRect(34, 14, 3, 20);
+      ctx.fillRect(11.5, 14, 1.4, 19);
+      ctx.fillRect(13, 21, 22, 2.5);
+      // Crank handle on right
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(37, 20, 2, 5);
+      ctx.fillRect(37, 24, 3, 1.8);
 
-      // Pitched shingle roof with sunlit left slope
+      // Pitched shingle roof with sunlit left slope & ridge cap
       ctx.fillStyle = '#9a3412';
       ctx.beginPath();
       ctx.moveTo(24, 4);
@@ -5493,18 +7059,28 @@ export class PixelArtGenerator {
       ctx.lineTo(6, 16);
       ctx.closePath();
       ctx.fill();
-
-      // Hanging rope & bucket
-      ctx.strokeStyle = '#d97706';
+      ctx.strokeStyle = 'rgba(28, 25, 23, 0.28)';
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(24, 14);
-      ctx.lineTo(24, 25);
-      ctx.stroke();
+      for (const ry of [9, 12.5]) {
+        ctx.beginPath();
+        ctx.moveTo(24 - (ry - 4) * 1.4, ry);
+        ctx.lineTo(24 + (ry - 4) * 1.4, ry);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(21.5, 3, 5, 2);
 
-      // Oak wooden water bucket
+      // Hanging rope & hooped oak bucket
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(24, 21);
+      ctx.lineTo(24, 26);
+      ctx.stroke();
       ctx.fillStyle = '#b45309';
-      ctx.fillRect(22, 25, 4, 4);
+      ctx.fillRect(21.5, 25.5, 5, 4.5);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(21.5, 27, 5, 1);
 
       textures.addCanvas('obj_water_well', canvas);
     }
@@ -5516,13 +7092,11 @@ export class PixelArtGenerator {
       canvas.height = 28;
       const ctx = canvas.getContext('2d')!;
 
-      // SE Shadow
       ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
       ctx.beginPath();
       ctx.ellipse(20.5, 23.5, 16, 4.5, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Hay roll body + rim outline
       ctx.fillStyle = '#92400e';
       ctx.beginPath();
       ctx.roundRect(5.5, 7.5, 27, 16, 5.5);
@@ -5532,7 +7106,6 @@ export class PixelArtGenerator {
       ctx.roundRect(6, 8, 26, 15, 5);
       ctx.fill();
 
-      // Sunlit golden hay strands
       ctx.fillStyle = '#facc15';
       ctx.beginPath();
       ctx.ellipse(11, 15.5, 5, 7.5, 0, 0, Math.PI * 2);
@@ -5541,8 +7114,11 @@ export class PixelArtGenerator {
       ctx.fillRect(11, 8, 21, 15);
       ctx.fillStyle = '#fef08a';
       ctx.fillRect(11, 8.5, 18, 2);
+      // Crisp straw texture flecks
+      ctx.fillStyle = '#ca8a04';
+      ctx.fillRect(14, 13, 3, 1.2);
+      ctx.fillRect(21, 17, 4, 1.2);
 
-      // Twine tie strings
       ctx.strokeStyle = '#78350f';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -5562,29 +7138,29 @@ export class PixelArtGenerator {
       canvas.height = 52;
       const ctx = canvas.getContext('2d')!;
 
-      // SE Shadow
       ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
       ctx.beginPath();
       ctx.ellipse(20.5, 48.5, 12, 3.5, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Vertical support post
       ctx.fillStyle = '#78350f';
       ctx.fillRect(18, 14, 3, 34);
-
-      // Horizontal arm crossbeam
       ctx.fillRect(7, 24, 25, 2.5);
 
-      // Red flannel checkered shirt
       ctx.fillStyle = '#991b1b';
       ctx.fillRect(12.5, 19.5, 14, 17);
       ctx.fillStyle = '#b91c1c';
       ctx.fillRect(13, 20, 13, 16);
+      // Checkered flannel pattern & patched pocket
+      ctx.fillStyle = 'rgba(69, 26, 3, 0.32)';
+      ctx.fillRect(13, 25, 13, 1.5);
+      ctx.fillRect(13, 30, 13, 1.5);
+      ctx.fillStyle = '#1d4ed8';
+      ctx.fillRect(15, 27, 4.5, 4.5);
       ctx.fillStyle = '#fef08a';
       ctx.fillRect(6, 23, 4, 4);
       ctx.fillRect(29, 23, 4, 4);
 
-      // Burlap head with stitched smile
       ctx.fillStyle = '#fef3c7';
       ctx.beginPath();
       ctx.arc(19, 14, 5.5, 0, Math.PI * 2);
@@ -5593,7 +7169,6 @@ export class PixelArtGenerator {
       ctx.fillRect(17, 13, 1.5, 1.5);
       ctx.fillRect(20, 13, 1.5, 1.5);
 
-      // Straw conical sun hat
       ctx.fillStyle = '#d97706';
       ctx.beginPath();
       ctx.moveTo(19, 3);
@@ -5601,7 +7176,6 @@ export class PixelArtGenerator {
       ctx.lineTo(10, 11);
       ctx.closePath();
       ctx.fill();
-      // Hat brim
       ctx.fillStyle = '#b45309';
       ctx.fillRect(7, 10, 25, 2.5);
 
@@ -6704,17 +8278,21 @@ export class PixelArtGenerator {
       c.width = 44;
       c.height = 26;
       const ctx = c.getContext('2d')!;
-      ctx.fillStyle = '#57534e';
+      ctx.fillStyle = '#44403c';
       ctx.beginPath();
-      ctx.ellipse(22, 16, 19, 8.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(22, 16.5, 19.5, 8.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78716c';
+      ctx.beginPath();
+      ctx.ellipse(22, 15.5, 18.5, 8.0, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#451a03';
       ctx.beginPath();
-      ctx.ellipse(22, 14.5, 16.5, 6.8, 0, 0, Math.PI * 2);
+      ctx.ellipse(22, 14.5, 16.2, 6.6, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#15803d';
       ctx.beginPath();
-      ctx.ellipse(22, 13.5, 15, 5.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(22, 13.5, 14.8, 5.4, 0, 0, Math.PI * 2);
       ctx.fill();
       const blooms: Array<[number, number, string]> = [
         [13, 12, '#f43f5e'],
@@ -6743,9 +8321,9 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(13.5, 28.5, 8, 2.8, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#78350f';
+      ctx.fillStyle = '#5c280b';
       ctx.fillRect(5, 8, 14, 19);
-      ctx.fillStyle = '#92400e';
+      ctx.fillStyle = '#b45309';
       ctx.fillRect(6, 9, 12, 14);
       ctx.fillStyle = '#1e293b';
       ctx.fillRect(7.5, 10.5, 9, 11);
@@ -6758,7 +8336,7 @@ export class PixelArtGenerator {
       textures.addCanvas('obj_shop_menu_board', c);
     }
 
-    // 4. Bridge Timber Approach Threshold Ramps (clipped 64x32 isometric overlays)
+    // 4. Bridge Timber & Stone Abutment Approach Threshold Ramps (clipped 64x32 isometric overlays)
     for (const dir of ['nw', 'ne', 'se', 'sw'] as const) {
       const key = `fx_bridge_approach_${dir}`;
       if (textures.exists(key)) continue;
@@ -6769,19 +8347,35 @@ export class PixelArtGenerator {
       ctx.save();
       this.clipIsoDiamond(ctx);
       this.setIsoUVTransform(ctx);
-      ctx.fillStyle = 'rgba(69, 26, 3, 0.35)';
-      if (dir === 'nw') ctx.fillRect(0, 8, 5, 16);
-      else if (dir === 'ne') ctx.fillRect(8, 0, 16, 5);
-      else if (dir === 'se') ctx.fillRect(27, 8, 5, 16);
-      else ctx.fillRect(8, 27, 16, 5);
+      ctx.fillStyle = 'rgba(69, 26, 3, 0.36)';
+      if (dir === 'nw') ctx.fillRect(0, 7, 5.5, 18);
+      else if (dir === 'ne') ctx.fillRect(7, 0, 18, 5.5);
+      else if (dir === 'se') ctx.fillRect(26.5, 7, 5.5, 18);
+      else ctx.fillRect(7, 26.5, 18, 5.5);
+
+      // Stone abutment shoulder blocks framing the timber entrance
+      ctx.fillStyle = '#78716c';
+      if (dir === 'nw') {
+        ctx.fillRect(0, 6, 3.6, 2.5);
+        ctx.fillRect(0, 23.5, 3.6, 2.5);
+      } else if (dir === 'ne') {
+        ctx.fillRect(6, 0, 2.5, 3.6);
+        ctx.fillRect(23.5, 0, 2.5, 3.6);
+      } else if (dir === 'se') {
+        ctx.fillRect(28.4, 6, 3.6, 2.5);
+        ctx.fillRect(28.4, 23.5, 3.6, 2.5);
+      } else {
+        ctx.fillRect(6, 28.4, 2.5, 3.6);
+        ctx.fillRect(23.5, 28.4, 2.5, 3.6);
+      }
 
       ctx.fillStyle = '#92400e';
       for (let i = 0; i < 3; i++) {
         const s = 9 + i * 5;
-        if (dir === 'nw') ctx.fillRect(0.6, s, 3.4, 3.8);
-        else if (dir === 'ne') ctx.fillRect(s, 0.6, 3.8, 3.4);
-        else if (dir === 'se') ctx.fillRect(28, s, 3.4, 3.8);
-        else ctx.fillRect(s, 28, 3.8, 3.4);
+        if (dir === 'nw') ctx.fillRect(0.6, s, 3.6, 3.8);
+        else if (dir === 'ne') ctx.fillRect(s, 0.6, 3.8, 3.6);
+        else if (dir === 'se') ctx.fillRect(27.8, s, 3.6, 3.8);
+        else ctx.fillRect(s, 27.8, 3.8, 3.6);
       }
       ctx.restore();
       textures.addCanvas(key, c);
@@ -6980,6 +8574,320 @@ export class PixelArtGenerator {
       ctx.lineTo(24, 6);
       ctx.stroke();
       textures.addCanvas('obj_driftwood', c);
+    }
+
+    // 7B. Step 32 Silverbrook Riverbank Natural Environment Sprites
+    if (!textures.exists('obj_river_rock_cluster')) {
+      const c = document.createElement('canvas');
+      c.width = 42;
+      c.height = 26;
+      const ctx = c.getContext('2d')!;
+      // Water ripple & wet waterline shadow
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.56)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(21, 17, 17, 6.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Main river boulder
+      ctx.fillStyle = '#334155';
+      ctx.beginPath();
+      ctx.ellipse(18, 15, 10, 5.5, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#64748b';
+      ctx.beginPath();
+      ctx.ellipse(17, 13.5, 8, 4, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.ellipse(15.5, 12, 4.5, 2.2, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      // Moss cap & wet stones
+      ctx.fillStyle = '#4d7c0f';
+      ctx.fillRect(14, 11, 4, 2);
+      ctx.fillStyle = '#475569';
+      ctx.beginPath();
+      ctx.ellipse(29, 16.5, 5.5, 3.4, 0.18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#cbd5e1';
+      ctx.fillRect(27, 15, 3, 1.5);
+      textures.addCanvas('obj_river_rock_cluster', c);
+    }
+
+    if (!textures.exists('obj_cattail_reeds')) {
+      const c = document.createElement('canvas');
+      c.width = 32;
+      c.height = 38;
+      const ctx = c.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.48)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(16, 33, 10, 3.6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Slender emerald blades
+      ctx.strokeStyle = '#15803d';
+      ctx.lineWidth = 1.6;
+      for (const [bx, tx, ty] of [[13, 8, 15], [15, 13, 10], [17, 19, 11], [19, 24, 16]] as const) {
+        ctx.beginPath();
+        ctx.moveTo(bx, 33);
+        ctx.quadraticCurveTo((bx + tx) * 0.5, ty + 8, tx, ty);
+        ctx.stroke();
+      }
+      // Cattail stems & brown heads
+      ctx.strokeStyle = '#4d7c0f';
+      ctx.lineWidth = 1.4;
+      for (const [sx, ty] of [[12, 6], [20, 8]] as const) {
+        ctx.beginPath();
+        ctx.moveTo(sx + 2, 33);
+        ctx.lineTo(sx, ty);
+        ctx.stroke();
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(sx - 1.5, ty + 2, 3, 6.5);
+        ctx.fillStyle = '#a16207';
+        ctx.fillRect(sx - 1, ty + 3, 1.4, 4);
+      }
+      textures.addCanvas('obj_cattail_reeds', c);
+    }
+
+    if (!textures.exists('obj_river_fern')) {
+      const c = document.createElement('canvas');
+      c.width = 32;
+      c.height = 26;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(20, 48, 22, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(16, 20, 10, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const [dx, dy, col] of [
+        [-9, -6, '#15803d'],
+        [9, -5, '#166534'],
+        [-6, -11, '#22c55e'],
+        [6, -10, '#16a34a'],
+        [0, -13, '#4ade80'],
+      ] as const) {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(16, 20);
+        ctx.quadraticCurveTo(16 + dx * 0.55, 19 + dy * 0.7, 16 + dx, 20 + dy);
+        ctx.stroke();
+      }
+      textures.addCanvas('obj_river_fern', c);
+    }
+
+    if (!textures.exists('obj_river_flower_bank')) {
+      const c = document.createElement('canvas');
+      c.width = 30;
+      c.height = 22;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#3f6212';
+      ctx.beginPath();
+      ctx.ellipse(15, 16, 9, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(9, 13, 3, 2);
+      ctx.fillRect(17, 12, 3, 2);
+      // Blue forget-me-nots & white river daisies
+      for (const [fx, fy, col] of [[10, 11, '#60a5fa'], [15, 9, '#f8fafc'], [20, 11, '#93c5fd'], [13, 14, '#fef08a']] as const) {
+        ctx.fillStyle = col;
+        ctx.fillRect(fx, fy, 3, 3);
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(fx + 1, fy + 1, 1, 1);
+      }
+      textures.addCanvas('obj_river_flower_bank', c);
+    }
+
+    if (!textures.exists('obj_mossy_bank_stone')) {
+      const c = document.createElement('canvas');
+      c.width = 34;
+      c.height = 22;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(28, 25, 23, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(17, 16, 11, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#57534e';
+      ctx.beginPath();
+      ctx.ellipse(14, 14, 7.5, 4, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#78716c';
+      ctx.beginPath();
+      ctx.ellipse(13.5, 12.8, 5, 2.4, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(10, 11, 5, 2);
+      ctx.fillStyle = '#84cc16';
+      ctx.fillRect(11, 11, 3, 1);
+      ctx.fillStyle = '#a8a29e';
+      ctx.beginPath();
+      ctx.ellipse(23, 15.5, 4, 2.2, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      textures.addCanvas('obj_mossy_bank_stone', c);
+    }
+
+    // 7C. Step 35.5 Organic Lakeside & Creekside Willows, Bushes, Fallen Branches & Water Plants
+    if (!textures.exists('obj_tree_willow')) {
+      const c = document.createElement('canvas');
+      c.width = 86;
+      c.height = 98;
+      const ctx = c.getContext('2d')!;
+      // Soft SE ground shadow
+      const sh = ctx.createRadialGradient(45, 86, 4, 45, 86, 28);
+      sh.addColorStop(0, 'rgba(15, 23, 42, 0.34)');
+      sh.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      ctx.fillStyle = sh;
+      ctx.beginPath();
+      ctx.ellipse(45, 86, 26, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Gnarled willow trunk & mossy root flares
+      ctx.fillStyle = '#451a03';
+      ctx.beginPath();
+      ctx.moveTo(36, 86);
+      ctx.quadraticCurveTo(38, 66, 39, 44);
+      ctx.lineTo(47, 44);
+      ctx.quadraticCurveTo(48, 66, 51, 86);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#78350f';
+      ctx.fillRect(40, 48, 4.5, 36);
+      ctx.fillStyle = '#4d7c0f';
+      ctx.fillRect(37, 81, 4, 3);
+      ctx.fillRect(46, 82, 4, 2.5);
+
+      // Crown & draping weeping willow curtains
+      const crownBlobs: Array<[number, number, number, string]> = [
+        [43, 30, 21, '#14532d'],
+        [27, 37, 15, '#166534'],
+        [59, 37, 15, '#15803d'],
+        [43, 24, 17, '#16a34a'],
+        [33, 27, 13, '#22c55e'],
+        [51, 25, 11, '#4ade80'],
+      ];
+      for (const [bx, by, br, col] of crownBlobs) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Graceful hanging willow vines
+      const vines: Array<[number, number, number, string]> = [
+        [18, 38, 68, '#166534'],
+        [23, 36, 73, '#15803d'],
+        [29, 35, 71, '#22c55e'],
+        [35, 38, 66, '#16a34a'],
+        [49, 37, 68, '#22c55e'],
+        [55, 36, 74, '#15803d'],
+        [61, 38, 70, '#166534'],
+        [66, 40, 65, '#14532d'],
+      ];
+      ctx.lineWidth = 2.2;
+      ctx.lineCap = 'round';
+      for (const [vx, vy0, vy1, col] of vines) {
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(vx, vy0);
+        ctx.quadraticCurveTo(vx + (vx < 43 ? -2 : 2), (vy0 + vy1) * 0.5, vx, vy1);
+        ctx.stroke();
+      }
+      textures.addCanvas('obj_tree_willow', c);
+    }
+
+    if (!textures.exists('obj_shore_bush')) {
+      const c = document.createElement('canvas');
+      c.width = 38;
+      c.height = 28;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(20, 22, 13, 4.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      for (const [bx, by, rx, ry, col] of [
+        [19, 16, 12, 7.5, '#14532d'],
+        [13, 16, 7.5, 6, '#166534'],
+        [25, 16, 7.5, 6, '#15803d'],
+        [19, 13, 9, 6, '#22c55e'],
+        [16, 11, 5, 3.5, '#4ade80'],
+      ] as const) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.ellipse(bx, by, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Subtle lakeside blossoms
+      ctx.fillStyle = '#e0f2fe';
+      ctx.fillRect(13, 12, 2, 2);
+      ctx.fillRect(23, 13, 2, 2);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(19, 10, 2, 2);
+      textures.addCanvas('obj_shore_bush', c);
+    }
+
+    if (!textures.exists('obj_fallen_branch')) {
+      const c = document.createElement('canvas');
+      c.width = 38;
+      c.height = 20;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(19, 15, 13.5, 3.8, -0.08, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#57361c';
+      ctx.lineWidth = 3.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(7, 13.5);
+      ctx.quadraticCurveTo(18, 12, 30, 10);
+      ctx.stroke();
+      ctx.strokeStyle = '#855832';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(8, 12.5);
+      ctx.quadraticCurveTo(18, 11, 29, 9.5);
+      ctx.stroke();
+      // Fork & tiny sprout
+      ctx.strokeStyle = '#57361c';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(21, 11);
+      ctx.lineTo(25, 6.5);
+      ctx.stroke();
+      ctx.fillStyle = '#65a30d';
+      ctx.fillRect(14, 10.5, 4, 2);
+      ctx.fillStyle = '#4ade80';
+      ctx.fillRect(25, 5.5, 2.5, 2);
+      textures.addCanvas('obj_fallen_branch', c);
+    }
+
+    if (!textures.exists('obj_water_plant')) {
+      const c = document.createElement('canvas');
+      c.width = 30;
+      c.height = 32;
+      const ctx = c.getContext('2d')!;
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.52)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(15, 27, 9.5, 3.4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      for (const [lx, ly, col] of [
+        [9, 15, '#15803d'],
+        [21, 15, '#166534'],
+        [15, 11, '#22c55e'],
+      ] as const) {
+        ctx.strokeStyle = '#14532d';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(15, 27);
+        ctx.lineTo(lx, ly + 3);
+        ctx.stroke();
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.ellipse(lx, ly, 3.2, 5.2, lx < 15 ? -0.35 : lx > 15 ? 0.35 : 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(14, 7.5, 2, 2);
+      textures.addCanvas('obj_water_plant', c);
     }
 
     // 8. Whispering Forest: Mossy Tree Stump (34x30) & Fallen Mossy Log (42x24)
@@ -7205,16 +9113,19 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(19.5, 23.5, 14, 4.5, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#78350f';
+      ctx.fillStyle = '#5c280b';
       ctx.fillRect(6, 12, 15, 11);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(7, 13, 13, 9);
       ctx.fillStyle = '#b45309';
-      ctx.fillRect(7, 13, 13, 4);
+      ctx.fillRect(7, 13, 13, 3.5);
       ctx.fillStyle = '#ea580c';
       ctx.beginPath();
       ctx.arc(11, 11, 2.8, 0, Math.PI * 2);
       ctx.arc(16, 11.5, 2.5, 0, Math.PI * 2);
       ctx.fill();
-      // Burlap harvest sack beside crate
+      ctx.fillStyle = '#15803d';
+      ctx.fillRect(10.5, 8, 1.5, 1.5);
       ctx.fillStyle = '#d6b484';
       ctx.beginPath();
       ctx.ellipse(25, 18, 5, 6, 0, 0, Math.PI * 2);
@@ -7233,12 +9144,15 @@ export class PixelArtGenerator {
       ctx.beginPath();
       ctx.ellipse(20.5, 23.5, 15, 4.5, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#5c2d0c';
+      ctx.fillStyle = '#451a03';
       ctx.beginPath();
       ctx.roundRect(6, 12, 26, 11, 3);
       ctx.fill();
       ctx.fillStyle = '#92400e';
       ctx.fillRect(8, 12, 22, 4);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(10, 16, 2, 6);
+      ctx.fillRect(26, 16, 2, 6);
       ctx.fillStyle = '#0ea5e9';
       ctx.beginPath();
       ctx.ellipse(19, 14, 9.5, 2.5, 0, 0, Math.PI * 2);
@@ -7260,19 +9174,21 @@ export class PixelArtGenerator {
       c.height = 72;
       const ctx = c.getContext('2d')!;
 
-      // Soft ground/deck shadow
       ctx.fillStyle = 'rgba(15, 23, 42, 0.34)';
       ctx.beginPath();
       ctx.ellipse(32, 63, 21, 7, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Rear & front stout cedar support posts
+      // Rear & front stout cedar support posts with iron footings
       ctx.fillStyle = '#451a03';
       ctx.fillRect(15, 28, 4.5, 34);
       ctx.fillRect(44.5, 28, 4.5, 34);
       ctx.fillStyle = '#78350f';
       ctx.fillRect(15.5, 28, 2, 33);
       ctx.fillRect(45, 28, 2, 33);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(14.5, 59, 5.5, 3);
+      ctx.fillRect(44, 59, 5.5, 3);
 
       // Diagonal timber knee-braces
       ctx.strokeStyle = '#5c280b';
@@ -7353,7 +9269,6 @@ export class PixelArtGenerator {
       ctx.ellipse(18, 33, 12, 4, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Weathered cypress barrel
       ctx.fillStyle = '#5c3a21';
       ctx.beginPath();
       ctx.roundRect(8, 18, 18, 15, [0, 0, 3, 3]);
@@ -7361,12 +9276,10 @@ export class PixelArtGenerator {
       ctx.fillStyle = '#8c5e3c';
       ctx.fillRect(9.5, 19, 6, 13);
 
-      // Coiled hemp rope wraps
       ctx.fillStyle = '#d6b484';
       ctx.fillRect(8, 21, 18, 2);
       ctx.fillRect(8, 28, 18, 2);
 
-      // Coastal reeds & blossoms
       ctx.fillStyle = '#15803d';
       ctx.beginPath();
       ctx.arc(17, 15, 7.5, 0, Math.PI * 2);

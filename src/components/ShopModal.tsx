@@ -13,13 +13,32 @@ import { UI_THEME } from './uiTheme';
 
 interface ShopModalProps {
   inventory: InventorySystem;
-  onSold?: (goldEarned: number) => void;
+  isOnlineShopAvailable: boolean;
+  onExecuteTrade: (
+    action: 'buy_item' | 'sell_item',
+    itemId: ItemId,
+    quantity: number
+  ) => Promise<{
+    ok: boolean;
+    balance: number;
+    goldDelta: number;
+    reason?: string;
+    code?: string;
+  }>;
   onClose: () => void;
 }
 
-export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose }) => {
+export const ShopModal: React.FC<ShopModalProps> = ({
+  inventory,
+  isOnlineShopAvailable,
+  onExecuteTrade,
+  onClose,
+}) => {
   const [activeTab, setActiveTab] = useState<'buy' | 'sell'>('buy');
   const [activeCategory, setActiveCategory] = useState<ShopCategoryId>('building_materials');
+  const [isTradePending, setIsTradePending] = useState(false);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const pendingRef = React.useRef(false);
 
   const filteredCatalog = useMemo(
     () =>
@@ -37,22 +56,81 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
     [inventory.slots]
   );
 
-  const handleBuy = (itemId: ItemId, price: number) => {
-    if (isStarterTool(itemId) || inventory.coins < price) {
+  const handleBuy = async (itemId: ItemId, price: number) => {
+    if (!isOnlineShopAvailable || pendingRef.current || isTradePending) {
       SoundSynth.playRustle();
       return;
     }
-    inventory.addCoins(-price);
-    inventory.addItem(itemId, 1);
-    SoundSynth.playCoin();
+    if (isStarterTool(itemId) || inventory.coins < price || !inventory.canFitItem(itemId, 1)) {
+      SoundSynth.playRustle();
+      setFeedback({
+        ok: false,
+        text:
+          inventory.coins < price
+            ? 'ရွှေဒင်္ဂါး မလုံလောက်ပါ'
+            : '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ',
+      });
+      return;
+    }
+
+    pendingRef.current = true;
+    setIsTradePending(true);
+    setFeedback(null);
+    try {
+      const res = await onExecuteTrade('buy_item', itemId, 1);
+      if (res.ok) {
+        SoundSynth.playCoin();
+        const def = ITEMS[itemId];
+        setFeedback({
+          ok: true,
+          text: `${def?.name || itemId} x1 ဝယ်ယူပြီးပါပြီ`,
+        });
+      } else {
+        SoundSynth.playRustle();
+        setFeedback({
+          ok: false,
+          text: res.reason || 'ဝယ်ယူမှု မအောင်မြင်ပါ',
+        });
+      }
+    } finally {
+      pendingRef.current = false;
+      setIsTradePending(false);
+    }
   };
 
-  const handleSell = (itemId: ItemId, sellPrice: number) => {
-    if (isStarterTool(itemId) || sellPrice <= 0 || !inventory.hasItem(itemId, 1)) return;
-    inventory.removeItem(itemId, 1);
-    inventory.addCoins(sellPrice);
-    SoundSynth.playCoin();
-    onSold?.(sellPrice);
+  const handleSell = async (itemId: ItemId, sellPrice: number, quantity = 1) => {
+    if (!isOnlineShopAvailable || pendingRef.current || isTradePending) {
+      SoundSynth.playRustle();
+      return;
+    }
+    if (isStarterTool(itemId) || sellPrice <= 0 || !inventory.hasItem(itemId, quantity)) {
+      SoundSynth.playRustle();
+      return;
+    }
+
+    pendingRef.current = true;
+    setIsTradePending(true);
+    setFeedback(null);
+    try {
+      const res = await onExecuteTrade('sell_item', itemId, quantity);
+      if (res.ok) {
+        SoundSynth.playCoin();
+        const def = ITEMS[itemId];
+        setFeedback({
+          ok: true,
+          text: `${def?.name || itemId} x${quantity} ရောင်းချပြီး (+🪙 ${res.goldDelta || sellPrice * quantity} ရွှေ)`,
+        });
+      } else {
+        SoundSynth.playRustle();
+        setFeedback({
+          ok: false,
+          text: res.reason || 'ရောင်းချမှု မအောင်မြင်ပါ',
+        });
+      }
+    } finally {
+      pendingRef.current = false;
+      setIsTradePending(false);
+    }
   };
 
   return (
@@ -98,7 +176,10 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
         <div className="flex border-b border-[#3a3329] bg-[#171410] px-4 sm:px-6 pt-2.5 gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveTab('buy')}
+            onClick={() => {
+              setActiveTab('buy');
+              setFeedback(null);
+            }}
             className={`flex items-center gap-2 px-4 py-2.5 border-b-2 font-bold text-xs transition cursor-pointer ${
               activeTab === 'buy'
                 ? 'border-amber-400 text-amber-300'
@@ -111,7 +192,10 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
 
           <button
             type="button"
-            onClick={() => setActiveTab('sell')}
+            onClick={() => {
+              setActiveTab('sell');
+              setFeedback(null);
+            }}
             className={`flex items-center gap-2 px-4 py-2.5 border-b-2 font-bold text-xs transition cursor-pointer ${
               activeTab === 'sell'
                 ? 'border-amber-400 text-amber-300'
@@ -125,6 +209,24 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
 
         {/* Tab Content */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-3">
+          {!isOnlineShopAvailable && (
+            <div className="px-3.5 py-2.5 rounded-xl bg-amber-950/50 border border-amber-500/40 text-xs text-amber-200 leading-relaxed">
+              ⚠️ အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်အတည်ပြုနေဆဲ ဖြစ်သောကြောင့် ဈေးဝယ်/ရောင်းချခြင်းကို ခေတ္တပိတ်ထားပါသည်။
+            </div>
+          )}
+
+          {feedback && (
+            <div
+              className={`px-3.5 py-2 rounded-xl text-xs font-medium border leading-snug ${
+                feedback.ok
+                  ? 'bg-emerald-950/45 border-emerald-500/35 text-emerald-200'
+                  : 'bg-rose-950/45 border-rose-500/35 text-rose-200'
+              }`}
+            >
+              {feedback.text}
+            </div>
+          )}
+
           {activeTab === 'buy' ? (
             <div className="space-y-3">
               {/* 4 Clean Category Tabs */}
@@ -153,6 +255,8 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
                 {filteredCatalog.map((item) => {
                   const def = ITEMS[item.id];
                   const canAfford = inventory.coins >= item.price;
+                  const canFit = inventory.canFitItem(item.id, 1);
+                  const canBuy = isOnlineShopAvailable && !isTradePending && canAfford && canFit;
 
                   return (
                     <div
@@ -173,13 +277,13 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
 
                       <button
                         type="button"
-                        onClick={() => handleBuy(item.id, item.price)}
-                        disabled={!canAfford}
+                        onClick={() => void handleBuy(item.id, item.price)}
+                        disabled={!canBuy}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold shrink-0 ${
-                          canAfford ? UI_THEME.primaryAmberBtn : UI_THEME.disabledBtn
+                          canBuy ? UI_THEME.primaryAmberBtn : UI_THEME.disabledBtn
                         }`}
                       >
-                        ဝယ်ယူမည်
+                        {!canFit ? 'အိတ်ပြည့်နေ' : 'ဝယ်ယူမည်'}
                       </button>
                     </div>
                   );
@@ -201,6 +305,7 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {sellableSlots.map(({ slot, index }) => {
                     const def = ITEMS[slot.item];
+                    const canSell = isOnlineShopAvailable && !isTradePending && def.sellPrice > 0;
 
                     return (
                       <div
@@ -225,20 +330,26 @@ export const ShopModal: React.FC<ShopModalProps> = ({ inventory, onSold, onClose
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
-                            onClick={() => handleSell(slot.item, def.sellPrice)}
-                            className="px-2.5 py-1.5 rounded-lg bg-amber-500/18 hover:bg-amber-500/28 text-amber-200 border border-amber-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
+                            disabled={!canSell}
+                            onClick={() => void handleSell(slot.item, def.sellPrice)}
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                              canSell
+                                ? 'bg-amber-500/18 hover:bg-amber-500/28 text-amber-200 border border-amber-500/40 active:scale-95 cursor-pointer'
+                                : UI_THEME.disabledBtn
+                            }`}
                           >
                             ၁ ခုရောင်း
                           </button>
                           {slot.quantity >= 5 && (
                             <button
                               type="button"
-                              onClick={() => {
-                                for (let i = 0; i < 5; i++) {
-                                  handleSell(slot.item, def.sellPrice);
-                                }
-                              }}
-                              className="px-2 py-1.5 rounded-lg bg-[#2a241d] hover:bg-[#383027] border border-[#463c2f] text-stone-200 text-xs font-mono transition cursor-pointer"
+                              disabled={!canSell}
+                              onClick={() => void handleSell(slot.item, def.sellPrice, 5)}
+                              className={`px-2 py-1.5 rounded-lg text-xs font-mono transition ${
+                                canSell
+                                  ? 'bg-[#2a241d] hover:bg-[#383027] border border-[#463c2f] text-stone-200 cursor-pointer'
+                                  : UI_THEME.disabledBtn
+                              }`}
                             >
                               x5
                             </button>

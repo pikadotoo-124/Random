@@ -268,13 +268,14 @@ export class WorldAtmosphereSystem {
 
 export interface BuildingGlowAnchor {
   windows: Array<{ dx: number; dy: number; side: 'left' | 'right' }>;
+  sconce?: { dx: number; dy: number };
   haloOffsetY: number;
   haloScale: number;
 }
 
 /**
  * Computes exact pixel offsets relative to the building sprite anchor (0.5, baseCenterY / canvasH)
- * matching PixelArtGenerator.drawIsoBuildingCanvas window & hearth positions.
+ * matching PixelArtGenerator.drawIsoBuildingCanvas window, sconce & hearth positions.
  */
 export function getBuildingLightAnchors(
   buildingKind:
@@ -293,7 +294,7 @@ export function getBuildingLightAnchors(
   let tileH = 2;
   let wallH = 46;
   let upperH = 0;
-  let doorSide: 'left' | 'right' = 'left';
+  const doorSide: 'left' | 'right' = 'left';
   let footprintScale = 0.94;
   let hasForgeHearth = false;
 
@@ -343,11 +344,13 @@ export function getBuildingLightAnchors(
   const groundCenterY = -(plinthH + 7 + winH / 2);
 
   const windows: Array<{ dx: number; dy: number; side: 'left' | 'right' }> = [];
+  let sconce: { dx: number; dy: number } | undefined;
   if (doorSide === 'left') {
     const wL = lerp(left, bottom, 0.29, groundCenterY);
     windows.push({ dx: wL.dx, dy: wL.dy, side: 'left' });
     const wR = lerp(bottom, right, 0.405, groundCenterY);
     windows.push({ dx: wR.dx, dy: wR.dy, side: 'right' });
+    sconce = lerp(left, bottom, 0.49, -(plinthH + 22));
   }
 
   if (hasForgeHearth) {
@@ -368,6 +371,7 @@ export function getBuildingLightAnchors(
 
   return {
     windows,
+    sconce,
     haloOffsetY: -wallH * 0.35,
     haloScale: tileW >= 3 ? 1.45 : 1.15,
   };

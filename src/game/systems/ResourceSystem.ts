@@ -154,8 +154,8 @@ export class ResourceSystem {
       }
     }
 
-    // 3. Quarry & Outskirts Rocks (Stone boulders across northern hills, cliffs, and outer borders)
-    const rockLocations = [
+    // 3. Quarry, Outskirts & Expanded Whispering Forest Rocks (Pickaxe mineable stone boulders)
+    const rockLocations: Array<[number, number]> = [
       [5, 5], [7, 7], [12, 4], [16, 6], [22, 5], [32, 6],
       [58, 8], [72, 12], [86, 16], [102, 10], [112, 18],
       [42, 32], [54, 34], [68, 28], [84, 36], [106, 32],
@@ -164,15 +164,76 @@ export class ResourceSystem {
     ];
     for (const [tx, ty] of rockLocations) {
       if (canSpawnAt(tx, ty)) {
+        const variant = (hash2D(tx, ty, 733) % 3) as 0 | 1 | 2;
         this.nodes.push({
           id: `res_rock_${idCounter++}`,
           type: 'rock',
+          rockVariant: variant,
           tileX: tx,
           tileY: ty,
           currentHealth: 3,
           maxHealth: 3,
           yieldItem: 'stone',
           yieldAmount: 2,
+          gatherDurationMs: 2000,
+          requiredTool: 'pickaxe_basic',
+          respawnTimeSeconds: 28,
+        });
+        mapSystem.setCollision(tx, ty, true);
+      }
+    }
+
+    // 3B. Whispering Forest Natural Rock Outcrops & Glade Boulders (tx 40..114, ty 7..39)
+    // Guaranteed deterministic placement with >= 2.15 tile separation and 1-tile road clearance
+    for (let ty = 7; ty <= 39; ty++) {
+      for (let tx = 40; tx <= 114; tx++) {
+        if (!canSpawnAt(tx, ty) || mapSystem.tiles[ty][tx] !== 'grass') continue;
+        // Keep away from main roads, trails, bridges, and piers
+        let nearRoadOrWater = false;
+        for (let dy = -1; dy <= 1 && !nearRoadOrWater; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = tx + dx;
+            const ny = ty + dy;
+            if (!mapSystem.isTileInBounds(nx, ny)) continue;
+            const nt = mapSystem.tiles[ny][nx];
+            if (mapSystem.getRoadTier(nx, ny) !== 'none' || nt === 'water' || nt === 'bridge' || nt === 'dirt') {
+              nearRoadOrWater = true;
+              break;
+            }
+          }
+        }
+        if (nearRoadOrWater) continue;
+
+        const isNorthernFoothill = ty <= 16 || (tx >= 70 && ty <= 21);
+        const outcropWave =
+          Math.sin(tx * 0.19 - ty * 0.23) * Math.cos(tx * 0.13 + ty * 0.17) +
+          (isNorthernFoothill ? 0.34 : 0);
+        if (outcropWave <= 0.14) continue;
+
+        const h = hash2D(tx, ty, 827);
+        const spawnThreshold = isNorthernFoothill ? 14 : 9;
+        if (h % 100 >= spawnThreshold) continue;
+
+        // Enforce spacing >= 2.2 tiles from existing rocks and >= 1.6 from existing trees
+        const tooClose = this.nodes.some((n) => {
+          const d = Math.hypot(n.tileX - tx, n.tileY - ty);
+          if (n.type === 'rock') return d < 2.25;
+          if (n.type === 'tree') return d < 1.65;
+          return d < 1.4;
+        });
+        if (tooClose) continue;
+
+        const variant = (hash2D(tx, ty, 733) % 3) as 0 | 1 | 2;
+        this.nodes.push({
+          id: `res_rock_${idCounter++}`,
+          type: 'rock',
+          rockVariant: variant,
+          tileX: tx,
+          tileY: ty,
+          currentHealth: 3,
+          maxHealth: 3,
+          yieldItem: 'stone',
+          yieldAmount: isNorthernFoothill ? 3 : 2,
           gatherDurationMs: 2000,
           requiredTool: 'pickaxe_basic',
           respawnTimeSeconds: 28,

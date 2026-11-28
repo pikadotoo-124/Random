@@ -332,13 +332,25 @@ export const ANIMAL_SPECIES: Record<AnimalKind, AnimalSpeciesConfig> = {
   },
 };
 
+/**
+ * Step 35 Phase 3 Production Safety Gate:
+ * While Firestore playerState client-write rules and unverified sell_item inventory authority remain open
+ * (see Step 35 Audit), high-value Farm Plot purchases (5,000 - 12,000 Gold) MUST remain locked in Production.
+ * Existing farmPlotOwners and fence-building privileges remain 100% preserved.
+ */
+export const FARM_PLOT_PURCHASES_LOCKED = true;
+export const FARM_PLOT_PURCHASE_LOCK_REASON =
+  'Gold Ledger လုံခြုံရေး (Firestore Client Write Lock နှင့် Server Inventory Verification) အပြီးသတ် မပြင်ဆင်ရသေးမီ မြေကွက်အသစ် ဝယ်ယူမှုကို ယာယီပိတ်ထားပါသည်';
+
 export const FARM_PLOTS: FarmPlotDefinition[] = [
   {
     id: 'farm_plot_1',
     zoneId: 'farm_district',
     bounds: { minX: 45, minY: 76, maxX: 52, maxY: 81 },
+    gateTile: { x: 48, y: 76, side: 'north' },
+    signTile: { x: 47, y: 75 },
     tileCount: 48,
-    purchasePrice: 250,
+    purchasePrice: 12000,
     purchasedByDefault: false,
     label: 'စိုက်ပျိုးမြေကွက် ၁ (West Plot)',
   },
@@ -346,8 +358,10 @@ export const FARM_PLOTS: FarmPlotDefinition[] = [
     id: 'farm_plot_2',
     zoneId: 'farm_district',
     bounds: { minX: 45, minY: 87, maxX: 52, maxY: 92 },
+    gateTile: { x: 48, y: 87, side: 'north' },
+    signTile: { x: 47, y: 86 },
     tileCount: 48,
-    purchasePrice: 250,
+    purchasePrice: 12000,
     purchasedByDefault: false,
     label: 'စိုက်ပျိုးမြေကွက် ၂ (South Plot)',
   },
@@ -355,8 +369,10 @@ export const FARM_PLOTS: FarmPlotDefinition[] = [
     id: 'farm_plot_3',
     zoneId: 'farm_district',
     bounds: { minX: 58, minY: 73, maxX: 64, maxY: 77 },
+    gateTile: { x: 58, y: 75, side: 'west' },
+    signTile: { x: 57, y: 74 },
     tileCount: 35,
-    purchasePrice: 200,
+    purchasePrice: 10000,
     purchasedByDefault: false,
     label: 'စိုက်ပျိုးမြေကွက် ၃ (River North Plot)',
   },
@@ -364,10 +380,23 @@ export const FARM_PLOTS: FarmPlotDefinition[] = [
     id: 'farm_plot_4',
     zoneId: 'farm_district',
     bounds: { minX: 58, minY: 79, maxX: 63, maxY: 82 },
+    gateTile: { x: 58, y: 80, side: 'west' },
+    signTile: { x: 57, y: 81 },
     tileCount: 24,
-    purchasePrice: 150,
+    purchasePrice: 5000,
     purchasedByDefault: false,
     label: 'စိုက်ပျိုးမြေကွက် ၄ (River South Plot)',
+  },
+  {
+    id: 'farm_plot_5',
+    zoneId: 'farm_district',
+    bounds: { minX: 72, minY: 72, maxX: 77, maxY: 76 },
+    gateTile: { x: 72, y: 74, side: 'west' },
+    signTile: { x: 71, y: 73 },
+    tileCount: 30,
+    purchasePrice: 8000,
+    purchasedByDefault: false,
+    label: 'စိုက်ပျိုးမြေကွက် ၅ (East Riverbank Plot)',
   },
 ];
 
@@ -635,7 +664,6 @@ export const MERCHANT_CATALOG: ShopCatalogEntry[] = [
 
   // 2. Decoration
   { id: 'lantern', price: 30, category: 'decoration' },
-  { id: 'decor_bench', price: 22, category: 'decoration' },
 
   // 3. Garden & Plants
   { id: 'decor_flower_pot', price: 15, category: 'garden_plants' },
@@ -900,7 +928,7 @@ export const ZONE_SIGNPOSTS: ZoneSignpostDef[] = [
     shortLabel: 'Farm District',
     color: '#4ade80',
     facing: 'right',
-    hint: 'ရွာရေတွင်းနှင့် စိုက်ပျိုးမြေကွက် ၄ ကွက်',
+    hint: 'ရွာရေတွင်းနှင့် စိုက်ပျိုးမြေကွက် ၅ ကွက်',
   },
 ];
 

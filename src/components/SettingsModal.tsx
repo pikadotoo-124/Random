@@ -62,7 +62,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   weatherEffectsEnabled = true,
   onToggleWeatherEffects,
 }) => {
-  const { user, gameState, signOutUser, updateName, cloudSyncStatus, retryCloudSave } = useAuth();
+  const { user, gameState, signOutUser, updateName, cloudSyncStatus, retryCloudSave, isVerifiedOwner } = useAuth();
   const [sound, setSound] = useState(SoundSynth.enabled);
   const [ambientSound, setAmbientSound] = useState(SoundSynth.ambientEnabled);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null);
@@ -73,7 +73,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [nameError, setNameError] = useState<string | null>(null);
 
   // Project Owner-only Official Launch Backup & One-Time Reset state
-  const isOwner = isProjectOwnerEmail(user?.email);
+  const isOwner = isVerifiedOwner && isProjectOwnerEmail(user?.email);
   const [launchPanelOpen, setLaunchPanelOpen] = useState(false);
   const [launchStatus, setLaunchStatus] = useState<LaunchStatusResponse | null>(null);
   const [launchBusy, setLaunchBusy] = useState<string | null>(null);

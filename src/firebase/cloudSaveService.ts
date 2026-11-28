@@ -4,8 +4,9 @@
  */
 
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { db } from './config';
+import { auth, db } from './config';
 import { handleFirestoreError, OperationType } from './errorHandler';
+import { resolveServerHttpBaseUrl } from './officialLaunchService';
 import {
   EquippedClothingState,
   PlacedBuilding,
@@ -56,29 +57,427 @@ export interface WorldStateDoc {
   lastSavedAt: string;
 }
 
-/**
- * Remove undefined fields recursively before writing to Firestore
- */
-function sanitizeForFirestore<T>(obj: T): T {
-  if (obj === null || obj === undefined) {
-    return null as any;
+export interface CloudSaveAuthoritativeEconomy {
+  gold: number;
+  inventorySlots: { item: string; quantity: number }[];
+  ownedClothing: string[];
+}
+
+export type CloudSaveCutoverMode = 'do_primary' | 'legacy_firestore';
+
+export interface CloudSaveWriteResult {
+  ok: true;
+  mode?: CloudSaveCutoverMode;
+  storageKey?: string;
+  saveRevision?: number;
+  lastSavedAt?: string;
+  deduplicated?: boolean;
+  authoritativeEconomy?: CloudSaveAuthoritativeEconomy;
+}
+
+export interface CloudSaveOptions {
+  saveId?: string;
+  expectedRevision?: number;
+  baseUrlOverride?: string;
+  idTokenOverride?: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface DOLoadResult {
+  ok: boolean;
+  mode: CloudSaveCutoverMode;
+  exists: boolean;
+  needsCharacterCreation?: boolean;
+  fallbackToLegacy?: boolean;
+  fallbackAllowed?: boolean;
+  source?: 'do_primary' | 'migrated_from_firestore';
+  didMigrate?: boolean;
+  performedFirestoreReads?: boolean;
+  economyPreservedFromDO?: boolean;
+  storageKey?: string;
+  saveRevision?: number;
+  officialResetEpoch?: string | null;
+  profile?: UserProfileDoc;
+  gameState?: SavedGameState;
+  authoritativeEconomy?: CloudSaveAuthoritativeEconomy;
+  code?: string;
+  error?: string;
+  status?: number;
+}
+
+export interface DOInitResult {
+  ok: true;
+  mode: CloudSaveCutoverMode;
+  storageKey: string;
+  saveRevision: number;
+  lastSavedAt: string;
+  profile: UserProfileDoc;
+  gameState: SavedGameState;
+  authoritativeEconomy: CloudSaveAuthoritativeEconomy;
+}
+
+export class CloudSaveRequestError extends Error {
+  public readonly status: number;
+  public readonly code: string;
+  public readonly retryable: boolean;
+  public readonly authoritativeEconomy?: CloudSaveAuthoritativeEconomy;
+  public readonly retryAfterSeconds?: number;
+  public readonly saveRevision?: number;
+  public readonly fallbackAllowed?: boolean;
+
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    retryable: boolean,
+    authoritativeEconomy?: CloudSaveAuthoritativeEconomy,
+    retryAfterSeconds?: number,
+    saveRevision?: number,
+    fallbackAllowed?: boolean
+  ) {
+    super(message);
+    this.name = 'CloudSaveRequestError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+    this.authoritativeEconomy = authoritativeEconomy;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.saveRevision = saveRevision;
+    this.fallbackAllowed = fallbackAllowed;
   }
-  if (Array.isArray(obj)) {
-    return obj.map((item) => sanitizeForFirestore(item)) as any;
-  }
-  if (typeof obj === 'object') {
-    const cleanObj: Record<string, any> = {};
-    for (const [key, val] of Object.entries(obj)) {
-      if (val !== undefined) {
-        cleanObj[key] = sanitizeForFirestore(val);
-      }
-    }
-    return cleanObj as any;
-  }
-  return obj;
 }
 
 export class CloudSaveService {
+  /**
+   * Client-side rollback feature flag (`VITE_DO_SAVE_CUTOVER_ENABLED=false` reverts immediately to legacy Firestore path).
+   */
+  public static isDOPrimaryEnabled(envOverride?: Record<string, any>): boolean {
+    const raw =
+      envOverride?.VITE_DO_SAVE_CUTOVER_ENABLED ??
+      (import.meta as any)?.env?.VITE_DO_SAVE_CUTOVER_ENABLED;
+    if (typeof raw === 'string' && raw.trim().toLowerCase() === 'false') {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * True when built with `vite build --mode staging` (`VITE_APP_ENV=staging`).
+   * Used client-side to prevent staging sessions from writing metadata (`lastLoginAt`, `users/{uid}`)
+   * into Production Firestore.
+   */
+  public static isStagingEnvironment(envOverride?: Record<string, any>): boolean {
+    const raw =
+      envOverride?.VITE_APP_ENV ??
+      (import.meta as any)?.env?.VITE_APP_ENV;
+    return typeof raw === 'string' && raw.trim().toLowerCase() === 'staging';
+  }
+
+  private static async resolveAuthToken(
+    uid: string,
+    options?: Pick<CloudSaveOptions, 'idTokenOverride'>
+  ): Promise<{ idToken: string; currentUser: (typeof auth)['currentUser'] }> {
+    const currentUser = auth?.currentUser ?? null;
+    let idToken = options?.idTokenOverride?.trim() || '';
+    if (!idToken) {
+      if (!currentUser || currentUser.uid !== uid) {
+        throw new CloudSaveRequestError(
+          'Authentication required before accessing player cloud save.',
+          401,
+          'AUTH_REQUIRED',
+          false,
+          undefined,
+          undefined,
+          undefined,
+          false
+        );
+      }
+      idToken = await currentUser.getIdToken(false);
+    }
+
+    if (!idToken) {
+      throw new CloudSaveRequestError(
+        'Missing Firebase ID token for cloud save.',
+        401,
+        'AUTH_REQUIRED',
+        false,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+    }
+
+    return { idToken, currentUser };
+  }
+
+  private static async parseJsonResponse(res: Response): Promise<{
+    data: any;
+    isNonJsonHtmlFallback: boolean;
+  }> {
+    const contentType = (res.headers?.get?.('content-type') || '').toLowerCase();
+    let data: any = null;
+    let isNonJsonHtmlFallback = false;
+
+    if (typeof res.text === 'function') {
+      const rawText = await res.text().catch(() => '');
+      const trimmed = rawText.trim();
+      if (trimmed.length > 0) {
+        try {
+          data = JSON.parse(trimmed);
+        } catch {
+          if (contentType.includes('text/html') || trimmed.startsWith('<')) {
+            isNonJsonHtmlFallback = true;
+          }
+        }
+      }
+    } else if (typeof res.json === 'function') {
+      data = await res.json().catch(() => null);
+    }
+
+    return { data, isNonJsonHtmlFallback };
+  }
+
+  /**
+   * Staged Phase 1: Load player save from Durable Object (`GET /api/player/load`),
+   * triggering Read-Only legacy Firestore migration on first login if needed.
+   */
+  public static async loadGameStateFromDO(
+    uid: string,
+    options?: Pick<CloudSaveOptions, 'baseUrlOverride' | 'idTokenOverride' | 'fetchImpl'>
+  ): Promise<DOLoadResult> {
+    const fetchFn = options?.fetchImpl || fetch;
+    const base =
+      options?.baseUrlOverride !== undefined
+        ? options.baseUrlOverride
+        : resolveServerHttpBaseUrl();
+
+    const { idToken, currentUser } = await this.resolveAuthToken(uid, options);
+
+    const getLoad = async (token: string): Promise<Response> => {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+      try {
+        return await fetchFn(`${base}/api/player/load`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: 'no-store',
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+      } catch (networkErr: any) {
+        throw new CloudSaveRequestError(
+          networkErr?.message || 'Network error while loading player save from DO.',
+          0,
+          'NETWORK_ERROR',
+          true,
+          undefined,
+          undefined,
+          undefined,
+          true
+        );
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    let res = await getLoad(idToken);
+    if (res.status === 401 && !options?.idTokenOverride && currentUser && currentUser.uid === uid) {
+      const refreshed = await currentUser.getIdToken(true).catch(() => '');
+      if (refreshed) {
+        res = await getLoad(refreshed);
+      }
+    }
+
+    const { data, isNonJsonHtmlFallback } = await this.parseJsonResponse(res);
+
+    if (isNonJsonHtmlFallback) {
+      return {
+        ok: false,
+        mode: 'do_primary',
+        exists: false,
+        fallbackAllowed: true,
+        code: 'BACKEND_ROUTE_UNAVAILABLE',
+        error: `DO load API returned HTML instead of JSON (${res.status}).`,
+        status: res.status,
+      };
+    }
+
+    if (!res.ok || !data?.ok) {
+      const code = data?.code || `HTTP_${res.status}`;
+      const authRejected = res.status === 401 || res.status === 403 || code === 'UID_MISMATCH';
+      const fallbackAllowed = authRejected ? false : data?.fallbackAllowed !== false;
+      return {
+        ok: false,
+        mode: data?.mode === 'legacy_firestore' ? 'legacy_firestore' : 'do_primary',
+        exists: false,
+        fallbackAllowed,
+        code,
+        error: data?.error || `DO player load failed (${res.status}).`,
+        status: res.status,
+      };
+    }
+
+    if (data.fallbackToLegacy) {
+      return {
+        ok: true,
+        mode: 'legacy_firestore',
+        exists: false,
+        fallbackToLegacy: true,
+        fallbackAllowed: true,
+        officialResetEpoch:
+          typeof data.officialResetEpoch === 'string' ? data.officialResetEpoch : null,
+        status: res.status,
+      };
+    }
+
+    if (data.needsCharacterCreation || !data.exists || !data.gameState || !data.profile) {
+      return {
+        ok: true,
+        mode: data.mode === 'legacy_firestore' ? 'legacy_firestore' : 'do_primary',
+        exists: false,
+        needsCharacterCreation: Boolean(data.needsCharacterCreation),
+        performedFirestoreReads: Boolean(data.performedFirestoreReads),
+        officialResetEpoch:
+          typeof data.officialResetEpoch === 'string' ? data.officialResetEpoch : null,
+        status: res.status,
+      };
+    }
+
+    const profile: UserProfileDoc = {
+      uid: String(data.profile.uid || uid),
+      playerName: String(data.profile.playerName || 'Settler'),
+      gender: data.profile.gender === 'female' ? 'female' : 'male',
+      createdAt: String(data.profile.createdAt || new Date().toISOString()),
+      lastLoginAt: String(data.profile.lastLoginAt || new Date().toISOString()),
+      gameVersion:
+        typeof data.profile.gameVersion === 'number'
+          ? data.profile.gameVersion
+          : CURRENT_SAVE_VERSION,
+    };
+
+    const normalizedState = SaveSystem.migrateGameState(
+      data.gameState as Partial<SavedGameState>,
+      profile.playerName,
+      profile.gender
+    );
+
+    return {
+      ok: true,
+      mode: data.mode === 'legacy_firestore' ? 'legacy_firestore' : 'do_primary',
+      exists: true,
+      source: data.source === 'migrated_from_firestore' ? 'migrated_from_firestore' : 'do_primary',
+      didMigrate: Boolean(data.didMigrate),
+      performedFirestoreReads: Boolean(data.performedFirestoreReads),
+      economyPreservedFromDO: Boolean(data.economyPreservedFromDO),
+      storageKey: typeof data.storageKey === 'string' ? data.storageKey : undefined,
+      saveRevision: typeof data.saveRevision === 'number' ? data.saveRevision : 1,
+      officialResetEpoch:
+        typeof data.officialResetEpoch === 'string' ? data.officialResetEpoch : null,
+      profile,
+      gameState: normalizedState,
+      authoritativeEconomy: data.authoritativeEconomy,
+      status: res.status,
+    };
+  }
+
+  /**
+   * Initialize a brand-new character save directly inside DO (`POST /api/player/init`).
+   */
+  public static async initPlayerSaveInDO(
+    uid: string,
+    playerName: string,
+    gender: 'male' | 'female',
+    options?: Pick<CloudSaveOptions, 'baseUrlOverride' | 'idTokenOverride' | 'fetchImpl'>
+  ): Promise<DOInitResult> {
+    const fetchFn = options?.fetchImpl || fetch;
+    const base =
+      options?.baseUrlOverride !== undefined
+        ? options.baseUrlOverride
+        : resolveServerHttpBaseUrl();
+
+    const { idToken, currentUser } = await this.resolveAuthToken(uid, options);
+
+    const postInit = async (token: string): Promise<Response> => {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+      try {
+        return await fetchFn(`${base}/api/player/init`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            uid,
+            playerName: playerName.trim(),
+            gender,
+          }),
+          cache: 'no-store',
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+      } catch (networkErr: any) {
+        throw new CloudSaveRequestError(
+          networkErr?.message || 'Network error while initializing DO player save.',
+          0,
+          'NETWORK_ERROR',
+          true
+        );
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    let res = await postInit(idToken);
+    if (res.status === 401 && !options?.idTokenOverride && currentUser && currentUser.uid === uid) {
+      const refreshed = await currentUser.getIdToken(true).catch(() => '');
+      if (refreshed) {
+        res = await postInit(refreshed);
+      }
+    }
+
+    const { data, isNonJsonHtmlFallback } = await this.parseJsonResponse(res);
+    if (!res.ok || !data?.ok || !data?.profile || !data?.gameState) {
+      const code = isNonJsonHtmlFallback
+        ? 'BACKEND_ROUTE_UNAVAILABLE'
+        : data?.code || `HTTP_${res.status}`;
+      const message = isNonJsonHtmlFallback
+        ? `DO init API returned HTML instead of JSON (${res.status}).`
+        : data?.error || `Failed to initialize player save in DO (${res.status}).`;
+      const nonRetryable =
+        isNonJsonHtmlFallback ||
+        res.status === 400 ||
+        res.status === 401 ||
+        res.status === 403 ||
+        res.status === 404;
+      throw new CloudSaveRequestError(message, res.status, code, !nonRetryable);
+    }
+
+    const profile: UserProfileDoc = {
+      uid: String(data.profile.uid || uid),
+      playerName: String(data.profile.playerName || playerName.trim()),
+      gender: data.profile.gender === 'female' ? 'female' : 'male',
+      createdAt: String(data.profile.createdAt || new Date().toISOString()),
+      lastLoginAt: String(data.profile.lastLoginAt || new Date().toISOString()),
+      gameVersion:
+        typeof data.profile.gameVersion === 'number'
+          ? data.profile.gameVersion
+          : CURRENT_SAVE_VERSION,
+    };
+
+    return {
+      ok: true,
+      mode: data.mode === 'legacy_firestore' ? 'legacy_firestore' : 'do_primary',
+      storageKey: String(data.storageKey || `player_save:${uid}`),
+      saveRevision: typeof data.saveRevision === 'number' ? data.saveRevision : 1,
+      lastSavedAt: String(data.lastSavedAt || new Date().toISOString()),
+      profile,
+      gameState: SaveSystem.migrateGameState(data.gameState, profile.playerName, profile.gender),
+      authoritativeEconomy: data.authoritativeEconomy,
+    };
+  }
+
   /**
    * Load existing player profile document from users/{uid}
    */
@@ -282,20 +681,19 @@ export class CloudSaveService {
   }
 
   /**
-   * Save game state to Firestore: users/{uid}/gameData/playerState & worldState
+   * Build strictly non-economy save payload for Backend-Mediated Cloud Save (`POST /api/player/save`).
+   * Server ignores/rejects client economy manipulation and injects authoritative Gold, Inventory & Owned Clothing.
    */
-  public static async saveGameState(
+  public static buildClientSavePayload(
     uid: string,
     state: SavedGameState,
-    currentZone = 'Central Plaza (Main City)'
-  ): Promise<boolean> {
-    const playerStatePath = `users/${uid}/gameData/playerState`;
-    const worldStatePath = `users/${uid}/gameData/worldState`;
+    currentZone = 'Central Plaza (Main City)',
+    saveId?: string
+  ): Record<string, any> {
     const safeSavedMs =
       typeof state.lastSaved === 'number' && Number.isFinite(state.lastSaved) && state.lastSaved > 0
-        ? state.lastSaved
+        ? Math.floor(state.lastSaved)
         : Date.now();
-    const now = new Date(safeSavedMs).toISOString();
 
     const stats: PlayerStats = {
       ...SaveSystem.getDefaultStats(),
@@ -325,29 +723,6 @@ export class CloudSaveService {
       typeof state.position?.tileY === 'number' && Number.isFinite(state.position.tileY)
         ? Math.max(0, Math.min(119, Math.round(state.position.tileY * 100) / 100))
         : 30;
-    const safeGold =
-      typeof state.inventory?.coins === 'number' && Number.isFinite(state.inventory.coins)
-        ? Math.max(0, Math.round(state.inventory.coins))
-        : 0;
-
-    const playerDoc: PlayerStateDoc = {
-      positionX: safePosX,
-      positionY: safePosY,
-      currentZone: (state.currentZone || currentZone).slice(0, 128),
-      gold: safeGold,
-      inventory: (state.inventory.slots || [])
-        .filter((s) => s && typeof s.item === 'string' && typeof s.quantity === 'number' && s.quantity > 0)
-        .slice(0, 100)
-        .map((s) => ({ item: s.item, quantity: s.quantity })),
-      equipment: {
-        currentTool: state.player.currentTool || null,
-        facingDirection,
-        ownedClothing,
-        equippedClothing,
-      },
-      playerStats: stats,
-      lastSavedAt: now,
-    };
 
     const serializedBuildings: PlacedBuilding[] = state.buildings.slice(0, 500).map((b) => {
       const fp = BuildingSystem.getFootprint(b.type);
@@ -359,7 +734,7 @@ export class CloudSaveService {
         width: b.width || fp.width,
         height: b.height || fp.height,
         rotation: b.type === 'fence_wood' ? BuildingSystem.normalizeRotation(b.rotation) : 0,
-        ownerId: b.ownerId || uid,
+        ownerId: uid,
         placedBy: b.placedBy || state.player.name,
         createdAt: b.createdAt,
         storage: b.storage ? b.storage.map((s) => ({ item: s.item, quantity: s.quantity })) : [],
@@ -376,21 +751,132 @@ export class CloudSaveService {
         storage: (b.storage || []).map((s) => ({ item: s.item, quantity: s.quantity })),
       }));
 
-    const worldDoc: WorldStateDoc = {
+    return {
+      ...(saveId ? { saveId } : {}),
+      clientTimestamp: safeSavedMs,
+      positionX: safePosX,
+      positionY: safePosY,
+      currentZone: (state.currentZone || currentZone).slice(0, 128),
+      gender: state.player.gender === 'female' ? 'female' : 'male',
+      playerName: (state.player.name || 'Settler').slice(0, 16),
+      equipment: {
+        currentTool: state.player.currentTool || null,
+        facingDirection,
+        equippedClothing,
+      },
+      playerStats: stats,
       placedBuildings: serializedBuildings,
       storageBoxes,
       playerWorldChanges: worldChanges,
-      lastSavedAt: now,
+    };
+  }
+
+  /**
+   * Backend-Mediated Cloud Save: routes playerState & worldState persistence exclusively
+   * through authenticated `POST /api/player/save` (DO Primary or Legacy Firestore rollback mode).
+   */
+  public static async saveGameState(
+    uid: string,
+    state: SavedGameState,
+    currentZone = 'Central Plaza (Main City)',
+    options?: CloudSaveOptions
+  ): Promise<CloudSaveWriteResult> {
+    const fetchFn = options?.fetchImpl || fetch;
+    const base =
+      options?.baseUrlOverride !== undefined
+        ? options.baseUrlOverride
+        : resolveServerHttpBaseUrl();
+
+    const { idToken, currentUser } = await this.resolveAuthToken(uid, options);
+
+    const payload = {
+      ...this.buildClientSavePayload(uid, state, currentZone, options?.saveId),
+      ...(typeof options?.expectedRevision === 'number' &&
+      Number.isInteger(options.expectedRevision) &&
+      options.expectedRevision >= 0
+        ? { expectedRevision: options.expectedRevision }
+        : {}),
     };
 
-    try {
-      await Promise.all([
-        setDoc(doc(db, 'users', uid, 'gameData', 'playerState'), sanitizeForFirestore(playerDoc)),
-        setDoc(doc(db, 'users', uid, 'gameData', 'worldState'), sanitizeForFirestore(worldDoc)),
-      ]);
-      return true;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `${playerStatePath} | ${worldStatePath}`);
+    const postSave = async (token: string): Promise<Response> => {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 9000) : null;
+      try {
+        return await fetchFn(`${base}/api/player/save`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+          cache: 'no-store',
+          ...(controller ? { signal: controller.signal } : {}),
+        });
+      } catch (networkErr: any) {
+        throw new CloudSaveRequestError(
+          networkErr?.message || 'Network error while saving to server.',
+          0,
+          'NETWORK_ERROR',
+          true
+        );
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    let res = await postSave(idToken);
+    if (res.status === 401 && !options?.idTokenOverride && currentUser && currentUser.uid === uid) {
+      const refreshed = await currentUser.getIdToken(true).catch(() => '');
+      if (refreshed) {
+        res = await postSave(refreshed);
+      }
     }
+
+    const { data, isNonJsonHtmlFallback } = await this.parseJsonResponse(res);
+
+    if (!res.ok || !data?.ok) {
+      const code = isNonJsonHtmlFallback
+        ? 'BACKEND_ROUTE_UNAVAILABLE'
+        : data?.code || `HTTP_${res.status}`;
+      const message = isNonJsonHtmlFallback
+        ? `Cloud save API returned HTML instead of JSON (${res.status}). Ensure the backend /api/player/save endpoint is active.`
+        : data?.error || `Server cloud save failed (${res.status}).`;
+      const nonRetryable =
+        isNonJsonHtmlFallback ||
+        res.status === 400 ||
+        res.status === 401 ||
+        res.status === 403 ||
+        res.status === 404 ||
+        code === 'SERVER_CREDENTIALS_MISSING' ||
+        (res.status === 409 && (code === 'STALE_SAVE' || code === 'SAVE_REVISION_CONFLICT'));
+      const retryAfterRaw = res.headers?.get?.('Retry-After');
+      const retryAfterParsed = retryAfterRaw ? parseInt(retryAfterRaw, 10) : NaN;
+      const retryAfterSeconds =
+        Number.isFinite(retryAfterParsed) && retryAfterParsed > 0 ? retryAfterParsed : undefined;
+      const serverRevision =
+        typeof data?.saveRevision === 'number' ? data.saveRevision : undefined;
+      const fallbackAllowed =
+        typeof data?.fallbackAllowed === 'boolean' ? data.fallbackAllowed : undefined;
+      throw new CloudSaveRequestError(
+        message,
+        res.status,
+        code,
+        !nonRetryable,
+        data?.authoritativeEconomy,
+        retryAfterSeconds,
+        serverRevision,
+        fallbackAllowed
+      );
+    }
+
+    return {
+      ok: true,
+      mode: data.mode === 'legacy_firestore' ? 'legacy_firestore' : 'do_primary',
+      storageKey: typeof data.storageKey === 'string' ? data.storageKey : undefined,
+      saveRevision: data.saveRevision,
+      lastSavedAt: data.lastSavedAt,
+      deduplicated: Boolean(data.deduplicated),
+      authoritativeEconomy: data.authoritativeEconomy,
+    };
   }
 }

@@ -86,6 +86,7 @@ export interface ResourceNode {
   type: ResourceType;
   animalKind?: AnimalKind;
   spriteVariant?: 'berry_bush' | 'tall_grass';
+  rockVariant?: 0 | 1 | 2;
   tileX: number;
   tileY: number;
   currentHealth: number;
@@ -116,6 +117,15 @@ export interface FarmPlotDefinition {
     minY: number;
     maxX: number;
     maxY: number;
+  };
+  gateTile?: {
+    x: number;
+    y: number;
+    side: 'north' | 'south' | 'west' | 'east';
+  };
+  signTile?: {
+    x: number;
+    y: number;
   };
   tileCount: number;
   purchasePrice: number;
@@ -259,10 +269,21 @@ export interface PlayerStats {
   totalSoldGold: number;
 }
 
+export interface FarmPlotOwnerRecord {
+  plotId: string;
+  ownerId: string;
+  ownerName: string;
+  purchasedAt: number;
+  pricePaid: number;
+}
+
+export type FarmPlotOwnersMap = Record<string, FarmPlotOwnerRecord>;
+
 export interface PlayerWorldChanges {
   tutorialCompleted: boolean;
   discoveredZones: string[];
   resetEpoch?: string;
+  ownedFarmPlots?: string[];
 }
 
 export interface ZoneDefinition {

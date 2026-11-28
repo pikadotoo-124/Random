@@ -6,6 +6,17 @@
 import { BUILDABLE_ZONE_BOUNDS, BridgeStyle, FARM_PLOTS, MAP_CONFIG, SCENIC_FISHING_PIERS, TOWN_PROTECTED_BOUNDS, ZONES } from '../constants';
 import { TileType, ZoneDefinition } from '../types';
 
+export type RiverZoneKind = 'pool' | 'run' | 'riffle' | 'cascade';
+
+export interface RiverFlowCell {
+  dx: number;
+  dy: number;
+  curvature: number;
+  prog: number;
+  zoneKind: RiverZoneKind;
+  speedMul: number;
+}
+
 export class MapSystem {
   public width: number;
   public height: number;
@@ -14,6 +25,8 @@ export class MapSystem {
   public roadTier: ('none' | 'main' | 'trail')[][];
   public protectedPropTiles: Set<string>;
   public pierTileKeys: Set<string>;
+  public waterDepth: number[][];
+  public riverFlowVec: Array<Array<RiverFlowCell | null>>;
 
   constructor(width = MAP_CONFIG.WIDTH, height = MAP_CONFIG.HEIGHT) {
     this.width = width;
@@ -23,7 +36,44 @@ export class MapSystem {
     this.roadTier = [];
     this.protectedPropTiles = new Set();
     this.pierTileKeys = new Set();
+    this.waterDepth = [];
+    this.riverFlowVec = [];
     this.generateWorld();
+  }
+
+  public isSilverbrookRiverTile(tx: number, ty: number): boolean {
+    if (!this.isTileInBounds(tx, ty)) return false;
+    return this.riverFlowVec[ty]?.[tx] !== null;
+  }
+
+  public getWaterDepth(tx: number, ty: number): number {
+    if (!this.isTileInBounds(tx, ty)) return 0;
+    return this.waterDepth[ty]?.[tx] ?? 0;
+  }
+
+  public getRiverFlowCell(tx: number, ty: number): RiverFlowCell | null {
+    if (!this.isTileInBounds(tx, ty)) return null;
+    return this.riverFlowVec[ty]?.[tx] ?? null;
+  }
+
+  public getRiverFlowScreenVector(
+    tx: number,
+    ty: number
+  ): { sx: number; sy: number; curvature: number; zoneKind: RiverZoneKind; speedMul: number; prog: number } | null {
+    if (!this.isTileInBounds(tx, ty)) return null;
+    const f = this.riverFlowVec[ty]?.[tx];
+    if (!f) return null;
+    const dsx = (f.dx - f.dy) * (MAP_CONFIG.TILE_WIDTH / 2);
+    const dsy = (f.dx + f.dy) * (MAP_CONFIG.TILE_HEIGHT / 2);
+    const len = Math.hypot(dsx, dsy) || 1;
+    return {
+      sx: dsx / len,
+      sy: dsy / len,
+      curvature: f.curvature,
+      zoneKind: f.zoneKind,
+      speedMul: f.speedMul,
+      prog: f.prog,
+    };
   }
 
   public getBridgeStyle(tx: number, ty: number): BridgeStyle {
@@ -81,20 +131,28 @@ export class MapSystem {
     this.collisionMap = [];
     this.roadTier = [];
     this.pierTileKeys.clear();
+    this.waterDepth = [];
+    this.riverFlowVec = [];
 
     // Initialize all as grass
     for (let y = 0; y < this.height; y++) {
       const row: TileType[] = [];
       const colRow: boolean[] = [];
       const tierRow: ('none' | 'main' | 'trail')[] = [];
+      const depthRow: number[] = [];
+      const flowRow: Array<RiverFlowCell | null> = [];
       for (let x = 0; x < this.width; x++) {
         row.push('grass');
         colRow.push(false);
         tierRow.push('none');
+        depthRow.push(0);
+        flowRow.push(null);
       }
       this.tiles.push(row);
       this.collisionMap.push(colRow);
       this.roadTier.push(tierRow);
+      this.waterDepth.push(depthRow);
+      this.riverFlowVec.push(flowRow);
     }
 
     // 1. Natural Mirror Lake (South-West: approx tx 8..34, ty 48..78)
@@ -111,6 +169,7 @@ export class MapSystem {
         if (normDist <= 0.88) {
           this.tiles[y][x] = 'water';
           this.collisionMap[y][x] = true;
+          this.waterDepth[y][x] = Math.max(0.1, Math.min(1, 1 - normDist / 0.88));
         } else if (normDist <= 1.05) {
           this.tiles[y][x] = 'sand';
         }
@@ -132,6 +191,7 @@ export class MapSystem {
         if (normDist <= 0.86) {
           this.tiles[y][x] = 'water';
           this.collisionMap[y][x] = true;
+          this.waterDepth[y][x] = Math.max(0.1, Math.min(1, 1 - normDist / 0.86));
         } else if (normDist <= 1.06) {
           if (this.tiles[y][x] !== 'water') {
             this.tiles[y][x] = 'sand';
@@ -155,6 +215,7 @@ export class MapSystem {
         if (normDist <= 0.86) {
           this.tiles[y][x] = 'water';
           this.collisionMap[y][x] = true;
+          this.waterDepth[y][x] = Math.max(0.1, Math.min(1, 1 - normDist / 0.86));
         } else if (normDist <= 1.06) {
           if (this.tiles[y][x] !== 'water') {
             this.tiles[y][x] = 'sand';
@@ -191,34 +252,128 @@ export class MapSystem {
       }
     }
 
-    // 5. Silverbrook River winding gracefully across Homestead District (South-East)
-    // Curves from (114, 54) southwest across homestead zone down to (38, 114)
-    for (let t = 0; t <= 100; t++) {
-      const prog = t / 100;
-      // Parametric gentle serpentine curve
-      const rx = Math.floor(114 - prog * 76 + Math.sin(prog * Math.PI * 3) * 5);
-      const ry = Math.floor(54 + prog * 60 + Math.cos(prog * Math.PI * 2.5) * 4);
+    // 5. Silverbrook Creek flowing naturally from Farming District side (38, 114) across Build Zone -> (114, 54)
+    // Preserves the exact corridor, all bridges, Overlook Pier (88..91, 69), fishing spot (89, 68), and all 5 Farm Plots,
+    // while enriching channel hydrology with calm deep pools, stony riffles, natural bends & subtle rock-step cascades.
+    const riverSamples: Array<{
+      x: number;
+      y: number;
+      prog: number;
+      legacyProg: number;
+      tx: number;
+      ty: number;
+      curvature: number;
+    }> = [];
+    const RIVER_SAMPLES = 360;
+    for (let i = 0; i <= RIVER_SAMPLES; i++) {
+      const legacyProg = i / RIVER_SAMPLES; // Original sampling order: 0 = (114,54) -> 1 = (38,114)
+      const prog = 1 - legacyProg; // Flow progress: 0 = Farming District SW -> 1 = Build Zone NE
+      const x = 114 - legacyProg * 76 + Math.sin(legacyProg * Math.PI * 5.0) * 0.95;
+      const y = 54 + legacyProg * 60 + Math.sin(legacyProg * 14) * 3.5 + Math.sin(legacyProg * 27 + 0.65) * 0.9;
+      riverSamples.push({ x, y, prog, legacyProg, tx: 0.78, ty: -0.62, curvature: 0 });
+    }
+    for (let i = 0; i < riverSamples.length; i++) {
+      const downstream = riverSamples[Math.max(0, i - 2)];
+      const upstream = riverSamples[Math.min(riverSamples.length - 1, i + 2)];
+      // Downstream vector: Farming District (38, 114) -> Build Zone (114, 54)
+      const dx = downstream.x - upstream.x;
+      const dy = downstream.y - upstream.y;
+      const len = Math.hypot(dx, dy) || 1;
+      riverSamples[i].tx = dx / len;
+      riverSamples[i].ty = dy / len;
+    }
+    for (let i = 0; i < riverSamples.length; i++) {
+      const upstream = riverSamples[Math.min(riverSamples.length - 1, i + 6)];
+      const downstream = riverSamples[Math.max(0, i - 6)];
+      // Signed 2D cross-product curvature along downstream direction
+      riverSamples[i].curvature = upstream.tx * downstream.ty - upstream.ty * downstream.tx;
+    }
 
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const wx = rx + dx;
-          const wy = ry + dy;
-          if (this.isTileInBounds(wx, wy)) {
-            // River channel
-            this.tiles[wy][wx] = 'water';
-            this.collisionMap[wy][wx] = true;
+    // Subtle rock-step cascades tucked naturally between main road bridges (never on piers or fishing spots)
+    const cascadeCenters = [0.22, 0.44, 0.64, 0.85];
 
-            // River sandy banks
-            for (let by = -2; by <= 2; by++) {
-              for (let bx = -2; bx <= 2; bx++) {
-                const sx = wx + bx;
-                const sy = wy + by;
-                if (this.isTileInBounds(sx, sy) && this.tiles[sy][sx] === 'grass') {
-                  this.tiles[sy][sx] = 'sand';
-                }
-              }
-            }
+    const isInsideProtectedFarmPlot = (wx: number, wy: number): boolean =>
+      FARM_PLOTS.some(
+        (p) => wx >= p.bounds.minX - 1 && wx <= p.bounds.maxX + 1 && wy >= p.bounds.minY - 1 && wy <= p.bounds.maxY + 1
+      );
+
+    for (let wy = 46; wy < this.height; wy++) {
+      for (let wx = 32; wx < this.width; wx++) {
+        if (isInsideProtectedFarmPlot(wx, wy)) continue;
+
+        let minDistSq = Infinity;
+        let closestIdx = 0;
+        for (let i = 0; i < riverSamples.length; i++) {
+          const s = riverSamples[i];
+          const dx = wx - s.x;
+          const dy = wy - s.y;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < minDistSq) {
+            minDistSq = dSq;
+            closestIdx = i;
           }
+        }
+
+        const minDist = Math.sqrt(minDistSq);
+        if (minDist > 5.4) continue;
+
+        const s = riverSamples[closestIdx];
+        // Non-uniform natural channel width: alternate wider calm pools (~6.4 tiles) and narrower riffles (~3.2 tiles)
+        const widthWave =
+          Math.sin(s.legacyProg * Math.PI * 6.0 - 0.5) * 0.56 +
+          Math.cos(s.legacyProg * Math.PI * 3.0 + 0.4) * 0.36;
+        const shoreWiggle =
+          Math.sin(wx * 0.39 - wy * 0.33) * 0.22 +
+          Math.cos(wx * 0.24 + wy * 0.41) * 0.16;
+        const riverHalfWidth = Math.max(1.58, Math.min(3.25, 2.34 + widthWave + shoreWiggle));
+
+        // Inner bends form wider sandy/gravel spits; outer bends form steeper mossy cutbanks
+        const sideOffset = (wx - s.x) * (-s.ty) + (wy - s.y) * s.tx;
+        const isInnerBend = sideOffset * s.curvature > 0;
+        const bankNoise =
+          Math.sin(wx * 0.31 + wy * 0.43) * 0.28 +
+          Math.cos(wx * 0.19 - wy * 0.27) * 0.16;
+        const bankWidth = isInnerBend
+          ? Math.max(0.85, 1.24 + bankNoise)
+          : Math.max(0.28, 0.54 + bankNoise * 0.65);
+
+        const isCascadeZone = cascadeCenters.some((c) => Math.abs(s.prog - c) < 0.022);
+        const isPinnedLookoutFishSpot = wx === 89 && wy === 68;
+        if (minDist <= riverHalfWidth || isPinnedLookoutFishSpot) {
+          this.tiles[wy][wx] = 'water';
+          this.collisionMap[wy][wx] = true;
+          const rawDepth = isPinnedLookoutFishSpot
+            ? Math.max(0.28, 1 - minDist / Math.max(0.5, riverHalfWidth))
+            : 1 - minDist / Math.max(0.5, riverHalfWidth);
+          const depth = Math.max(0.08, Math.min(1, rawDepth));
+          this.waterDepth[wy][wx] = depth;
+
+          let zoneKind: RiverZoneKind = 'run';
+          let speedMul = 1.0;
+          if (isCascadeZone && riverHalfWidth < 2.65) {
+            zoneKind = 'cascade';
+            speedMul = 1.65;
+          } else if (widthWave > 0.24 && depth >= 0.45) {
+            zoneKind = 'pool';
+            speedMul = 0.72;
+          } else if (widthWave < -0.18 || depth < 0.36) {
+            zoneKind = 'riffle';
+            speedMul = 1.34;
+          } else {
+            zoneKind = 'run';
+            speedMul = 1.02 + Math.abs(s.curvature) * 0.45;
+          }
+
+          this.riverFlowVec[wy][wx] = {
+            dx: s.tx,
+            dy: s.ty,
+            curvature: s.curvature,
+            prog: s.prog,
+            zoneKind,
+            speedMul,
+          };
+        } else if (minDist <= riverHalfWidth + bankWidth && this.tiles[wy][wx] === 'grass') {
+          this.tiles[wy][wx] = 'sand';
         }
       }
     }

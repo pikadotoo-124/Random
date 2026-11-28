@@ -13,6 +13,7 @@ import {
 } from './systems/ClothingSystem';
 import { CraftingSystem } from './systems/CraftingSystem';
 import { InventorySystem } from './systems/InventorySystem';
+import { validateDismantleAction } from './systems/LandOwnershipSystem';
 import { MapSystem } from './systems/MapSystem';
 import { NetworkSystem } from './systems/NetworkSystem';
 import { ResourceSystem } from './systems/ResourceSystem';
@@ -22,6 +23,10 @@ import {
   BuildingType,
   ClothingEquipmentSlot,
   FacingDirection,
+  FarmPlotOwnerRecord,
+  InventorySlot,
+  ItemId,
+  PlacedBuilding,
   PlayerProfile,
   PlayerStats,
   PlayerWorldChanges,
@@ -51,6 +56,7 @@ export class GameManager {
   private pendingJoystickVector = { x: 0, y: 0 };
   private pendingUiOverlayOpen = false;
   private lastMovementCheckpointAt = 0;
+  private unsubEconomyReconcile: (() => void) | null = null;
 
   constructor(profile?: PlayerProfile, userId?: string, initialState?: SavedGameState) {
     this.userId = userId;
@@ -143,6 +149,143 @@ export class GameManager {
       this.initialPosition = { tileX: 30, tileY: 30, facingDirection };
       this.hasHydrated = !userId;
     }
+
+    this.setupAuthoritativeGoldSync();
+    if (this.userId) {
+      this.unsubEconomyReconcile = SaveSystem.subscribeEconomyReconciled((targetUid, economy) => {
+        if (targetUid === this.userId) {
+          this.applyAuthoritativeSnapshot({
+            gold: economy.gold,
+            inventorySlots: economy.inventorySlots as InventorySlot[],
+            ownedClothing: economy.ownedClothing,
+          });
+        }
+      });
+    }
+  }
+
+  private applyAuthoritativeSnapshot(payload: {
+    gold?: number;
+    inventorySlots?: InventorySlot[];
+    ownedClothing?: string[];
+  }): void {
+    let profileChanged = false;
+
+    if (typeof payload.gold === 'number' && Number.isFinite(payload.gold)) {
+      const targetGold = Math.max(0, Math.round(payload.gold));
+      if (this.inventorySystem.coins !== targetGold || this.playerProfile.coins !== targetGold) {
+        this.inventorySystem.coins = targetGold;
+        this.playerProfile.coins = targetGold;
+        profileChanged = true;
+      }
+    }
+
+    if (Array.isArray(payload.inventorySlots)) {
+      this.inventorySystem.replaceSlotsFromServer(payload.inventorySlots);
+      profileChanged = true;
+    }
+
+    if (Array.isArray(payload.ownedClothing)) {
+      const cleanOwned = ClothingSystem.normalizeOwnedClothing(payload.ownedClothing);
+      this.playerProfile.ownedClothing = cleanOwned;
+      this.playerProfile.equippedClothing = ClothingSystem.normalizeEquippedClothing(
+        this.playerProfile.equippedClothing,
+        cleanOwned,
+        this.playerProfile.gender
+      );
+      this.worldScene?.applyEquippedClothing(this.playerProfile.equippedClothing);
+      profileChanged = true;
+    }
+
+    if (profileChanged) {
+      this.onClothingChanged?.();
+    }
+  }
+
+  private setupAuthoritativeGoldSync(): void {
+    this.networkSystem.on('room_state', (evt) => {
+      const syncState = evt.payload;
+      if (!syncState) return;
+      this.applyAuthoritativeSnapshot({
+        gold:
+          syncState.goldLedgerVerified &&
+          typeof syncState.goldBalance === 'number' &&
+          Number.isFinite(syncState.goldBalance)
+            ? syncState.goldBalance
+            : undefined,
+        inventorySlots:
+          syncState.inventoryVerified && Array.isArray(syncState.inventorySlots)
+            ? syncState.inventorySlots
+            : undefined,
+        ownedClothing: Array.isArray(syncState.ownedClothing) ? syncState.ownedClothing : undefined,
+      });
+    });
+
+    this.networkSystem.on('shop_trade_result', (evt) => {
+      const res = evt.payload as {
+        ok: boolean;
+        balance?: number;
+        inventorySlots?: InventorySlot[];
+        ownedClothing?: string[];
+      };
+      if (!res) return;
+      this.applyAuthoritativeSnapshot({
+        gold: typeof res.balance === 'number' && Number.isFinite(res.balance) ? res.balance : undefined,
+        inventorySlots: Array.isArray(res.inventorySlots) ? res.inventorySlots : undefined,
+        ownedClothing: Array.isArray(res.ownedClothing) ? res.ownedClothing : undefined,
+      });
+      if (res.ok) {
+        void this.saveCurrentState(false);
+      }
+    });
+
+    this.networkSystem.on('inventory_sync', (evt) => {
+      const payload = evt.payload as { inventorySlots?: InventorySlot[] };
+      if (Array.isArray(payload?.inventorySlots)) {
+        this.applyAuthoritativeSnapshot({ inventorySlots: payload.inventorySlots });
+        void this.saveCurrentState(false);
+      }
+    });
+
+    this.networkSystem.on('craft_result', (evt) => {
+      const payload = evt.payload as { ok?: boolean; inventorySlots?: InventorySlot[] };
+      if (Array.isArray(payload?.inventorySlots)) {
+        this.applyAuthoritativeSnapshot({ inventorySlots: payload.inventorySlots });
+        if (payload.ok) {
+          void this.saveCurrentState(false);
+        }
+      }
+    });
+
+    this.networkSystem.on('storage_transfer_result', (evt) => {
+      const payload = evt.payload as {
+        ok?: boolean;
+        buildingId?: string;
+        inventorySlots?: InventorySlot[];
+        storage?: InventorySlot[];
+      };
+      if (!payload) return;
+      if (payload.buildingId && Array.isArray(payload.storage)) {
+        const box = this.buildingSystem.buildings.find((b) => b.id === payload.buildingId);
+        if (box) {
+          box.storage = payload.storage.map((s) => ({ item: s.item, quantity: s.quantity }));
+        }
+      }
+      if (Array.isArray(payload.inventorySlots)) {
+        this.applyAuthoritativeSnapshot({ inventorySlots: payload.inventorySlots });
+      }
+      if (payload.ok) {
+        void this.saveCurrentState(false);
+      }
+    });
+  }
+
+  public isOnlineEconomyVerified(): boolean {
+    return (
+      this.networkSystem.status === 'connected' &&
+      Boolean(this.networkSystem.lastRoomState?.goldLedgerVerified) &&
+      Boolean(this.networkSystem.lastRoomState?.inventoryVerified)
+    );
   }
 
   public initGame(parentContainerId: string): void {
@@ -251,12 +394,43 @@ export class GameManager {
   }
 
   public dismantleBuilding(buildingId: string): boolean {
+    if (this.userId && this.networkSystem.status !== 'connected') {
+      this.worldScene?.onPlacementNotice?.(
+        'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ အဆောက်အအုံ ဖျက်သိမ်းနိုင်ပါသည်',
+        'error'
+      );
+      return false;
+    }
     const target = this.buildingSystem.buildings.find((b) => b.id === buildingId);
     if (!target || !this.buildingSystem.isPersonalBuilding(target, this.userId, this.playerProfile.name)) {
       return false;
     }
+    const effectiveUid = this.userId || this.playerProfile.name;
+    const check = validateDismantleAction(
+      this.buildingSystem.buildings,
+      buildingId,
+      effectiveUid,
+      this.buildingSystem.farmPlotOwners
+    );
+    if (!check.allowed) {
+      this.worldScene?.onPlacementNotice?.(
+        check.reason || 'ဤအဆောက်အအုံကို ဖျက်သိမ်းခွင့်မရှိပါ',
+        'error'
+      );
+      return false;
+    }
+    if (!this.inventorySystem.canFitItem(target.type, 1)) {
+      this.worldScene?.onPlacementNotice?.(
+        '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိသဖြင့် ဖျက်သိမ်း၍မရပါ',
+        'error'
+      );
+      return false;
+    }
+    const targetSnapshot = { ...target };
     const success = this.buildingSystem.dismantleBuilding(buildingId, this.mapSystem, this.inventorySystem);
     if (success) {
+      this.worldScene?.recordPendingDismantle(targetSnapshot);
+      this.worldScene?.renderPlacedBuildings();
       this.networkSystem.broadcastDismantle(buildingId);
       this.saveCurrentState(false);
     }
@@ -311,13 +485,268 @@ export class GameManager {
     return this.atmosphereSystem.isWeatherEffectsEnabled();
   }
 
-  public buyClothing(itemId: string): ClothingPurchaseResult {
-    const result = ClothingSystem.purchaseClothing(itemId, this.inventorySystem, this.playerProfile);
-    if (result.ok) {
-      this.onClothingChanged?.();
-      this.saveCurrentState(false);
+  public async buyClothing(itemId: string): Promise<ClothingPurchaseResult> {
+    if (!this.isOnlineEconomyVerified()) {
+      return {
+        ok: false,
+        messageMy: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ ဝတ်စုံဝယ်ယူနိုင်ပါသည်',
+      };
     }
-    return result;
+
+    const res = await this.networkSystem.executeShopTrade('buy_clothing', itemId, 1);
+    if (res.ok) {
+      return {
+        ok: true,
+        messageMy: 'ဝတ်စုံအသစ်ကို အောင်မြင်စွာ ဝယ်ယူပြီးပါပြီ! ဗီရိုထဲတွင် ချက်ချင်းဝတ်ဆင်နိုင်ပါသည်။',
+      };
+    }
+    return {
+      ok: false,
+      messageMy: res.reason || 'ဝတ်စုံဝယ်ယူမှု မအောင်မြင်ပါ',
+    };
+  }
+
+  public async executeShopItemTrade(
+    action: 'buy_item' | 'sell_item',
+    itemId: string,
+    quantity = 1
+  ): Promise<{
+    ok: boolean;
+    balance: number;
+    goldDelta: number;
+    reason?: string;
+    code?: string;
+  }> {
+    if (!this.isOnlineEconomyVerified()) {
+      return {
+        ok: false,
+        balance: this.inventorySystem.coins,
+        goldDelta: 0,
+        code: 'OFFLINE',
+        reason: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ ဈေးဝယ်/ရောင်းချနိုင်ပါသည်',
+      };
+    }
+
+    const prevGold = this.inventorySystem.coins;
+    const cleanQty = Math.max(1, Math.min(99, Math.floor(Number.isFinite(quantity) ? quantity : 1)));
+    const res = await this.networkSystem.executeShopTrade(action, itemId, cleanQty);
+    const nextBalance =
+      typeof res.balance === 'number' && Number.isFinite(res.balance)
+        ? Math.max(0, Math.round(res.balance))
+        : this.inventorySystem.coins;
+
+    if (res.ok) {
+      const goldDelta = Math.max(0, nextBalance - prevGold);
+      if (action === 'sell_item' && goldDelta > 0) {
+        this.recordStat('totalSoldGold', goldDelta);
+      }
+      await this.saveCurrentState(false);
+      return {
+        ok: true,
+        balance: nextBalance,
+        goldDelta,
+      };
+    }
+
+    return {
+      ok: false,
+      balance: nextBalance,
+      goldDelta: 0,
+      code: res.code,
+      reason: res.reason || 'အရောင်းအဝယ် အတည်ပြုမှု မအောင်မြင်ပါ',
+    };
+  }
+
+  public async craftRecipe(recipeId: string): Promise<{ ok: boolean; reason?: string }> {
+    const recipe = this.craftingSystem.recipes.find((r) => r.id === recipeId);
+    if (!recipe) {
+      return { ok: false, reason: 'ဖန်တီးမှုပုံစံငယ် ရှာမတွေ့ပါ' };
+    }
+    const nearWb = this.worldScene?.isNearCraftStation ?? true;
+    const nearCf = this.worldScene?.isNearCampfire ?? false;
+    const canLocal = this.craftingSystem.canCraft(recipe, this.inventorySystem, nearWb, nearCf);
+    if (!canLocal.can) {
+      return { ok: false, reason: canLocal.reason || 'လိုအပ်သော ပစ္စည်းများ မပြည့်စုံသေးပါ' };
+    }
+
+    if (this.userId) {
+      if (!this.isOnlineEconomyVerified()) {
+        return {
+          ok: false,
+          reason: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ ပစ္စည်းဖန်တီးနိုင်ပါသည်',
+        };
+      }
+      const res = await this.networkSystem.requestCraft(recipeId);
+      if (res.ok) {
+        this.recordStat('totalCrafted', 1);
+        await this.saveCurrentState(false);
+      }
+      return {
+        ok: res.ok,
+        reason: res.reason,
+      };
+    }
+
+    if (!this.inventorySystem.canFitItem(recipe.resultItem, recipe.resultCount)) {
+      return { ok: false, reason: '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ' };
+    }
+
+    const ok = this.craftingSystem.craft(recipe, this.inventorySystem, nearWb, nearCf);
+    if (ok) {
+      this.recordStat('totalCrafted', 1);
+      await this.saveCurrentState(false);
+      return { ok: true };
+    }
+    return { ok: false, reason: 'ဖန်တီးမှု မအောင်မြင်ပါ' };
+  }
+
+  public async transferStorageItem(
+    building: PlacedBuilding,
+    direction: 'deposit' | 'withdraw',
+    itemId: ItemId,
+    quantity = 1
+  ): Promise<{ ok: boolean; storage?: InventorySlot[]; reason?: string }> {
+    if (this.userId) {
+      if (!this.isOnlineEconomyVerified()) {
+        return {
+          ok: false,
+          reason: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ သေတ္တာအသုံးပြုနိုင်ပါသည်',
+        };
+      }
+      const res = await this.networkSystem.requestStorageTransfer(building.id, direction, itemId, quantity);
+      if (res.ok && Array.isArray(res.storage)) {
+        building.storage = res.storage.map((s) => ({ item: s.item, quantity: s.quantity }));
+      }
+      return {
+        ok: res.ok,
+        storage: res.storage,
+        reason: res.reason,
+      };
+    }
+
+    if (!building.storage) {
+      building.storage = [];
+    }
+    if (direction === 'deposit') {
+      if (!this.inventorySystem.hasItem(itemId, 1)) {
+        return { ok: false, reason: 'အိတ်ထဲတွင် ပစ္စည်းမရှိပါ' };
+      }
+      this.inventorySystem.removeItem(itemId, 1);
+      const existing = building.storage.find((s) => s.item === itemId);
+      if (existing) {
+        existing.quantity += 1;
+      } else {
+        building.storage.push({ item: itemId, quantity: 1 });
+      }
+      await this.saveCurrentState(false);
+      return { ok: true, storage: building.storage };
+    } else {
+      const existing = building.storage.find((s) => s.item === itemId);
+      if (!existing || existing.quantity <= 0) {
+        return { ok: false, reason: 'သေတ္တာထဲတွင် ပစ္စည်းမရှိပါ' };
+      }
+      if (!this.inventorySystem.canFitItem(itemId, 1)) {
+        return { ok: false, reason: '🎒 အိတ်ထဲတွင် နေရာလွတ်မရှိပါ' };
+      }
+      existing.quantity -= 1;
+      if (existing.quantity <= 0) {
+        building.storage = building.storage.filter((s) => s.item !== itemId);
+      }
+      this.inventorySystem.addItem(itemId, 1);
+      await this.saveCurrentState(false);
+      return { ok: true, storage: building.storage };
+    }
+  }
+
+  public recordOwnedFarmPlot(plotId: string): void {
+    if (!plotId) return;
+    const existing = this.playerWorldChanges.ownedFarmPlots || [];
+    if (!existing.includes(plotId)) {
+      this.playerWorldChanges = {
+        ...this.playerWorldChanges,
+        ownedFarmPlots: [...existing, plotId],
+      };
+    }
+  }
+
+  public purchaseFarmPlot(plotId: string): Promise<{
+    ok: boolean;
+    plotId: string;
+    code?: string;
+    message: string;
+    owner?: FarmPlotOwnerRecord;
+    remainingGold?: number;
+  }> {
+    if (this.networkSystem.status !== 'connected') {
+      return Promise.resolve({
+        ok: false,
+        plotId,
+        code: 'OFFLINE',
+        message: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်ထားမှသာ စိုက်ပျိုးမြေကွက် ဝယ်ယူနိုင်ပါသည်',
+      });
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsub: (() => void) | null = null;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        unsub?.();
+        resolve({
+          ok: false,
+          plotId,
+          code: 'TIMEOUT',
+          message: 'ဆာဗာမှ တုံ့ပြန်မှု ကြာမြင့်နေပါသည် — ခဏအကြာ ထပ်မံကြိုးစားပါ',
+        });
+      }, 8000);
+
+      unsub = this.networkSystem.on('farm_plot_purchase_result', (evt) => {
+        const res = evt.payload as {
+          ok: boolean;
+          plotId: string;
+          code?: string;
+          message: string;
+          owner?: FarmPlotOwnerRecord;
+          remainingGold?: number;
+        };
+        if (!res || res.plotId !== plotId) return;
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsub?.();
+
+        if (res.ok) {
+          if (typeof res.remainingGold === 'number' && Number.isFinite(res.remainingGold)) {
+            const delta = res.remainingGold - this.inventorySystem.coins;
+            if (delta !== 0) {
+              this.inventorySystem.addCoins(delta);
+            }
+            this.playerProfile.coins = res.remainingGold;
+          }
+          this.buildingSystem.setFarmPlotOwners(this.networkSystem.farmPlotOwners);
+          this.recordOwnedFarmPlot(plotId);
+          this.worldScene?.renderFarmPlotOwnershipOverlays();
+          this.onClothingChanged?.();
+          void this.saveCurrentState(true);
+        }
+
+        resolve(res);
+      });
+
+      const sent = this.networkSystem.buyFarmPlot(plotId);
+      if (!sent && !settled) {
+        settled = true;
+        clearTimeout(timer);
+        unsub?.();
+        resolve({
+          ok: false,
+          plotId,
+          code: 'OFFLINE',
+          message: 'အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်မှု ပြတ်တောက်နေပါသည်',
+        });
+      }
+    });
   }
 
   public equipClothing(itemId: string): ClothingEquipResult {
@@ -415,6 +844,9 @@ export class GameManager {
         tutorialCompleted: this.playerWorldChanges.tutorialCompleted,
         discoveredZones: [...this.playerWorldChanges.discoveredZones],
         ...(this.playerWorldChanges.resetEpoch ? { resetEpoch: this.playerWorldChanges.resetEpoch } : {}),
+        ...(this.playerWorldChanges.ownedFarmPlots?.length
+          ? { ownedFarmPlots: [...this.playerWorldChanges.ownedFarmPlots] }
+          : {}),
       },
     };
 
@@ -427,7 +859,8 @@ export class GameManager {
   public saveMovementCheckpoint(immediate = false): Promise<boolean> {
     if (!this.hasHydrated || !this.worldScene) return Promise.resolve(false);
     const now = Date.now();
-    if (!immediate && now - this.lastMovementCheckpointAt < 3500) {
+    const minGapMs = immediate ? 1500 : 5000;
+    if (now - this.lastMovementCheckpointAt < minGapMs) {
       return Promise.resolve(false);
     }
     this.lastMovementCheckpointAt = now;
@@ -466,6 +899,8 @@ export class GameManager {
   }
 
   public destroy(): void {
+    this.unsubEconomyReconcile?.();
+    this.unsubEconomyReconcile = null;
     this.networkSystem.disconnect();
     if (this.game) {
       this.game.destroy(true);

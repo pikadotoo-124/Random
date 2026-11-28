@@ -34,7 +34,8 @@ interface ClothingShopModalProps {
   gender: 'male' | 'female';
   ownedClothing: string[];
   equippedClothing: EquippedClothingState;
-  onBuy: (itemId: string) => ClothingPurchaseResult;
+  isOnlineShopAvailable?: boolean;
+  onBuy: (itemId: string) => Promise<ClothingPurchaseResult> | ClothingPurchaseResult;
   onEquip: (itemId: string) => ClothingEquipResult;
   onUnequip: (slot: ClothingEquipmentSlot) => ClothingEquipResult;
   onUnequipAll?: () => ClothingEquipResult;
@@ -53,6 +54,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
   gender,
   ownedClothing,
   equippedClothing,
+  isOnlineShopAvailable = true,
   onBuy,
   onEquip,
   onUnequip,
@@ -121,12 +123,16 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
     equippedClothing.suit && equippedClothing.tshirt && !isPreviewingTshirtOverSuit
   );
 
-  const handleBuyClick = (item: ClothingItemDefinition) => {
-    if (purchaseGuardRef.current || isPurchasePending) return;
+  const handleBuyClick = async (item: ClothingItemDefinition) => {
+    if (!isOnlineShopAvailable || purchaseGuardRef.current || isPurchasePending) {
+      SoundSynth.playRustle();
+      return;
+    }
     purchaseGuardRef.current = true;
     setIsPurchasePending(true);
+    setFeedback(null);
     try {
-      const res = onBuy(item.itemId);
+      const res = await onBuy(item.itemId);
       setFeedback({ ok: res.ok, text: res.messageMy });
       if (res.ok) {
         SoundSynth.playCoin();
@@ -134,10 +140,8 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
         SoundSynth.playRustle();
       }
     } finally {
-      setTimeout(() => {
-        purchaseGuardRef.current = false;
-        setIsPurchasePending(false);
-      }, 220);
+      purchaseGuardRef.current = false;
+      setIsPurchasePending(false);
     }
   };
 
@@ -580,6 +584,11 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
 
                   {!isSelectedOwned ? (
                     <div className="space-y-1.5">
+                      {!isOnlineShopAvailable && (
+                        <div className="text-[11px] font-medium text-amber-300">
+                          ⚠️ အွန်လိုင်းဆာဗာနှင့် ချိတ်ဆက်အတည်ပြုနေဆဲ ဖြစ်သဖြင့် ဝယ်ယူမှု ခေတ္တပိတ်ထားပါသည်
+                        </div>
+                      )}
                       {missingGold > 0 && (
                         <div className="text-[11px] font-medium text-rose-300">
                           ရွှေဒင်္ဂါး မလုံလောက်ပါ (နောက်ထပ် {missingGold} ရွှေ လိုအပ်သည်)
@@ -587,10 +596,10 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                       )}
                       <button
                         type="button"
-                        disabled={missingGold > 0 || isPurchasePending}
-                        onClick={() => handleBuyClick(selectedItem)}
+                        disabled={!isOnlineShopAvailable || missingGold > 0 || isPurchasePending}
+                        onClick={() => void handleBuyClick(selectedItem)}
                         className={`w-full py-2.5 px-4 min-h-[44px] rounded-xl text-xs font-bold flex items-center justify-center gap-2 ${
-                          missingGold > 0 || isPurchasePending
+                          !isOnlineShopAvailable || missingGold > 0 || isPurchasePending
                             ? UI_THEME.disabledBtn
                             : UI_THEME.primaryAmberBtn
                         }`}
@@ -598,7 +607,7 @@ export const ClothingShopModal: React.FC<ClothingShopModalProps> = ({
                         <ShoppingBag size={15} />
                         <span>
                           {isPurchasePending
-                            ? 'ဝယ်ယူနေသည်...'
+                            ? 'ဆာဗာဖြင့် ဝယ်ယူနေသည်...'
                             : `ဝယ်ယူမည် · 🪙 ${selectedItem.goldPrice} ရွှေ`}
                         </span>
                       </button>
